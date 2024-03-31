@@ -54,7 +54,7 @@ use fish::{
 
 // The number of spaces per indent isn't supposed to be configurable.
 // See discussion at https://github.com/fish-shell/fish-shell/pull/6790
-const SPACES_PER_INDENT: usize = 4;
+const SPACES_PER_INDENT: usize = 2;
 
 /// Note: this got somewhat more complicated after introducing the new AST, because that AST no
 /// longer encodes detailed lexical information (e.g. every newline). This feels more complex
