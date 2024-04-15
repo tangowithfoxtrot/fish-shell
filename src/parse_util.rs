@@ -800,7 +800,7 @@ pub fn parse_util_compute_indents(src: &wstr) -> Vec<i32> {
 
 // The number of spaces per indent isn't supposed to be configurable.
 // See discussion at https://github.com/fish-shell/fish-shell/pull/6790
-pub const SPACES_PER_INDENT: usize = 4;
+pub const SPACES_PER_INDENT: usize = 2;
 
 pub fn apply_indents(src: &wstr, indents: &[i32]) -> WString {
     let mut indented = WString::new();
