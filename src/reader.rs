@@ -60,7 +60,7 @@ use crate::fd_readable_set::poll_fd_readable;
 use crate::fds::{make_fd_blocking, wopen_cloexec, AutoCloseFd};
 use crate::flog::{FLOG, FLOGF};
 #[allow(unused_imports)]
-use crate::future::{IsOkAnd, IsSomeAnd};
+use crate::future::IsSomeAnd;
 use crate::global_safety::RelaxedAtomicBool;
 use crate::highlight::{
     autosuggest_validate_from_history, highlight_shell, HighlightRole, HighlightSpec,
@@ -71,6 +71,7 @@ use crate::history::{
 };
 use crate::input::init_input;
 use crate::input::Inputter;
+use crate::input_common::IS_TMUX;
 use crate::input_common::{
     focus_events_enable_ifn, terminal_protocols_enable_scoped, CharEvent, CharInputStyle,
     ReadlineCmd,
@@ -624,8 +625,8 @@ fn read_i(parser: &Parser) -> i32 {
             continue;
         }
 
-        data.update_buff_pos(EditableLineTag::Commandline, Some(0));
         data.command_line.clear();
+        data.update_buff_pos(EditableLineTag::Commandline, None);
         data.command_line_changed(EditableLineTag::Commandline);
         data.screen.write_bytes(b"\x1b]133;C\x07");
         event::fire_generic(parser, L!("fish_preexec").to_owned(), vec![command.clone()]);
@@ -902,6 +903,19 @@ pub fn reader_schedule_prompt_repaint() {
 
 pub fn reader_execute_readline_cmd(ch: CharEvent) {
     if let Some(data) = current_data() {
+        let CharEvent::Readline(readline_cmd_evt) = &ch else {
+            panic!()
+        };
+        if matches!(
+            readline_cmd_evt.cmd,
+            ReadlineCmd::ClearScreenAndRepaint
+                | ReadlineCmd::RepaintMode
+                | ReadlineCmd::Repaint
+                | ReadlineCmd::ForceRepaint
+        ) {
+            data.inputter.queue_char(ch);
+            return;
+        }
         if data.rls.is_none() {
             data.rls = Some(ReadlineLoopState::new());
         }
@@ -2565,11 +2579,20 @@ impl ReaderData {
             }
             rl::HistoryPagerDelete => {
                 // Also applies to ordinary history search.
-                if !self.history_search.is_at_end() {
-                    self.history.remove(self.history_search.current_result());
+                let is_history_search = !self.history_search.is_at_end();
+                if is_history_search || !self.autosuggestion.is_empty() {
+                    self.history.remove(if is_history_search {
+                        self.history_search.current_result()
+                    } else {
+                        &self.autosuggestion.text
+                    });
                     self.history.save();
-                    self.history_search.handle_deletion();
-                    self.update_command_line_from_history_search();
+                    if is_history_search {
+                        self.history_search.handle_deletion();
+                        self.update_command_line_from_history_search();
+                    } else {
+                        self.autosuggestion.clear();
+                    }
                     self.inputter.function_set_status(true);
                     return;
                 }
@@ -3660,6 +3683,8 @@ fn reader_interactive_init(parser: &Parser) {
     parser
         .vars()
         .set_one(L!("_"), EnvMode::GLOBAL, L!("fish").to_owned());
+
+    IS_TMUX.store(parser.vars().get_unless_empty(L!("TMUX")).is_some());
 }
 
 /// Destroy data for interactive use.
@@ -4553,19 +4578,38 @@ pub fn reader_expand_abbreviation_at_cursor(
 ) -> Option<abbrs::Replacement> {
     // Find the token containing the cursor. Usually users edit from the end, so walk backwards.
     let tokens = extract_tokens(cmdline);
-    let token = tokens
-        .into_iter()
-        .rev()
-        .find(|token| token.range.contains_inclusive(cursor_pos))?;
+    let mut token: Option<_> = None;
+    let mut cmdtok: Option<_> = None;
+
+    for t in tokens.into_iter().rev() {
+        let range = t.range;
+        let is_cmd = t.is_cmd;
+        if t.range.contains_inclusive(cursor_pos) {
+            token = Some(t);
+        }
+        // The command is at or *before* the token the cursor is on,
+        // and once we have a command we can stop.
+        if token.is_some() && is_cmd {
+            cmdtok = Some(range);
+            break;
+        }
+    }
+    let token = token?;
     let range = token.range;
     let position = if token.is_cmd {
         abbrs::Position::Command
     } else {
         abbrs::Position::Anywhere
     };
+    // If the token itself is the command, we have no command to pass.
+    let cmd = if !token.is_cmd {
+        cmdtok.map(|t| &cmdline[Range::<usize>::from(t)])
+    } else {
+        None
+    };
 
     let token_str = &cmdline[Range::<usize>::from(range)];
-    let replacers = abbrs_match(token_str, position);
+    let replacers = abbrs_match(token_str, position, cmd.unwrap_or(L!("")));
     for replacer in replacers {
         if let Some(replacement) = expand_replacer(range, token_str, &replacer, parser) {
             return Some(replacement);
@@ -5027,7 +5071,7 @@ fn try_expand_wildcard(
 
 /// Test if the specified character in the specified string is backslashed. pos may be at the end of
 /// the string, which indicates if there is a trailing backslash.
-fn is_backslashed(s: &wstr, pos: usize) -> bool {
+pub(crate) fn is_backslashed(s: &wstr, pos: usize) -> bool {
     // note pos == str.size() is OK.
     if pos > s.len() {
         return false;
@@ -5077,7 +5121,7 @@ fn replace_line_at_cursor(
     text[..start].to_owned() + replacement + &text[end..]
 }
 
-fn get_quote(cmd_str: &wstr, len: usize) -> Option<char> {
+pub(crate) fn get_quote(cmd_str: &wstr, len: usize) -> Option<char> {
     let cmd = cmd_str.as_char_slice();
     let mut i = 0;
     while i < cmd.len() {

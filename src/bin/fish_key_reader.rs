@@ -1,7 +1,7 @@
 //! A small utility to print information related to pressing keys. This is similar to using tools
 //! like `xxd` and `od -tx1z` but provides more information such as the time delay between each
 //! character. It also allows pressing and interpreting keys that are normally special such as
-//! [ctrl-C] (interrupt the program) or [ctrl-D] (EOF to signal the program should exit).
+//! [ctrl-c] (interrupt the program) or [ctrl-d] (EOF to signal the program should exit).
 //! And unlike those other tools this one disables ICRNL mode so it can distinguish between
 //! carriage-return (\cM) and newline (\cJ).
 //!
@@ -30,7 +30,7 @@ use fish::{
     threads,
     topic_monitor::topic_monitor_init,
     wchar::prelude::*,
-    wgetopt::{wgetopter_t, wopt, woption, woption_argument_t},
+    wgetopt::{wopt, ArgType, WGetopter, WOption},
 };
 
 /// Return true if the recent sequence of characters indicates the user wants to exit the program.
@@ -46,8 +46,8 @@ fn should_exit(recent_keys: &mut Vec<Key>, key: Key) -> bool {
                 return true;
             }
             eprintf!(
-                "Press [ctrl-%c] again to exit\n",
-                char::from(modes.c_cc[evt] + 0x40)
+                "Press ctrl-%c again to exit\n",
+                char::from(modes.c_cc[evt] + 0x60)
             );
             return false;
         }
@@ -133,9 +133,9 @@ fn setup_and_process_keys(continuous_mode: bool) -> i32 {
         eprintf!("To terminate this program type \"exit\" or \"quit\" in this window,\n");
         let modes = shell_modes();
         eprintf!(
-            "or press [ctrl-%c] or [ctrl-%c] twice in a row.\n",
-            char::from(modes.c_cc[VINTR] + 0x40),
-            char::from(modes.c_cc[VEOF] + 0x40)
+            "or press ctrl-%c or ctrl-%c twice in a row.\n",
+            char::from(modes.c_cc[VINTR] + 0x60),
+            char::from(modes.c_cc[VEOF] + 0x60)
         );
         eprintf!("\n");
     }
@@ -145,19 +145,19 @@ fn setup_and_process_keys(continuous_mode: bool) -> i32 {
 
 fn parse_flags(continuous_mode: &mut bool) -> ControlFlow<i32> {
     let short_opts: &wstr = L!("+chvV");
-    let long_opts: &[woption] = &[
-        wopt(L!("continuous"), woption_argument_t::no_argument, 'c'),
-        wopt(L!("help"), woption_argument_t::no_argument, 'h'),
-        wopt(L!("version"), woption_argument_t::no_argument, 'v'),
-        wopt(L!("verbose"), woption_argument_t::no_argument, 'V'), // Removed
+    let long_opts: &[WOption] = &[
+        wopt(L!("continuous"), ArgType::NoArgument, 'c'),
+        wopt(L!("help"), ArgType::NoArgument, 'h'),
+        wopt(L!("version"), ArgType::NoArgument, 'v'),
+        wopt(L!("verbose"), ArgType::NoArgument, 'V'), // Removed
     ];
 
     let args: Vec<WString> = std::env::args_os()
         .map(|osstr| str2wcstring(osstr.as_bytes()))
         .collect();
     let mut shim_args: Vec<&wstr> = args.iter().map(|s| s.as_ref()).collect();
-    let mut w = wgetopter_t::new(short_opts, long_opts, &mut shim_args);
-    while let Some(opt) = w.wgetopt_long() {
+    let mut w = WGetopter::new(short_opts, long_opts, &mut shim_args);
+    while let Some(opt) = w.next_opt() {
         match opt {
             'c' => {
                 *continuous_mode = true;
@@ -184,7 +184,7 @@ fn parse_flags(continuous_mode: &mut bool) -> ControlFlow<i32> {
                     wgettext_fmt!(
                         BUILTIN_ERR_UNKNOWN,
                         "fish_key_reader",
-                        w.argv[w.woptind - 1]
+                        w.argv[w.wopt_index - 1]
                     )
                 );
                 return ControlFlow::Break(1);
@@ -193,7 +193,7 @@ fn parse_flags(continuous_mode: &mut bool) -> ControlFlow<i32> {
         }
     }
 
-    let argc = args.len() - w.woptind;
+    let argc = args.len() - w.wopt_index;
     if argc != 0 {
         eprintf!("Expected no arguments, got %d\n", argc);
         return ControlFlow::Break(1);

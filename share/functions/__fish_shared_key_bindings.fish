@@ -56,21 +56,9 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
 
     bind --preset $argv alt-right nextd-or-forward-word
     bind --preset $argv alt-left prevd-or-backward-word
-    $legacy_bind --preset $argv \e\eOC nextd-or-forward-word
-    $legacy_bind --preset $argv \e\eOD prevd-or-backward-word
-    $legacy_bind --preset $argv \e\e\[C nextd-or-forward-word
-    $legacy_bind --preset $argv \e\e\[D prevd-or-backward-word
-    $legacy_bind --preset $argv \e\[1\;9C nextd-or-forward-word #iTerm2
-    $legacy_bind --preset $argv \e\[1\;9D prevd-or-backward-word #iTerm2
 
     bind --preset $argv alt-up history-token-search-backward
     bind --preset $argv alt-down history-token-search-forward
-    $legacy_bind --preset $argv \e\eOA history-token-search-backward
-    $legacy_bind --preset $argv \e\eOB history-token-search-forward
-    $legacy_bind --preset $argv \e\e\[A history-token-search-backward
-    $legacy_bind --preset $argv \e\e\[B history-token-search-forward
-    $legacy_bind --preset $argv \e\[1\;9A history-token-search-backward # iTerm2
-    $legacy_bind --preset $argv \e\[1\;9B history-token-search-forward # iTerm2
     # Bash compatibility
     # https://github.com/fish-shell/fish-shell/issues/89
     bind --preset $argv alt-. history-token-search-backward
@@ -85,7 +73,7 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
     bind --preset $argv end end-of-line
     bind --preset $argv home beginning-of-line
 
-    bind --preset $argv alt-d 'set -l cmd (commandline); if test -z "$cmd"; echo; dirh; commandline -f repaint; else; commandline -f kill-word; end'
+    bind --preset $argv alt-d 'if test "$(commandline; printf .)" = \n.; __fish_echo dirh; else; commandline -f kill-word; end'
     bind --preset $argv ctrl-d delete-or-exit
 
     bind --preset $argv alt-s 'for cmd in sudo doas please; if command -q $cmd; fish_commandline_prepend $cmd; break; end; end'

@@ -120,6 +120,15 @@ bind | string match -v '*\e\\[*'
 # CHECK: bind -M bind_mode ctrl-x true
 # CHECK: bind tab 'echo banana'
 
+# Legacy
+bind \cx\cax 'echo foo'
+bind \cx\cax
+# CHECK: bind ctrl-x,ctrl-a,x 'echo foo'
+bind \ef forward-word
+bind \ef
+# CHECK: bind alt-f forward-word
+
+
 # Erasing bindings
 bind --erase tab
 bind tab
@@ -138,5 +147,8 @@ bind \r
 # Never Return, probably always ctrl-j.
 bind \n 2>&1
 # CHECK: bind: No binding found for key 'ctrl-j'
+
+bind _\cx_\ci_\ei_\\_\'_ 'echo foo'
+# CHECKERR: bind: cannot parse key '_\cx_\t_\ei_\\_'_'
 
 exit 0
