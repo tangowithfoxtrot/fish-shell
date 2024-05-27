@@ -1,14 +1,12 @@
 use libc::STDOUT_FILENO;
 
 use crate::common::{
-    fish_reserved_codepoint, is_windows_subsystem_for_linux, read_blocked, shell_modes, ScopeGuard,
-    ScopeGuarding,
+    fish_reserved_codepoint, is_windows_subsystem_for_linux, read_blocked, shell_modes, WSL,
 };
 use crate::env::{EnvStack, Environment};
 use crate::fd_readable_set::FdReadableSet;
 use crate::flog::FLOG;
 use crate::global_safety::RelaxedAtomicBool;
-use crate::input::KeyNameStyle;
 use crate::key::{
     self, alt, canonicalize_control_char, canonicalize_keyed_control_char, function_key, shift,
     Key, Modifiers,
@@ -114,7 +112,6 @@ pub enum ReadlineCmd {
     FuncAnd,
     FuncOr,
     ExpandAbbr,
-    ExpandAbbrBacktrack,
     DeleteOrExit,
     Exit,
     CancelCommandline,
@@ -282,7 +279,8 @@ impl CharEvent {
 /// Time in milliseconds to wait for another byte to be available for reading
 /// after \x1B is read before assuming that escape key was pressed, and not an
 /// escape sequence.
-pub(crate) static WAIT_ON_ESCAPE_MS: AtomicUsize = AtomicUsize::new(0);
+const WAIT_ON_ESCAPE_DEFAULT: usize = 30;
+static WAIT_ON_ESCAPE_MS: AtomicUsize = AtomicUsize::new(WAIT_ON_ESCAPE_DEFAULT);
 
 const WAIT_ON_SEQUENCE_KEY_INFINITE: usize = usize::MAX;
 static WAIT_ON_SEQUENCE_KEY_MS: AtomicUsize = AtomicUsize::new(WAIT_ON_SEQUENCE_KEY_INFINITE);
@@ -364,7 +362,7 @@ fn readb(in_fd: RawFd, blocking: bool) -> ReadbResult {
                 // The terminal has been closed.
                 return ReadbResult::Eof;
             }
-            FLOG!(reader, "Read byte {}", arr[0]);
+            FLOG!(reader, "Read byte", arr[0]);
             // The common path is to return a u8.
             return ReadbResult::Byte(arr[0]);
         }
@@ -385,7 +383,7 @@ fn readb(in_fd: RawFd, blocking: bool) -> ReadbResult {
 pub fn update_wait_on_escape_ms(vars: &EnvStack) {
     let fish_escape_delay_ms = vars.get_unless_empty(L!("fish_escape_delay_ms"));
     let Some(fish_escape_delay_ms) = fish_escape_delay_ms else {
-        WAIT_ON_ESCAPE_MS.store(0, Ordering::Relaxed);
+        WAIT_ON_ESCAPE_MS.store(WAIT_ON_ESCAPE_DEFAULT, Ordering::Relaxed);
         return;
     };
     let fish_escape_delay_ms = fish_escape_delay_ms.as_string();
@@ -430,111 +428,73 @@ pub fn update_wait_on_sequence_key_ms(vars: &EnvStack) {
     }
 }
 
-pub static TERMINAL_PROTOCOLS: MainThread<RefCell<Option<TerminalProtocols>>> =
+static TERMINAL_PROTOCOLS: MainThread<RefCell<Option<TerminalProtocols>>> =
     MainThread::new(RefCell::new(None));
 
-fn terminal_protocols_enable() {
-    assert!(TERMINAL_PROTOCOLS.get().borrow().is_none());
-    TERMINAL_PROTOCOLS
-        .get()
-        .replace(Some(TerminalProtocols::new()));
+pub(crate) static IS_TMUX: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
+
+pub(crate) fn terminal_protocols_enable_ifn() {
+    let mut term_protocols = TERMINAL_PROTOCOLS.get().borrow_mut();
+    if term_protocols.is_some() {
+        return;
+    }
+    *term_protocols = Some(TerminalProtocols::new());
+    reader_current_data().map(|data| data.save_screen_state());
 }
 
-fn terminal_protocols_disable() {
-    assert!(TERMINAL_PROTOCOLS.get().borrow().is_some());
+pub(crate) fn terminal_protocols_disable_ifn() {
     TERMINAL_PROTOCOLS.get().replace(None);
 }
 
-pub fn terminal_protocols_enable_scoped() -> impl ScopeGuarding<Target = ()> {
-    terminal_protocols_enable();
-    ScopeGuard::new((), |()| terminal_protocols_disable())
+pub(crate) fn terminal_protocols_try_disable_ifn() {
+    if let Ok(mut term_protocols) = TERMINAL_PROTOCOLS.get().try_borrow_mut() {
+        *term_protocols = None;
+    }
 }
 
-pub fn terminal_protocols_disable_scoped() -> impl ScopeGuarding<Target = ()> {
-    terminal_protocols_disable();
-    ScopeGuard::new((), |()| {
-        // If a child is stopped, this will already be enabled.
-        if TERMINAL_PROTOCOLS.get().borrow().is_none() {
-            terminal_protocols_enable();
-            if let Some(data) = reader_current_data() {
-                data.save_screen_state();
-            }
-        }
-    })
-}
-
-pub struct TerminalProtocols {
-    focus_events: bool,
-}
+struct TerminalProtocols {}
 
 impl TerminalProtocols {
     fn new() -> Self {
-        terminal_protocols_enable_impl();
-        Self {
-            focus_events: false,
+        let sequences = concat!(
+            "\x1b[?2004h", // Bracketed paste
+            "\x1b[>4;1m",  // XTerm's modifyOtherKeys
+            "\x1b[>5u",    // CSI u with kitty progressive enhancement
+            "\x1b=",       // set application keypad mode, so the keypad keys send unique codes
+        );
+        FLOG!(
+            term_protocols,
+            format!(
+                "Enabling extended keys and bracketed paste: {:?}",
+                sequences
+            )
+        );
+        let _ = write_to_fd(sequences.as_bytes(), STDOUT_FILENO);
+        if IS_TMUX.load() {
+            let _ = write_to_fd("\x1b[?1004h".as_bytes(), STDOUT_FILENO);
         }
+        Self {}
     }
 }
 
 impl Drop for TerminalProtocols {
     fn drop(&mut self) {
-        terminal_protocols_disable_impl();
-        if self.focus_events {
+        let sequences = concat!(
+            "\x1b[?2004l",
+            "\x1b[>4;0m",
+            "\x1b[<1u", // Konsole breaks unless we pass an explicit number of entries to pop.
+            "\x1b>",
+        );
+        FLOG!(
+            term_protocols,
+            format!(
+                "Disabling extended keys and bracketed paste: {:?}",
+                sequences
+            )
+        );
+        let _ = write_to_fd(sequences.as_bytes(), STDOUT_FILENO);
+        if IS_TMUX.load() {
             let _ = write_to_fd("\x1b[?1004l".as_bytes(), STDOUT_FILENO);
-        }
-    }
-}
-
-fn terminal_protocols_enable_impl() {
-    let sequences = concat!(
-        "\x1b[?2004h", // Bracketed paste
-        "\x1b[>4;1m",  // XTerm's modifyOtherKeys
-        "\x1b[>5u",    // CSI u with kitty progressive enhancement
-        "\x1b=",       // set application keypad mode, so the keypad keys send unique codes
-    );
-
-    FLOG!(
-        term_protocols,
-        format!(
-            "Enabling extended keys and bracketed paste: {:?}",
-            sequences
-        )
-    );
-    let _ = write_to_fd(sequences.as_bytes(), STDOUT_FILENO);
-}
-
-fn terminal_protocols_disable_impl() {
-    let sequences = concat!(
-        "\x1b[?2004l",
-        "\x1b[>4;0m",
-        "\x1b[<1u", // Konsole breaks unless we pass an explicit number of entries to pop.
-        "\x1b>",
-    );
-    FLOG!(
-        term_protocols,
-        format!(
-            "Disabling extended keys and bracketed paste: {:?}",
-            sequences
-        )
-    );
-    let _ = write_to_fd(sequences.as_bytes(), STDOUT_FILENO);
-}
-
-pub(crate) static IS_TMUX: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
-
-pub(crate) fn focus_events_enable_ifn() {
-    if !IS_TMUX.load() {
-        return;
-    }
-    let mut term_protocols = TERMINAL_PROTOCOLS.get().borrow_mut();
-    let Some(term_protocols) = term_protocols.as_mut() else {
-        panic!()
-    };
-    if !term_protocols.focus_events {
-        term_protocols.focus_events = true;
-        let _ = write_to_fd("\x1b[?1004h".as_bytes(), STDOUT_FILENO);
-        if let Some(data) = reader_current_data() {
-            data.save_screen_state();
         }
     }
 }
@@ -550,7 +510,7 @@ fn parse_mask(mask: u32) -> Modifiers {
 /// A trait which knows how to produce a stream of input events.
 /// Note this is conceptually a "base class" with override points.
 pub trait InputEventQueuer {
-    /// \return the next event in the queue, or none if the queue is empty.
+    /// Return the next event in the queue, or none if the queue is empty.
     fn try_pop(&mut self) -> Option<CharEvent> {
         self.get_queue_mut().pop_front()
     }
@@ -1027,16 +987,8 @@ pub trait InputEventQueuer {
         Some(key)
     }
 
-    fn readch_timed_esc(&mut self, style: &KeyNameStyle) -> Result<CharEvent, bool> {
-        let wait_ms = WAIT_ON_ESCAPE_MS.load(Ordering::Relaxed);
-        if wait_ms == 0 {
-            if *style == KeyNameStyle::Plain {
-                return self.readch_timed_sequence_key().ok_or(true);
-            }
-            return Err(false); // Not timed out
-        }
+    fn readch_timed_esc(&mut self) -> Option<CharEvent> {
         self.readch_timed(WAIT_ON_ESCAPE_MS.load(Ordering::Relaxed))
-            .ok_or(true) // Timed out
     }
 
     fn readch_timed_sequence_key(&mut self) -> Option<CharEvent> {
@@ -1049,12 +1001,12 @@ pub trait InputEventQueuer {
 
     /// Like readch(), except it will wait at most wait_time_ms milliseconds for a
     /// character to be available for reading.
-    /// \return None on timeout, the event on success.
+    /// Return None on timeout, the event on success.
     fn readch_timed(&mut self, wait_time_ms: usize) -> Option<CharEvent> {
         if let Some(evt) = self.try_pop() {
             return Some(evt);
         }
-        focus_events_enable_ifn();
+        terminal_protocols_enable_ifn();
 
         // We are not prepared to handle a signal immediately; we only want to know if we get input on
         // our fd before the timeout. Use pselect to block all signals; we will handle signals
@@ -1090,7 +1042,7 @@ pub trait InputEventQueuer {
         };
 
         // Prevent signal starvation on WSL causing the `torn_escapes.py` test to fail
-        if is_windows_subsystem_for_linux() {
+        if is_windows_subsystem_for_linux(WSL::V1) {
             // Merely querying the current thread's sigmask is sufficient to deliver a pending signal
             let _ = unsafe { libc::pthread_sigmask(0, ptr::null(), &mut sigs) };
         }
@@ -1198,7 +1150,7 @@ pub trait InputEventQueuer {
     /// The default does nothing.
     fn uvar_change_notified(&mut self) {}
 
-    /// \return if we have any lookahead.
+    /// Return if we have any lookahead.
     fn has_lookahead(&self) -> bool {
         !self.get_queue().is_empty()
     }

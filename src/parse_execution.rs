@@ -113,7 +113,7 @@ impl ParseExecutionContext {
     }
 }
 
-// Report an error, setting $status to \p status. Always returns
+// Report an error, setting $status to `status`. Always returns
 // 'end_execution_reason_t::error'.
 macro_rules! report_error {
     ( $self:ident, $ctx:expr, $status:expr, $node:expr, $fmt:expr $(, $arg:expr )* $(,)? ) => {
@@ -258,7 +258,7 @@ impl<'a> ParseExecutionContext {
     }
 
     // Check to see if we should end execution.
-    // \return the eval result to end with, or none() to continue on.
+    // Return the eval result to end with, or none() to continue on.
     // This will never return end_execution_reason_t::ok.
     fn check_end_execution(&self, ctx: &OperationContext<'_>) -> Option<EndExecutionReason> {
         // If one of our jobs ended with SIGINT, we stop execution.
@@ -990,7 +990,6 @@ impl<'a> ParseExecutionContext {
         assert!(retval == EnvStackSetResult::ENV_OK);
 
         trace_if_enabled_with_args(ctx.parser(), L!("for"), &arguments);
-        let fb = ctx.parser().push_block(Block::for_block());
 
         // We fire the same event over and over again, just construct it once.
         let evt = Event::variable_set(for_var_name.clone());
@@ -1014,7 +1013,11 @@ impl<'a> ParseExecutionContext {
             event::fire(ctx.parser(), evt.clone());
 
             ctx.parser().libdata_mut().pods.loop_status = LoopStatus::normals;
+
+            // Push and pop the block again and again to clear variables
+            let fb = ctx.parser().push_block(Block::for_block());
             self.run_job_list(ctx, block_contents, Some(fb));
+            ctx.parser().pop_block(fb);
 
             if self.check_end_execution(ctx) == Some(EndExecutionReason::control_flow) {
                 // Handle break or continue.
@@ -1026,7 +1029,6 @@ impl<'a> ParseExecutionContext {
             }
         }
 
-        ctx.parser().pop_block(fb);
         trace_if_enabled(ctx.parser(), L!("end for"));
         ret
     }
@@ -1585,13 +1587,27 @@ impl<'a> ParseExecutionContext {
             0
         };
 
+        let job_is_background = job_node.bg.is_some();
+        let _timer = {
+            let wants_timing = job_node_wants_timing(job_node);
+            // It's an error to have 'time' in a background job.
+            if wants_timing && job_is_background {
+                return report_error!(
+                    self,
+                    ctx,
+                    STATUS_INVALID_ARGS.unwrap(),
+                    job_node,
+                    ERROR_TIME_BACKGROUND
+                );
+            }
+            wants_timing.then(push_timer)
+        };
+
         // When we encounter a block construct (e.g. while loop) in the general case, we create a "block
         // process" containing its node. This allows us to handle block-level redirections.
         // However, if there are no redirections, then we can just jump into the block directly, which
         // is significantly faster.
         if self.job_is_simple_block(job_node) {
-            let do_time = job_node.time.is_some();
-            let _timer = push_timer(do_time);
             let mut block = None;
             let mut result =
                 self.apply_variable_assignments(ctx, None, &job_node.variables, &mut block);
@@ -1639,25 +1655,13 @@ impl<'a> ParseExecutionContext {
         }
 
         let mut props = JobProperties::default();
-        props.initial_background = job_node.bg.is_some();
+        props.initial_background = job_is_background;
         {
             let parser = ctx.parser();
             let ld = &parser.libdata().pods;
             props.skip_notification =
                 ld.is_subshell || parser.is_block() || ld.is_event != 0 || !parser.is_interactive();
             props.from_event_handler = ld.is_event != 0;
-            props.wants_timing = job_node_wants_timing(job_node);
-
-            // It's an error to have 'time' in a background job.
-            if props.wants_timing && props.initial_background {
-                return report_error!(
-                    self,
-                    ctx,
-                    STATUS_INVALID_ARGS.unwrap(),
-                    job_node,
-                    ERROR_TIME_BACKGROUND
-                );
-            }
         }
 
         let mut job = Job::new(props, self.node_source(job_node));
@@ -1930,7 +1934,7 @@ impl<'a> ParseExecutionContext {
         j.mut_flags().is_group_root = true;
     }
 
-    // \return whether we should apply job control to our processes.
+    // Return whether we should apply job control to our processes.
     fn use_job_control(&self, ctx: &OperationContext<'_>) -> bool {
         if ctx.parser().is_command_substitution() {
             return false;

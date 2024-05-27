@@ -7,7 +7,7 @@ use std::fs;
 
 use crate::common::{
     char_offset, is_windows_subsystem_for_linux, unescape_string, UnescapeFlags,
-    UnescapeStringStyle, WILDCARD_RESERVED_BASE,
+    UnescapeStringStyle, WILDCARD_RESERVED_BASE, WSL,
 };
 use crate::complete::{CompleteFlags, Completion, CompletionReceiver, PROG_COMPLETE_SEP};
 use crate::expand::ExpandFlags;
@@ -373,7 +373,7 @@ fn wildcard_test_flags_then_complete(
     }
 
     if executables_only
-        && is_windows_subsystem_for_linux()
+        && is_windows_subsystem_for_linux(WSL::Any)
         && string_suffixes_string_case_insensitive(L!(".dll"), filename)
     {
         return false;
@@ -1096,7 +1096,7 @@ pub fn wildcard_expand_string<'closure>(
 /// \param leading_dots_fail_to_match if set, strings with leading dots are assumed to be hidden
 /// files and are not matched (default was false)
 ///
-/// \return true if the wildcard matched
+/// Return true if the wildcard matched
 #[must_use]
 pub fn wildcard_match(
     name: impl AsRef<wstr>,

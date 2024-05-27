@@ -56,9 +56,13 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
 
     bind --preset $argv alt-right nextd-or-forward-word
     bind --preset $argv alt-left prevd-or-backward-word
+    $legacy_bind --preset $argv \e\e\[C nextd-or-forward-word # iTerm2 default
+    $legacy_bind --preset $argv \e\e\[D prevd-or-backward-word # iTerm2 default
 
     bind --preset $argv alt-up history-token-search-backward
     bind --preset $argv alt-down history-token-search-forward
+    $legacy_bind --preset $argv \e\e\[A history-token-search-backward # iTerm2 default
+    $legacy_bind --preset $argv \e\e\[B history-token-search-forward # iTerm2 default
     # Bash compatibility
     # https://github.com/fish-shell/fish-shell/issues/89
     bind --preset $argv alt-. history-token-search-backward
@@ -78,8 +82,8 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
 
     bind --preset $argv alt-s 'for cmd in sudo doas please; if command -q $cmd; fish_commandline_prepend $cmd; break; end; end'
 
-    # Allow reading manpages by pressing F1 (many GUI applications) or Alt+h (like in zsh).
-    bind --preset $argv F1 __fish_man_page
+    # Allow reading manpages by pressing f1 (many GUI applications) or Alt+h (like in zsh).
+    bind --preset $argv f1 __fish_man_page
     $legacy_bind --preset $argv -k f1 __fish_man_page
     bind --preset $argv alt-h __fish_man_page
 
@@ -105,20 +109,20 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
         or exit # protect against invalid $argv
 
         # Space and other command terminators expands abbrs _and_ inserts itself.
-        bind --preset $argv " " self-insert expand-abbr-backtrack
-        bind --preset $argv ";" self-insert expand-abbr-backtrack
-        bind --preset $argv "|" self-insert expand-abbr-backtrack
-        bind --preset $argv "&" self-insert expand-abbr-backtrack
-        bind --preset $argv ">" self-insert expand-abbr-backtrack
-        bind --preset $argv "<" self-insert expand-abbr-backtrack
-        bind --preset $argv shift-enter "commandline -i \n" expand-abbr-backtrack
-        $legacy_bind --preset $argv \e\[27\;2\;13~ "commandline -i \n" expand-abbr-backtrack # Sent with XTerm.vt100.formatOtherKeys: 0
-        bind --preset $argv alt-enter "commandline -i \n" expand-abbr-backtrack
-        bind --preset $argv ")" self-insert expand-abbr-backtrack # Closing a command substitution.
+        bind --preset $argv space self-insert expand-abbr
+        bind --preset $argv ";" self-insert expand-abbr
+        bind --preset $argv "|" self-insert expand-abbr
+        bind --preset $argv "&" self-insert expand-abbr
+        bind --preset $argv ">" self-insert expand-abbr
+        bind --preset $argv "<" self-insert expand-abbr
+        bind --preset $argv shift-enter "commandline -i \n" expand-abbr
+        $legacy_bind --preset $argv \e\[27\;2\;13~ "commandline -i \n" expand-abbr # Sent with XTerm.vt100.formatOtherKeys: 0
+        bind --preset $argv alt-enter "commandline -i \n" expand-abbr
+        bind --preset $argv ")" self-insert expand-abbr # Closing a command substitution.
         bind --preset $argv ctrl-space 'test -n "$(commandline)" && commandline -i " "'
         bind --preset $argv -k nul 'test -n "$(commandline)" && commandline -i " "'
         # Shift-space behaves like space because it's easy to mistype.
-        bind --preset $argv shift-space 'commandline -i " "' expand-abbr-backtrack
+        bind --preset $argv shift-space 'commandline -i " "' expand-abbr
 
         bind --preset $argv enter execute
         bind --preset $argv ctrl-j execute

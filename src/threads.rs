@@ -3,31 +3,18 @@
 
 use crate::flog::{FloggableDebug, FLOG};
 use crate::reader::ReaderData;
-use once_cell::race::OnceBox;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, ThreadId};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-impl FloggableDebug for ThreadId {}
-
-// We don't want to use a full-blown Lazy<T> for the cached main thread id, but we can't use
-// AtomicU64 since std::thread::ThreadId::as_u64() is a nightly-only feature (issue #67939,
-// thread_id_value). We also can't safely transmute `ThreadId` to `NonZeroU64` because there's no
-// guarantee that's what the underlying type will always be on all platforms and in all cases,
-// `ThreadId` isn't marked `#[repr(transparent)]`. We could generate our own thread-local value, but
-// `#[thread_local]` is nightly-only while the stable `thread_local!()` macro doesn't generate
-// efficient/fast/low-overhead code.
+impl FloggableDebug for std::thread::ThreadId {}
 
 /// The thread id of the main thread, as set by [`init()`] at startup.
-static mut MAIN_THREAD_ID: Option<ThreadId> = None;
+static MAIN_THREAD_ID: OnceLock<usize> = OnceLock::new();
 /// Used to bypass thread assertions when testing.
-#[cfg(not(test))]
-static THREAD_ASSERTS_CFG_FOR_TESTING: AtomicBool = AtomicBool::new(false);
-#[cfg(test)]
-static THREAD_ASSERTS_CFG_FOR_TESTING: AtomicBool = AtomicBool::new(true);
+const THREAD_ASSERTS_CFG_FOR_TESTING: bool = cfg!(test);
 /// This allows us to notice when we've forked.
 static IS_FORKED_PROC: AtomicBool = AtomicBool::new(false);
 
@@ -40,7 +27,7 @@ const IO_WAIT_FOR_WORK_DURATION: Duration = Duration::from_millis(500);
 
 /// The iothreads [`ThreadPool`] singleton. Used to lift I/O off of the main thread and used for
 /// completions, etc.
-static IO_THREAD_POOL: OnceBox<Mutex<ThreadPool>> = OnceBox::new();
+static IO_THREAD_POOL: OnceLock<Mutex<ThreadPool>> = OnceLock::new();
 
 /// The event signaller singleton used for completions and queued main thread requests.
 static NOTIFY_SIGNALLER: once_cell::sync::Lazy<crate::fd_monitor::FdEventSignaller> =
@@ -66,12 +53,9 @@ static MAIN_THREAD_QUEUE: Mutex<Vec<DebounceCallback>> = Mutex::new(Vec::new());
 
 /// Initialize some global static variables. Must be called at startup from the main thread.
 pub fn init() {
-    unsafe {
-        if MAIN_THREAD_ID.is_some() {
-            panic!("threads::init() must only be called once (at startup)!");
-        }
-        MAIN_THREAD_ID = Some(thread::current().id());
-    }
+    MAIN_THREAD_ID
+        .set(thread_id())
+        .expect("threads::init() must only be called once (at startup)!");
 
     extern "C" fn child_post_fork() {
         IS_FORKED_PROC.store(true, Ordering::Relaxed);
@@ -82,26 +66,49 @@ pub fn init() {
     }
 
     IO_THREAD_POOL
-        .set(Box::new(Mutex::new(ThreadPool::new(1, IO_MAX_THREADS))))
+        .set(Mutex::new(ThreadPool::new(1, IO_MAX_THREADS)))
         .expect("IO_THREAD_POOL has already been initialized!");
 }
 
 #[inline(always)]
-fn main_thread_id() -> ThreadId {
+fn main_thread_id() -> usize {
     #[cold]
     fn init_not_called() -> ! {
         panic!("threads::init() was not called at startup!");
     }
 
-    match unsafe { MAIN_THREAD_ID } {
+    match MAIN_THREAD_ID.get() {
         None => init_not_called(),
-        Some(id) => id,
+        Some(id) => *id,
     }
+}
+
+/// Get's a fish-specific thread id. Rust's own `std::thread::current().id()` is slow, allocates
+/// via `Arc`, and uses as Mutex on 32-bit platforms (or those without a 64-bit atomic CAS).
+#[inline(always)]
+fn thread_id() -> usize {
+    static THREAD_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    // It would be much nicer and faster to use #[thread_local] here, but that's nightly only.
+    // This is still faster than going through Thread::thread_id(); it's something like 15ns
+    // for each `Thread::thread_id()` call vs 1-2 ns with `#[thread_local]` and 2-4ns with
+    // `thread_local!`.
+    thread_local! {
+        static THREAD_ID: usize = THREAD_COUNTER.fetch_add(1, Ordering::Relaxed);
+    }
+    THREAD_ID.with(|id| *id)
+}
+
+#[test]
+fn test_thread_ids() {
+    let start_thread_id = thread_id();
+    assert_eq!(start_thread_id, thread_id());
+    let spawned_thread_id = std::thread::spawn(thread_id).join();
+    assert_ne!(start_thread_id, spawned_thread_id.unwrap());
 }
 
 #[inline(always)]
 pub fn is_main_thread() -> bool {
-    thread::current().id() == main_thread_id()
+    thread_id() == main_thread_id()
 }
 
 #[inline(always)]
@@ -111,7 +118,7 @@ pub fn assert_is_main_thread() {
         panic!("Function is not running on the main thread!");
     }
 
-    if !is_main_thread() && !THREAD_ASSERTS_CFG_FOR_TESTING.load(Ordering::Relaxed) {
+    if !is_main_thread() && !THREAD_ASSERTS_CFG_FOR_TESTING {
         not_main_thread();
     }
 }
@@ -123,7 +130,7 @@ pub fn assert_is_background_thread() {
         panic!("Function is not allowed to be called on the main thread!");
     }
 
-    if is_main_thread() && !THREAD_ASSERTS_CFG_FOR_TESTING.load(Ordering::Relaxed) {
+    if is_main_thread() && !THREAD_ASSERTS_CFG_FOR_TESTING {
         not_background_thread();
     }
 }
@@ -182,7 +189,7 @@ pub fn spawn<F: FnOnce() + Send + 'static>(callback: F) -> bool {
 
     let result = match std::thread::Builder::new().spawn(callback) {
         Ok(handle) => {
-            let thread_id = handle.thread().id();
+            let thread_id = thread_id();
             FLOG!(iothread, "rust thread", thread_id, "spawned");
             // Drop the handle to detach the thread
             drop(handle);

@@ -43,6 +43,7 @@ struct Options {
     append: bool,
     prepend: bool,
     preserve_failure_exit_status: bool,
+    no_event: bool,
 }
 
 impl Default for Options {
@@ -65,6 +66,7 @@ impl Default for Options {
             append: false,
             prepend: false,
             preserve_failure_exit_status: true,
+            no_event: false,
         }
     }
 }
@@ -98,6 +100,7 @@ impl Options {
         /// Values used for long-only options.
         const PATH_ARG: char = 1 as char;
         const UNPATH_ARG: char = 2 as char;
+        const NO_EVENT_ARG: char = 3 as char;
         // Variables used for parsing the argument list. This command is atypical in using the "+"
         // (REQUIRE_ORDER) option for flag parsing. This is not typical of most fish commands. It means
         // we stop scanning for flags when the first non-flag argument is seen.
@@ -118,6 +121,7 @@ impl Options {
             wopt(L!("prepend"), NoArgument, 'p'),
             wopt(L!("path"), NoArgument, PATH_ARG),
             wopt(L!("unpath"), NoArgument, UNPATH_ARG),
+            wopt(L!("no-event"), NoArgument, NO_EVENT_ARG),
             wopt(L!("help"), NoArgument, 'h'),
         ];
 
@@ -148,6 +152,7 @@ impl Options {
                 'u' => opts.unexport = true,
                 PATH_ARG => opts.pathvar = true,
                 UNPATH_ARG => opts.unpathvar = true,
+                NO_EVENT_ARG => opts.no_event = true,
                 'U' => opts.universal = true,
                 'L' => opts.shorten_ok = false,
                 'S' => {
@@ -341,13 +346,18 @@ fn handle_env_return(retval: EnvStackSetResult, cmd: &wstr, key: &wstr, streams:
 /// description of the problem to stderr.
 fn env_set_reporting_errors(
     cmd: &wstr,
+    opts: &Options,
     key: &wstr,
     scope: EnvMode,
     list: Vec<WString>,
     streams: &mut IoStreams,
     parser: &Parser,
 ) -> EnvStackSetResult {
-    let retval = parser.set_var_and_fire(key, scope | EnvMode::USER, list);
+    let retval = if opts.no_event {
+        parser.set_var(key, scope | EnvMode::USER, list)
+    } else {
+        parser.set_var_and_fire(key, scope | EnvMode::USER, list)
+    };
     // If this returned OK, the parser already fired the event.
     handle_env_return(retval, cmd, key, streams);
     retval
@@ -380,14 +390,14 @@ struct SplitVar<'a> {
 }
 
 impl<'a> SplitVar<'a> {
-    /// \return the number of elements in our variable, or 0 if missing.
+    /// Return the number of elements in our variable, or 0 if missing.
     fn varsize(&self) -> usize {
         self.var.as_ref().map_or(0, |var| var.as_list().len())
     }
 }
 
 /// Extract indexes from an argument of the form `var_name[index1 index2...]`.
-/// The argument \p arg is split into a variable name and list of indexes, which is returned by
+/// The argument `arg` is split into a variable name and list of indexes, which is returned by
 /// reference. Indexes are "expanded" in the sense that range expressions .. and negative values are
 /// handled.
 ///
@@ -776,7 +786,7 @@ fn erase(
                 if retval != EnvStackSetResult::ENV_NOT_FOUND {
                     handle_env_return(retval, cmd, split.varname, streams);
                 }
-                if retval == EnvStackSetResult::ENV_OK {
+                if retval == EnvStackSetResult::ENV_OK && !opts.no_event {
                     event::fire(parser, Event::variable_erase(split.varname.to_owned()));
                 }
             } else {
@@ -785,8 +795,15 @@ fn erase(
                     return STATUS_CMD_ERROR;
                 };
                 let result = erased_at_indexes(var.as_list().to_owned(), split.indexes);
-                retval =
-                    env_set_reporting_errors(cmd, split.varname, scope, result, streams, parser);
+                retval = env_set_reporting_errors(
+                    cmd,
+                    opts,
+                    split.varname,
+                    scope,
+                    result,
+                    streams,
+                    parser,
+                );
             }
 
             // Set $status to the last error value.
@@ -809,7 +826,7 @@ fn env_result_to_status(retval: EnvStackSetResult) -> Option<c_int> {
     })
 }
 
-/// Return a list of new values for the variable \p varname, respecting the \p opts.
+/// Return a list of new values for the variable `varname`, respecting the `opts`.
 /// This handles the simple case where there are no indexes.
 fn new_var_values(
     varname: &wstr,
@@ -859,7 +876,7 @@ fn new_var_values_by_index(split: &SplitVar, argv: &[&wstr]) -> Vec<WString> {
         result = var.as_list().to_owned();
     }
 
-    // For each (index, argument) pair, set the element in our \p result to the replacement string.
+    // For each (index, argument) pair, set the element in our `result` to the replacement string.
     // Extend the list with empty strings as needed. The indexes are 1-based.
     for (i, arg) in argv.iter().copied().enumerate() {
         let lidx = usize::try_from(split.indexes[i]).unwrap();
@@ -920,6 +937,16 @@ fn set_internal(
 
     // Setting with explicit indexes like `set foo[3] ...` has additional error handling.
     if !split.indexes.is_empty() {
+        // Indexes must be > 0. (Note split_var_and_indexes negates negative values).
+        for ind in &split.indexes {
+            if *ind <= 0 {
+                streams
+                    .err
+                    .append(wgettext_fmt!("%ls: array index out of bounds\n", cmd));
+                builtin_print_error_trailer(parser, streams.err, cmd);
+                return STATUS_INVALID_ARGS;
+            }
+        }
         // Append and prepend are disallowed.
         if opts.append || opts.prepend {
             streams.err.append(wgettext_fmt!(
@@ -951,7 +978,8 @@ fn set_internal(
     };
 
     // Set the value back in the variable stack and fire any events.
-    let retval = env_set_reporting_errors(cmd, split.varname, scope, new_values, streams, parser);
+    let retval =
+        env_set_reporting_errors(cmd, opts, split.varname, scope, new_values, streams, parser);
 
     if retval == EnvStackSetResult::ENV_OK {
         warn_if_uvar_shadows_global(cmd, opts, split.varname, streams, parser);

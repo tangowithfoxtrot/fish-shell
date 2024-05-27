@@ -3,6 +3,7 @@ pub mod encoding;
 pub mod errors;
 pub mod fileid;
 pub mod gettext;
+mod hex_float;
 pub mod printf;
 #[cfg(test)]
 mod tests;
@@ -17,14 +18,16 @@ use crate::fds::AutoCloseFd;
 use crate::flog::FLOGF;
 use crate::wchar::{wstr, WString, L};
 use crate::wchar_ext::WExt;
-use crate::wcstringutil::{join_strings, split_string, wcs2string_callback};
+use crate::wcstringutil::{join_strings, wcs2string_callback};
 use errno::errno;
 pub use gettext::{wgettext, wgettext_fmt, wgettext_maybe_fmt, wgettext_str};
-pub use printf::sprintf;
 use std::ffi::{CStr, OsStr};
 use std::fs::{self, canonicalize};
 use std::io::{self, Write};
 use std::os::unix::prelude::*;
+
+extern crate printf as extern_printf;
+pub use extern_printf::sprintf;
 
 pub use wcstoi::*;
 
@@ -60,8 +63,10 @@ pub fn wunlink(file_name: &wstr) -> libc::c_int {
 }
 
 pub fn wperror(s: &wstr) {
-    // TODO This should not crash on invalid UTF-8
-    perror(std::str::from_utf8(&wcs2string(s)).unwrap())
+    let bytes = wcs2string(s);
+    // We can't guarantee the string is 100% Unicode (why?), so we don't use std::str::from_utf8()
+    let s = OsStr::from_bytes(&bytes).to_string_lossy();
+    perror(&s)
 }
 
 /// Port of the wide-string wperror from `src/wutil.cpp` but for rust `&str`.
@@ -269,55 +274,140 @@ fn test_normalize_path() {
     assert_eq!(norm_path(L!("foo/././bar/.././baz")), "foo/baz");
 }
 
-/// Given an input path \p path and a working directory \p wd, do a "normalizing join" in a way
+/// Given an input path `path` and a working directory `wd`, do a "normalizing join" in a way
 /// appropriate for cd. That is, return effectively wd + path while resolving leading ../s from
 /// path. The intent here is to allow 'cd' out of a directory which may no longer exist, without
 /// allowing 'cd' into a directory that may not exist; see #5341.
 pub fn path_normalize_for_cd(wd: &wstr, path: &wstr) -> WString {
+    use std::collections::VecDeque;
+
     // Fast paths.
-    const sep: char = '/';
+    const SEP: char = '/';
     assert!(
         wd.as_char_slice().first() == Some(&'/') && wd.as_char_slice().last() == Some(&'/'),
         "Invalid working directory, it must start and end with /"
     );
     if path.is_empty() {
         return wd.to_owned();
-    } else if path.as_char_slice().first() == Some(&sep) {
+    } else if path.as_char_slice().first() == Some(&SEP) {
         return path.to_owned();
     } else if path.as_char_slice().first() != Some(&'.') {
         return wd.to_owned() + path;
     }
 
     // Split our strings by the sep.
-    let mut wd_comps = split_string(wd, sep);
-    let path_comps = split_string(path, sep);
-
-    // Remove empty segments from wd_comps.
-    // In particular this removes the leading and trailing empties.
-    wd_comps.retain(|comp| !comp.is_empty());
+    let mut wd_comps: VecDeque<_> = wd
+        .split(SEP)
+        // Remove empty segments from wd_comps, especially leading/trailing empties.
+        .filter(|p| !p.is_empty())
+        .collect();
+    let mut path_comps = path.split(SEP).peekable();
 
     // Erase leading . and .. components from path_comps, popping from wd_comps as we go.
-    let mut erase_count = 0;
-    for comp in &path_comps {
-        let mut erase_it = false;
+    while let Some(comp) = path_comps.peek() {
         if comp.is_empty() || comp == "." {
-            erase_it = true;
-        } else if comp == ".." && !wd_comps.is_empty() {
-            erase_it = true;
-            wd_comps.pop();
-        }
-        if erase_it {
-            erase_count += 1;
+            path_comps.next();
+        } else if comp == ".." && wd_comps.pop_back().is_some() {
+            path_comps.next();
         } else {
             break;
         }
     }
-    // Append un-erased elements to wd_comps and join them, then prepend the leading /.
-    wd_comps.extend(path_comps.into_iter().skip(erase_count));
 
-    let mut result = join_strings(&wd_comps, sep);
-    result.insert(0, '/');
+    // Append un-erased elements to wd_comps and join them, prepending with a leading /
+    let mut paths = wd_comps;
+    paths.extend(path_comps);
+    let mut result =
+        WString::with_capacity(paths.iter().fold(0, |sum, s| sum + s.len()) + paths.len() + 1);
+    for p in &paths {
+        result.push(SEP);
+        result.push_utfstr(*p);
+    }
     result
+}
+
+#[cfg(test)]
+mod path_cd_tests {
+    use super::path_normalize_for_cd;
+    use crate::wchar::L;
+
+    #[test]
+    fn relative_path() {
+        let wd = L!("/home/user/");
+        let path = L!("projects");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(path_normalize_for_cd(wd, path), L!("/home/user/projects"));
+    }
+
+    #[test]
+    fn absolute_path() {
+        let wd = L!("/home/user/");
+        let path = L!("/etc");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(path_normalize_for_cd(wd, path), L!("/etc"));
+    }
+
+    #[test]
+    fn parent_directory() {
+        let wd = L!("/home/user/projects/");
+        let path = L!("../docs");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(path_normalize_for_cd(wd, path), L!("/home/user/docs"));
+    }
+
+    #[test]
+    fn current_directory() {
+        let wd = L!("/home/user/");
+        let path = L!("./");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(path_normalize_for_cd(wd, path), L!("/home/user"));
+    }
+
+    #[test]
+    fn nested_parent_directory() {
+        let wd = L!("/home/user/projects/");
+        let path = L!("../../");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(path_normalize_for_cd(wd, path), L!("/home"));
+    }
+
+    #[test]
+    fn complex_path() {
+        let wd = L!("/home/user/projects/");
+        let path = L!("./../other/projects/./.././../docs");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(
+            path_normalize_for_cd(wd, path),
+            L!("/home/user/other/projects/./.././../docs")
+        );
+    }
+
+    #[test]
+    fn root_directory() {
+        let wd = L!("/");
+        let path = L!("..");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(path_normalize_for_cd(wd, path), L!("/.."));
+    }
+
+    #[test]
+    fn empty_path() {
+        let wd = L!("/home/user/");
+        let path = L!("");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(path_normalize_for_cd(wd, path), L!("/home/user/"));
+    }
+
+    #[test]
+    fn trailing_slash() {
+        let wd = L!("/home/user/projects/");
+        let path = L!("docs/");
+        eprintln!("({}, {})", wd, path);
+        assert_eq!(
+            path_normalize_for_cd(wd, path),
+            L!("/home/user/projects/docs/")
+        );
+    }
 }
 
 /// Wide character version of dirname().
@@ -407,7 +497,7 @@ pub fn write_to_fd(input: &[u8], fd: RawFd) -> nix::Result<usize> {
 
 /// Write a wide string to a file descriptor. This avoids doing any additional allocation.
 /// This does NOT retry on EINTR or EAGAIN, it simply returns.
-/// \return -1 on error in which case errno will have been set. In this event, the number of bytes
+/// Return -1 on error in which case errno will have been set. In this event, the number of bytes
 /// actually written cannot be obtained.
 pub fn wwrite_to_fd(input: &wstr, fd: RawFd) -> Option<usize> {
     // Accumulate data in a local buffer.
@@ -416,7 +506,7 @@ pub fn wwrite_to_fd(input: &wstr, fd: RawFd) -> Option<usize> {
     let maxaccum: usize = std::mem::size_of_val(&accum);
 
     // Helper to perform a write to 'fd', looping as necessary.
-    // \return true on success, false on error.
+    // Return true on success, false on error.
     let mut total_written = 0;
 
     fn do_write(fd: RawFd, total_written: &mut usize, mut buf: &[u8]) -> bool {
@@ -550,7 +640,7 @@ impl FileId {
         result
     }
 
-    /// \return true if \param rhs has higher mtime seconds than this file_id_t.
+    /// Return true if \param rhs has higher mtime seconds than this file_id_t.
     /// If identical, nanoseconds are compared.
     pub fn older_than(&self, rhs: &FileId) -> bool {
         let lhs = (self.mod_seconds, self.mod_nanoseconds);
@@ -586,7 +676,7 @@ pub fn file_id_for_path_narrow(path: &CStr) -> FileId {
     }
     result
 }
-/// Given that \p cursor is a pointer into \p base, return the offset in characters.
+/// Given that `cursor` is a pointer into `base`, return the offset in characters.
 /// This emulates C pointer arithmetic:
 ///    `wstr_offset_in(cursor, base)` is equivalent to C++ `cursor - base`.
 pub fn wstr_offset_in(cursor: &wstr, base: &wstr) -> usize {

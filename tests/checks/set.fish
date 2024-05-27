@@ -965,4 +965,52 @@ set -e undefined[..1]
 set -l negative_oob 1 2 3
 set -q negative_oob[-10..1]
 
+# --no-event
+
+function onevent --on-variable nonevent
+    echo ONEVENT $argv $nonevent
+end
+
+set -g nonevent bar
+set -e nonevent
+
+# CHECK: ONEVENT VARIABLE SET nonevent bar
+# CHECK: ONEVENT VARIABLE ERASE nonevent
+
+set -g --no-event nonevent 2
+set -e --no-event nonevent
+set -S nonevent
+
+set -g --no-event nonevent 3
+set -e nonevent
+# CHECK: ONEVENT VARIABLE ERASE nonevent
+
+set -g nonevent 4
+# CHECK: ONEVENT VARIABLE SET nonevent 4
+set -e --no-event nonevent
+
+set -l nonevent 4
+set -e nonevent
+# CHECK: ONEVENT VARIABLE SET nonevent
+# CHECK: ONEVENT VARIABLE ERASE nonevent
+
+mkdir -p empty
+env -u XDG_CONFIG_HOME HOME=$PWD/empty LC_ALL=en_US.UTF-8 $FISH -c 'set -Ux LC_ALL en_US.UTF-8'
+env -u XDG_CONFIG_HOME HOME=$PWD/empty LC_ALL=en_US.UTF-8 $FISH -c 'set -S LC_ALL'
+# CHECK: $LC_ALL: set in universal scope, exported, with 1 elements
+# CHECK: $LC_ALL[1]: |en_US.UTF-8|
+# CHECK: $LC_ALL: originally inherited as |en_US.UTF-8|
+
+# This used to crash
+set line[0] ""
+# CHECKERR: set: array index out of bounds
+# CHECKERR: {{.*}}set.fish (line {{\d+}}):
+# CHECKERR: set line[0] ""
+# CHECKERR: ^
+# CHECKERR: (Type 'help set' for related documentation)
+
+
+echo Still here
+# CHECK: Still here
+
 exit 0

@@ -1,4 +1,5 @@
 use super::errors::Error;
+use super::hex_float;
 use crate::wchar::IntoCharIter;
 use fast_float::parse_partial_iter;
 
@@ -22,14 +23,14 @@ where
         }
     }
 
-    // If it's a hex float, use hexponent.
+    // If it's a hex float, parse it.
     if is_hex_float(chars.clone()) {
-        let mut n = 0;
-        let res = hexponent::parse_hex_float(chars, decimal_sep, &mut n);
-        if res.is_ok() {
-            *consumed = whitespace_skipped + n;
-        }
-        return res.map_err(hexponent_error);
+        return if let Ok((f, amt)) = hex_float::parse_hex_float(chars, decimal_sep) {
+            *consumed = whitespace_skipped + amt;
+            Ok(f)
+        } else {
+            Err(Error::InvalidChar)
+        };
     }
 
     let ret = parse_partial_iter(chars.clone().fuse(), decimal_sep);
@@ -97,17 +98,6 @@ pub fn is_hex_float<Chars: Iterator<Item = char>>(mut chars: Chars) -> bool {
     match chars.next() {
         Some(c) => c.is_ascii_hexdigit(),
         None => false,
-    }
-}
-
-// Convert a a hexponent error to our error type.
-fn hexponent_error(e: hexponent::ParseError) -> Error {
-    use hexponent::ParseErrorKind;
-    match e.kind {
-        ParseErrorKind::MissingPrefix
-        | ParseErrorKind::MissingDigits
-        | ParseErrorKind::MissingExponent => Error::InvalidChar,
-        ParseErrorKind::ExponentOverflow => Error::Overflow,
     }
 }
 
@@ -572,7 +562,15 @@ mod test {
     fn test_sep(input: &str, val: Result<f64, Error>, decimalsep: char) {
         let mut consumed = 0;
         let result = wcstod(input, decimalsep, &mut consumed);
-        assert_eq!(result, val);
+        // There are fundamental issues with f64 accuracy under x87. See #10474 and https://github.com/rust-lang/rust/issues/114479
+        if cfg!(any(not(target_arch = "x86"), target_feature = "sse2")) {
+            assert_eq!(result, val);
+        } else {
+            // Make sure the result is at least somewhat sane. We might need to change f64::EPSILON
+            // to a bigger value if we are testing the result after operations that have multiple
+            // opportunities for rounding loss in the future.
+            assert!(result == val || (result.unwrap() - val.unwrap()).abs() < f64::EPSILON);
+        }
         if result.is_ok() {
             assert_eq!(consumed, input.chars().count());
             assert_eq!(

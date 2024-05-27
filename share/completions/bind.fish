@@ -66,11 +66,13 @@ function __fish_bind_complete
     set -l token (commandline -ct)
     if test (count $argv) = 0 && set -l prefix (string match -r -- '(.*,)?(ctrl-|alt-|shift-)*' $token)
         printf '%sctrl-\tCtrl modifier…\n' $prefix
+        printf '%sc-\tCtrl modifier…\n' $prefix
         printf '%salt-\tAlt modifier…\n' $prefix
+        printf '%sa-\tAlt modifier…\n' $prefix
         printf '%sshift-\tShift modifier…\n' $prefix
         set -l key_names minus comma backspace delete escape \
             enter up down left right pageup pagedown home end insert tab \
-            space F(seq 12)
+            space f(seq 12)
         printf '%s\tNamed key\n' $prefix$key_names
     end
 end

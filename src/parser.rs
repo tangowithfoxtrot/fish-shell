@@ -7,14 +7,13 @@ use crate::common::{
     FilenameRef, ScopeGuarding, PROFILING_ACTIVE,
 };
 use crate::complete::CompletionList;
-use crate::env::{EnvMode, EnvStack, EnvStackRef, EnvStackSetResult, Environment, Statuses};
+use crate::env::{EnvMode, EnvStack, EnvStackSetResult, Environment, Statuses};
 use crate::event::{self, Event};
 use crate::expand::{
     expand_string, replace_home_directory_with_tilde, ExpandFlags, ExpandResultCode,
 };
-use crate::fds::open_dir;
+use crate::fds::{open_dir, BEST_O_SEARCH};
 use crate::global_safety::RelaxedAtomicBool;
-use crate::input_common::{terminal_protocols_disable_scoped, TERMINAL_PROTOCOLS};
 use crate::io::IoChain;
 use crate::job_group::MaybeJobId;
 use crate::operation_context::{OperationContext, EXPANSION_LIMIT_DEFAULT};
@@ -33,14 +32,11 @@ use crate::wchar::{wstr, WString, L};
 use crate::wutil::{perror, wgettext, wgettext_fmt};
 use crate::{function, FLOG};
 use libc::c_int;
-use nix::sys::stat::Mode;
-use once_cell::sync::Lazy;
-use printf_compat::sprintf;
+use printf::sprintf;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::{CStr, OsStr};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::prelude::OsStrExt;
-use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::{
     atomic::{AtomicIsize, AtomicU64, Ordering},
@@ -127,7 +123,7 @@ impl Block {
         self.block_type
     }
 
-    /// \return if we are a function call (with or without shadowing).
+    /// Return if we are a function call (with or without shadowing).
     pub fn is_function_call(&self) -> bool {
         [BlockType::function_call, BlockType::function_call_no_shadow].contains(&self.typ())
     }
@@ -202,7 +198,7 @@ impl ProfileItem {
     pub fn new() -> Self {
         Default::default()
     }
-    /// \return the current time as a microsecond timestamp since the epoch.
+    /// Return the current time as a microsecond timestamp since the epoch.
     pub fn now() -> Microseconds {
         get_time()
     }
@@ -315,7 +311,7 @@ pub struct Parser {
     pub eval_level: AtomicIsize,
 
     /// Set of variables for the parser.
-    pub variables: EnvStackRef,
+    pub variables: Rc<EnvStack>,
 
     /// Miscellaneous library data.
     library_data: RefCell<LibraryData>,
@@ -336,7 +332,7 @@ pub struct Parser {
 
 impl Parser {
     /// Create a parser
-    pub fn new(variables: EnvStackRef, is_principal: bool) -> ParserRef {
+    pub fn new(variables: Rc<EnvStack>, is_principal: bool) -> ParserRef {
         let result = Rc::new_cyclic(|this: &Weak<Self>| Self {
             this: Weak::clone(this),
             execution_context: RefCell::default(),
@@ -352,7 +348,7 @@ impl Parser {
             global_event_blocks: AtomicU64::new(0),
         });
 
-        match open_dir(CStr::from_bytes_with_nul(b".\0").unwrap(), Mode::empty()) {
+        match open_dir(CStr::from_bytes_with_nul(b".\0").unwrap(), BEST_O_SEARCH) {
             Ok(fd) => {
                 result.libdata_mut().cwd_fd = Some(Arc::new(fd));
             }
@@ -374,7 +370,7 @@ impl Parser {
         self.jobs_mut().insert(0, job);
     }
 
-    /// \return whether we are currently evaluating a function.
+    /// Return whether we are currently evaluating a function.
     pub fn is_function(&self) -> bool {
         let blocks = self.blocks();
         for b in blocks.iter().rev() {
@@ -388,7 +384,7 @@ impl Parser {
         false
     }
 
-    /// \return whether we are currently evaluating a command substitution.
+    /// Return whether we are currently evaluating a command substitution.
     pub fn is_command_substitution(&self) -> bool {
         let blocks = self.blocks();
         for b in blocks.iter().rev() {
@@ -404,9 +400,20 @@ impl Parser {
 
     /// Get the "principal" parser, whatever that is. Can only be called by the main thread.
     pub fn principal_parser() -> &'static Parser {
-        static PRINCIPAL: Lazy<MainThread<ParserRef>> =
-            Lazy::new(|| MainThread::new(Parser::new(EnvStack::principal().clone(), true)));
-        PRINCIPAL.get()
+        use std::cell::OnceCell;
+        static PRINCIPAL: MainThread<OnceCell<ParserRef>> = MainThread::new(OnceCell::new());
+        PRINCIPAL
+            .get()
+            // The parser is !Send/!Sync and strictly single-threaded, but we can have
+            // multi-threaded access to its variables stack (why, though?) so EnvStack::principal()
+            // returns an Arc<EnvStack> instead of an Rc<EnvStack>. Since the Arc<EnvStack> is
+            // statically allocated and always valid (not even destroyed on exit), we can safely
+            // transform the Arc<T> into an Rc<T> and save Parser from needing atomic ref counting
+            // to manage its further references.
+            .get_or_init(|| {
+                let env_rc = unsafe { Rc::from_raw(&**EnvStack::principal() as *const _) };
+                Parser::new(env_rc, true)
+            })
     }
 
     /// Assert that this parser is allowed to execute on the current thread.
@@ -425,7 +432,7 @@ impl Parser {
     /// \param job_group if set, the job group to give to spawned jobs.
     /// \param block_type The type of block to push on the block stack, which must be either 'top'
     /// or 'subst'.
-    /// \return the result of evaluation.
+    /// Return the result of evaluation.
     pub fn eval_with(
         &self,
         cmd: &wstr,
@@ -563,11 +570,6 @@ impl Parser {
             Some(ParseExecutionContext::new(ps.clone(), block_io.clone())),
         );
 
-        // If interactive or inside noninteractive builtin read.
-        let terminal_protocols_enabled = TERMINAL_PROTOCOLS.get().borrow().is_some();
-        let terminal_protocols_disabled =
-            terminal_protocols_enabled.then(terminal_protocols_disable_scoped);
-
         // Check the exec count so we know if anything got executed.
         let prev_exec_count = self.libdata().pods.exec_count;
         let prev_status_count = self.libdata().pods.status_count;
@@ -579,7 +581,6 @@ impl Parser {
         let new_exec_count = self.libdata().pods.exec_count;
         let new_status_count = self.libdata().pods.status_count;
 
-        drop(terminal_protocols_disabled);
         ScopeGuarding::commit(exc);
         self.pop_block(scope_block);
 
@@ -693,7 +694,7 @@ impl Parser {
             .and_then(|ctx| ctx.get_current_line_number())
     }
 
-    /// \return whether we are currently evaluating a "block" such as an if statement.
+    /// Return whether we are currently evaluating a "block" such as an if statement.
     /// This supports 'status is-block'.
     pub fn is_block(&self) -> bool {
         // Note historically this has descended into 'source', unlike 'is_function'.
@@ -706,7 +707,7 @@ impl Parser {
         false
     }
 
-    /// \return whether we have a breakpoint block.
+    /// Return whether we have a breakpoint block.
     pub fn is_breakpoint(&self) -> bool {
         let blocks = self.blocks();
         for b in blocks.iter().rev() {
@@ -760,8 +761,8 @@ impl Parser {
     }
 
     /// Get the variables as an Arc.
-    pub fn vars_ref(&self) -> Arc<EnvStack> {
-        Pin::into_inner(Pin::clone(&self.variables))
+    pub fn vars_ref(&self) -> Rc<EnvStack> {
+        Rc::clone(&self.variables)
     }
 
     /// Get the library data.
@@ -792,7 +793,7 @@ impl Parser {
     }
 
     /// Cover of vars().set(), which also fires any returned event handlers.
-    /// \return a value like ENV_OK.
+    /// Return a value like ENV_OK.
     pub fn set_var_and_fire(
         &self,
         key: &wstr,
@@ -806,8 +807,13 @@ impl Parser {
         res
     }
 
+    /// Cover of vars().set(), without firing events
+    pub fn set_var(&self, key: &wstr, mode: EnvMode, vals: Vec<WString>) -> EnvStackSetResult {
+        self.vars().set(key, mode, vals)
+    }
+
     /// Update any universal variables and send event handlers.
-    /// If \p always is set, then do it even if we have no pending changes (that is, look for
+    /// If `always` is set, then do it even if we have no pending changes (that is, look for
     /// changes from other fish instances); otherwise only sync if this instance has changed uvars.
     pub fn sync_uvars_and_fire(&self, always: bool) {
         if self.syncs_uvars.load() {
@@ -1043,7 +1049,7 @@ impl Parser {
         trace
     }
 
-    /// \return whether the number of functions in the stack exceeds our stack depth limit.
+    /// Return whether the number of functions in the stack exceeds our stack depth limit.
     pub fn function_stack_is_overflowing(&self) -> bool {
         // We are interested in whether the count of functions on the stack exceeds
         // FISH_MAX_STACK_DEPTH. We don't separately track the number of functions, but we can have a
@@ -1066,12 +1072,12 @@ impl Parser {
         self.syncs_uvars.store(flag);
     }
 
-    /// \return a shared pointer reference to this parser.
+    /// Return a shared pointer reference to this parser.
     pub fn shared(&self) -> ParserRef {
         self.this.upgrade().unwrap()
     }
 
-    /// \return the operation context for this parser.
+    /// Return the operation context for this parser.
     pub fn context(&self) -> OperationContext<'static> {
         OperationContext::foreground(
             self.shared(),
@@ -1128,7 +1134,7 @@ fn print_profile(items: &[ProfileItem], out: RawFd) {
     }
 }
 
-/// Append stack trace info for the block \p b to \p trace.
+/// Append stack trace info for the block `b` to `trace`.
 fn append_block_description_to_stack_trace(parser: &Parser, b: &Block, trace: &mut WString) {
     let mut print_call_site = false;
     match b.typ() {

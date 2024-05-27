@@ -5,7 +5,6 @@ use crate::event;
 use crate::flog::FLOG;
 use crate::input_common::{
     CharEvent, CharInputStyle, InputEventQueuer, ReadlineCmd, R_END_INPUT_FUNCTIONS,
-    WAIT_ON_ESCAPE_MS,
 };
 use crate::key::{self, canonicalize_raw_escapes, ctrl, Key, Modifiers};
 use crate::parser::Parser;
@@ -17,14 +16,13 @@ use crate::signal::signal_clear_cancel;
 use crate::threads::assert_is_main_thread;
 use crate::wchar::prelude::*;
 use once_cell::sync::{Lazy, OnceCell};
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::os::fd::RawFd;
 use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    Arc, Mutex, MutexGuard,
+    Mutex, MutexGuard,
 };
 
 pub const FISH_BIND_MODE_VAR: &wstr = L!("fish_bind_mode");
@@ -88,7 +86,7 @@ impl InputMapping {
         }
     }
 
-    /// \return true if this is a generic mapping, i.e. acts as a fallback.
+    /// Return true if this is a generic mapping, i.e. acts as a fallback.
     fn is_generic(&self) -> bool {
         self.seq.is_empty()
     }
@@ -166,7 +164,6 @@ const INPUT_FUNCTION_METADATA: &[InputFunctionMetadata] = &[
     make_md(L!("execute"), ReadlineCmd::Execute),
     make_md(L!("exit"), ReadlineCmd::Exit),
     make_md(L!("expand-abbr"), ReadlineCmd::ExpandAbbr),
-    make_md(L!("expand-abbr-backtrack"), ReadlineCmd::ExpandAbbrBacktrack),
     make_md(L!("force-repaint"), ReadlineCmd::ForceRepaint),
     make_md(L!("forward-bigword"), ReadlineCmd::ForwardBigword),
     make_md(L!("forward-char"), ReadlineCmd::ForwardChar),
@@ -243,7 +240,6 @@ pub fn describe_char(c: i32) -> WString {
 pub struct InputMappingSet {
     mapping_list: Vec<InputMapping>,
     preset_mapping_list: Vec<InputMapping>,
-    all_mappings_cache: RefCell<Option<Arc<Box<[InputMapping]>>>>,
 }
 
 /// Access the singleton input mapping set.
@@ -297,9 +293,6 @@ impl InputMappingSet {
         sets_mode: Option<WString>,
         user: bool,
     ) {
-        // Clear cached mappings.
-        self.all_mappings_cache = RefCell::new(None);
-
         // Update any existing mapping with this sequence.
         // FIXME: this makes adding multiple bindings quadratic.
         let ml = if user {
@@ -622,7 +615,7 @@ impl EventQueuePeeker<'_> {
         }
     }
 
-    /// \return the next event.
+    /// Return the next event.
     fn next(&mut self) -> CharEvent {
         assert!(self.subidx == 0);
         assert!(
@@ -640,7 +633,7 @@ impl EventQueuePeeker<'_> {
     }
 
     /// Check if the next event is the given character. This advances the index on success only.
-    /// If \p escaped is set, then return false if this (or any other) character had a timeout.
+    /// If `escaped` is set, then return false if this (or any other) character had a timeout.
     fn next_is_char(&mut self, style: &KeyNameStyle, key: Key, escaped: bool) -> bool {
         assert!(
             self.idx <= self.peeked.len(),
@@ -655,12 +648,10 @@ impl EventQueuePeeker<'_> {
         if self.idx == self.peeked.len() {
             let newevt = if escaped {
                 FLOG!(reader, "reading timed escape");
-                match self.event_queue.readch_timed_esc(style) {
-                    Ok(evt) => evt,
-                    Err(timed_out) => {
-                        if timed_out {
-                            self.had_timeout = true;
-                        }
+                match self.event_queue.readch_timed_esc() {
+                    Some(evt) => evt,
+                    None => {
+                        self.had_timeout = true;
                         return false;
                     }
                 }
@@ -683,10 +674,7 @@ impl EventQueuePeeker<'_> {
         let Some(kevt) = evt.get_key() else {
             return false;
         };
-        if WAIT_ON_ESCAPE_MS.load(Ordering::Relaxed) != 0
-            && kevt.key == Key::from_raw(key::Escape)
-            && key.modifiers == Modifiers::ALT
-        {
+        if kevt.seq == L!("\x1b") && key.modifiers == Modifiers::ALT {
             self.idx += 1;
             self.subidx = 0;
             FLOG!(reader, "matched delayed escape prefix in alt sequence");
@@ -780,7 +768,7 @@ impl Drop for EventQueuePeeker<'_> {
     }
 }
 
-/// \return true if a given \p peeker matches a given sequence of char events given by \p str.
+/// Return true if a given `peeker` matches a given sequence of char events given by `str`.
 fn try_peek_sequence(peeker: &mut EventQueuePeeker, style: &KeyNameStyle, seq: &[Key]) -> bool {
     assert!(
         !seq.is_empty(),
@@ -790,7 +778,7 @@ fn try_peek_sequence(peeker: &mut EventQueuePeeker, style: &KeyNameStyle, seq: &
     for key in seq {
         // If we just read an escape, we need to add a timeout for the next char,
         // to distinguish between the actual escape key and an "alt"-modifier.
-        let escaped = prev == Key::from_raw(key::Escape);
+        let escaped = *style != KeyNameStyle::Plain && prev == Key::from_raw(key::Escape);
         if !peeker.next_is_char(style, *key, escaped) {
             return false;
         }
@@ -806,9 +794,9 @@ fn try_peek_sequence(peeker: &mut EventQueuePeeker, style: &KeyNameStyle, seq: &
     true
 }
 
-/// \return the first mapping that matches, walking first over the user's mapping list, then the
+/// Return the first mapping that matches, walking first over the user's mapping list, then the
 /// preset list.
-/// \return none if nothing matches, or if we may have matched a longer sequence but it was
+/// Return none if nothing matches, or if we may have matched a longer sequence but it was
 /// interrupted by a readline event.
 impl Inputter {
     fn find_mapping(vars: &dyn Environment, peeker: &mut EventQueuePeeker) -> Option<InputMapping> {
@@ -816,8 +804,9 @@ impl Inputter {
         let bind_mode = input_get_bind_mode(vars);
         let mut escape: Option<&InputMapping> = None;
 
-        let ml = input_mappings().all_mappings();
-        for m in ml.iter() {
+        let ip = input_mappings();
+        let ml = ip.mapping_list.iter().chain(ip.preset_mapping_list.iter());
+        for m in ml {
             if m.mode != bind_mode {
                 continue;
             }
@@ -1011,9 +1000,6 @@ impl InputMappingSet {
 
     /// Erase all bindings.
     pub fn clear(&mut self, mode: Option<&wstr>, user: bool) {
-        // Clear cached mappings.
-        self.all_mappings_cache = RefCell::new(None);
-
         let ml = if user {
             &mut self.mapping_list
         } else {
@@ -1025,9 +1011,6 @@ impl InputMappingSet {
 
     /// Erase binding for specified key sequence.
     pub fn erase(&mut self, sequence: &[Key], mode: &wstr, user: bool) -> bool {
-        // Clear cached mappings.
-        self.all_mappings_cache = RefCell::new(None);
-
         let ml = if user {
             &mut self.mapping_list
         } else {
@@ -1069,20 +1052,6 @@ impl InputMappingSet {
             }
         }
         false
-    }
-
-    /// \return a snapshot of the list of input mappings.
-    fn all_mappings(&self) -> Arc<Box<[InputMapping]>> {
-        // Populate the cache if needed.
-        let mut cache = self.all_mappings_cache.borrow_mut();
-        if cache.is_none() {
-            let mut all_mappings =
-                Vec::with_capacity(self.mapping_list.len() + self.preset_mapping_list.len());
-            all_mappings.extend(self.mapping_list.iter().cloned());
-            all_mappings.extend(self.preset_mapping_list.iter().cloned());
-            *cache = Some(Arc::new(all_mappings.into_boxed_slice()));
-        }
-        Arc::clone(cache.as_ref().unwrap())
     }
 }
 
