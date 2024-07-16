@@ -1,6 +1,6 @@
 // The fish parser. Contains functions for parsing and evaluating code.
 
-use crate::ast::{Ast, List, Node};
+use crate::ast::{self, Ast, List, Node};
 use crate::builtins::shared::STATUS_ILLEGAL_CMD;
 use crate::common::{
     escape_string, scoped_push_replacer, CancelChecker, EscapeFlags, EscapeStringStyle,
@@ -21,59 +21,75 @@ use crate::parse_constants::{
     ParseError, ParseErrorList, ParseTreeFlags, FISH_MAX_EVAL_DEPTH, FISH_MAX_STACK_DEPTH,
     SOURCE_LOCATION_UNKNOWN,
 };
-use crate::parse_execution::{EndExecutionReason, ParseExecutionContext};
-use crate::parse_tree::{parse_source, ParsedSourceRef};
+use crate::parse_execution::{EndExecutionReason, ExecutionContext};
+use crate::parse_tree::{parse_source, LineCounter, ParsedSourceRef};
 use crate::proc::{job_reap, JobGroupRef, JobList, JobRef, ProcStatus};
 use crate::signal::{signal_check_cancel, signal_clear_cancel, Signal};
-use crate::threads::{assert_is_main_thread, MainThread};
+use crate::threads::assert_is_main_thread;
 use crate::util::get_time;
 use crate::wait_handle::WaitHandleStore;
 use crate::wchar::{wstr, WString, L};
 use crate::wutil::{perror, wgettext, wgettext_fmt};
 use crate::{function, FLOG};
+use fish_printf::sprintf;
 use libc::c_int;
-use printf::sprintf;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::{CStr, OsStr};
+use std::num::NonZeroU32;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::prelude::OsStrExt;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicIsize, AtomicU64, Ordering},
     Arc,
 };
 
+pub enum BlockData {
+    Function {
+        /// Name of the function
+        name: WString,
+        /// Arguments passed to the function
+        args: Vec<WString>,
+    },
+    Event(Rc<Event>),
+    Source {
+        /// The sourced file
+        file: Arc<WString>,
+    },
+}
+
 /// block_t represents a block of commands.
 #[derive(Default)]
 pub struct Block {
-    /// If this is a function block, the function name. Otherwise empty.
-    pub function_name: WString,
-
-    /// List of event blocks.
-    pub event_blocks: u64,
-
-    /// If this is a function block, the function args. Otherwise empty.
-    pub function_args: Vec<WString>,
-
-    /// Name of file that created this block.
-    pub src_filename: Option<FilenameRef>,
-
-    // If this is an event block, the event. Otherwise ignored.
-    pub event: Option<Rc<Event>>,
-
-    // If this is a source block, the source'd file, interned.
-    // Otherwise nothing.
-    pub sourced_file: Option<FilenameRef>,
-
-    /// Line number where this block was created.
-    pub src_lineno: Option<usize>,
-
     /// Type of block.
     block_type: BlockType,
 
-    /// Whether we should pop the environment variable stack when we're popped off of the block
-    /// stack.
-    pub wants_pop_env: bool,
+    /// [`BlockType`]-specific data.
+    ///
+    /// None of these data fields are accessed on a regular basis (only for shell introspection), so
+    /// we store them in a `Box` to reduce the size of the `Block` itself.
+    pub data: Option<Box<BlockData>>,
+
+    /// Pseudo-counter of event blocks
+    pub event_blocks: bool,
+
+    /// Name of the file that created this block
+    pub src_filename: Option<Arc<WString>>,
+
+    /// Line number where this block was created, starting from 1.
+    pub src_lineno: Option<NonZeroU32>,
+}
+
+impl Block {
+    #[inline(always)]
+    pub fn data(&self) -> Option<&BlockData> {
+        self.data.as_deref()
+    }
+
+    #[inline(always)]
+    pub fn wants_pop_env(&self) -> bool {
+        self.typ() != BlockType::top
+    }
 }
 
 impl Default for BlockType {
@@ -97,8 +113,7 @@ impl Block {
             BlockType::while_block => L!("while"),
             BlockType::for_block => L!("for"),
             BlockType::if_block => L!("if"),
-            BlockType::function_call => L!("function_call"),
-            BlockType::function_call_no_shadow => L!("function_call_no_shadow"),
+            BlockType::function_call { .. } => L!("function_call"),
             BlockType::switch_block => L!("switch"),
             BlockType::subst => L!("substitution"),
             BlockType::top => L!("top"),
@@ -111,7 +126,7 @@ impl Block {
         .to_owned();
 
         if let Some(src_lineno) = self.src_lineno {
-            result.push_utfstr(&sprintf!(" (line %d)", src_lineno));
+            result.push_utfstr(&sprintf!(" (line %d)", src_lineno.get()));
         }
         if let Some(src_filename) = &self.src_filename {
             result.push_utfstr(&sprintf!(" (file %ls)", src_filename));
@@ -125,7 +140,7 @@ impl Block {
 
     /// Return if we are a function call (with or without shadowing).
     pub fn is_function_call(&self) -> bool {
-        [BlockType::function_call, BlockType::function_call_no_shadow].contains(&self.typ())
+        matches!(self.typ(), BlockType::function_call { .. })
     }
 
     /// Entry points for creating blocks.
@@ -134,22 +149,17 @@ impl Block {
     }
     pub fn event_block(event: Event) -> Block {
         let mut b = Block::new(BlockType::event);
-        b.event = Some(Rc::new(event));
+        b.data = Some(Box::new(BlockData::Event(Rc::new(event))));
         b
     }
     pub fn function_block(name: WString, args: Vec<WString>, shadows: bool) -> Block {
-        let mut b = Block::new(if shadows {
-            BlockType::function_call
-        } else {
-            BlockType::function_call_no_shadow
-        });
-        b.function_name = name;
-        b.function_args = args;
+        let mut b = Block::new(BlockType::function_call { shadows });
+        b.data = Some(Box::new(BlockData::Function { name, args }));
         b
     }
     pub fn source_block(src: FilenameRef) -> Block {
         let mut b = Block::new(BlockType::source);
-        b.sourced_file = Some(src);
+        b.data = Some(Box::new(BlockData::Source { file: src }));
         b
     }
     pub fn for_block() -> Block {
@@ -207,8 +217,6 @@ impl ProfileItem {
 /// Miscellaneous data used to avoid recursion and others.
 #[derive(Default)]
 pub struct LibraryData {
-    pub pods: library_data_pod_t,
-
     /// The current filename we are evaluating, either from builtin source or on the command line.
     pub current_filename: Option<FilenameRef>,
 
@@ -222,15 +230,72 @@ pub struct LibraryData {
     pub cwd_fd: Option<Arc<OwnedFd>>,
 
     pub status_vars: StatusVars,
+
+    /// A counter incremented every time a command executes.
+    pub exec_count: u64,
+
+    /// A counter incremented every time a command produces a $status.
+    pub status_count: u64,
+
+    /// Last reader run count.
+    pub last_exec_run_counter: u64,
+
+    /// Number of recursive calls to the internal completion function.
+    pub complete_recursion_level: u32,
+
+    /// If set, we are currently within fish's initialization routines.
+    pub within_fish_init: bool,
+
+    /// If we're currently repainting the commandline.
+    /// Useful to stop infinite loops.
+    pub is_repaint: bool,
+
+    /// Whether we called builtin_complete -C without parameter.
+    pub builtin_complete_current_commandline: bool,
+
+    /// Whether we are currently cleaning processes.
+    pub is_cleaning_procs: bool,
+
+    /// The internal job id of the job being populated, or 0 if none.
+    /// This supports the '--on-job-exit caller' feature.
+    pub caller_id: u64, // TODO should be InternalJobId
+
+    /// Whether we are running a subshell command.
+    pub is_subshell: bool,
+
+    /// Whether we are running an event handler. This is not a bool because we keep count of the
+    /// event nesting level.
+    pub is_event: i32,
+
+    /// Whether we are currently interactive.
+    pub is_interactive: bool,
+
+    /// Whether to suppress fish_trace output. This occurs in the prompt, event handlers, and key
+    /// bindings.
+    pub suppress_fish_trace: bool,
+
+    /// Whether we should break or continue the current loop.
+    /// This is set by the 'break' and 'continue' commands.
+    pub loop_status: LoopStatus,
+
+    /// Whether we should return from the current function.
+    /// This is set by the 'return' command.
+    pub returning: bool,
+
+    /// Whether we should stop executing.
+    /// This is set by the 'exit' command, and unset after 'reader_read'.
+    /// Note this only exits up to the "current script boundary." That is, a call to exit within a
+    /// 'source' or 'read' command will only exit up to that command.
+    pub exit_current_script: bool,
+
+    /// The read limit to apply to captured subshell output, or 0 for none.
+    pub read_limit: usize,
 }
 
 impl LibraryData {
     pub fn new() -> Self {
         Self {
-            pods: library_data_pod_t {
-                last_exec_run_counter: u64::MAX,
-                ..Default::default()
-            },
+            last_exec_run_counter: u64::MAX,
             ..Default::default()
         }
     }
@@ -287,13 +352,20 @@ pub enum ParserStatusVar {
 
 pub type BlockId = usize;
 
-pub type ParserRef = Rc<Parser>;
+// Controls the behavior when fish itself receives a signal and there are
+// no blocks on the stack.
+// The "outermost" parser is responsible for clearing the signal.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum CancelBehavior {
+    #[default]
+    Return, // Return the signal to the caller.
+    Clear, // Clear the signal.
+}
 
 pub struct Parser {
-    this: Weak<Self>,
-
-    /// The current execution context.
-    execution_context: RefCell<Option<ParseExecutionContext>>,
+    /// A shared line counter. This is handed out to each execution context
+    /// so they can communicate the line number back to this Parser.
+    line_counter: Rc<RefCell<LineCounter<ast::JobPipeline>>>,
 
     /// The jobs associated with this parser.
     job_list: RefCell<JobList>,
@@ -320,8 +392,8 @@ pub struct Parser {
     /// including sending on-variable change events.
     syncs_uvars: RelaxedAtomicBool,
 
-    /// If set, we are the principal parser.
-    is_principal: RelaxedAtomicBool,
+    /// The behavior when fish itself receives a signal and there are no blocks on the stack.
+    cancel_behavior: CancelBehavior,
 
     /// List of profile items.
     profile_items: RefCell<Vec<ProfileItem>>,
@@ -331,11 +403,10 @@ pub struct Parser {
 }
 
 impl Parser {
-    /// Create a parser
-    pub fn new(variables: Rc<EnvStack>, is_principal: bool) -> ParserRef {
-        let result = Rc::new_cyclic(|this: &Weak<Self>| Self {
-            this: Weak::clone(this),
-            execution_context: RefCell::default(),
+    /// Create a parser.
+    pub fn new(variables: Rc<EnvStack>, cancel_behavior: CancelBehavior) -> Parser {
+        let result = Self {
+            line_counter: Rc::new(RefCell::new(LineCounter::empty())),
             job_list: RefCell::default(),
             wait_handles: RefCell::new(WaitHandleStore::new()),
             block_list: RefCell::default(),
@@ -343,10 +414,10 @@ impl Parser {
             variables,
             library_data: RefCell::new(LibraryData::new()),
             syncs_uvars: RelaxedAtomicBool::new(false),
-            is_principal: RelaxedAtomicBool::new(is_principal),
+            cancel_behavior,
             profile_items: RefCell::default(),
             global_event_blocks: AtomicU64::new(0),
-        });
+        };
 
         match open_dir(CStr::from_bytes_with_nul(b".\0").unwrap(), BEST_O_SEARCH) {
             Ok(fd) => {
@@ -360,10 +431,6 @@ impl Parser {
         result
     }
 
-    fn execution_context(&self) -> Ref<'_, Option<ParseExecutionContext>> {
-        self.execution_context.borrow()
-    }
-
     /// Adds a job to the beginning of the job list.
     pub fn job_add(&self, job: JobRef) {
         assert!(!job.processes().is_empty());
@@ -372,48 +439,22 @@ impl Parser {
 
     /// Return whether we are currently evaluating a function.
     pub fn is_function(&self) -> bool {
-        let blocks = self.blocks();
-        for b in blocks.iter().rev() {
-            if b.is_function_call() {
-                return true;
-            } else if b.typ() == BlockType::source {
-                // If a function sources a file, don't descend further.
-                break;
-            }
-        }
-        false
+        self.blocks()
+            .iter()
+            .rev()
+            // If a function sources a file, don't descend further.
+            .take_while(|b| b.typ() != BlockType::source)
+            .any(|b| b.is_function_call())
     }
 
     /// Return whether we are currently evaluating a command substitution.
     pub fn is_command_substitution(&self) -> bool {
-        let blocks = self.blocks();
-        for b in blocks.iter().rev() {
-            if b.typ() == BlockType::subst {
-                return true;
-            } else if b.typ() == BlockType::source {
-                // If a function sources a file, don't descend further.
-                break;
-            }
-        }
-        false
-    }
-
-    /// Get the "principal" parser, whatever that is. Can only be called by the main thread.
-    pub fn principal_parser() -> &'static Parser {
-        use std::cell::OnceCell;
-        static PRINCIPAL: MainThread<OnceCell<ParserRef>> = MainThread::new(OnceCell::new());
-        PRINCIPAL
-            .get()
-            // The parser is !Send/!Sync and strictly single-threaded, but we can have
-            // multi-threaded access to its variables stack (why, though?) so EnvStack::principal()
-            // returns an Arc<EnvStack> instead of an Rc<EnvStack>. Since the Arc<EnvStack> is
-            // statically allocated and always valid (not even destroyed on exit), we can safely
-            // transform the Arc<T> into an Rc<T> and save Parser from needing atomic ref counting
-            // to manage its further references.
-            .get_or_init(|| {
-                let env_rc = unsafe { Rc::from_raw(&**EnvStack::principal() as *const _) };
-                Parser::new(env_rc, true)
-            })
+        self.blocks()
+            .iter()
+            .rev()
+            // If a function sources a file, don't descend further.
+            .take_while(|b| b.typ() != BlockType::source)
+            .any(|b| b.typ() == BlockType::subst)
     }
 
     /// Assert that this parser is allowed to execute on the current thread.
@@ -507,14 +548,14 @@ impl Parser {
             "Invalid block type"
         );
 
-        // If fish itself got a cancel signal, then we want to unwind back to the principal parser.
-        // If we are the principal parser and our block stack is empty, then we want to clear the
-        // signal.
+        // If fish itself got a cancel signal, then we want to unwind back to the parser which
+        // has a Clear cancellation behavior.
         // Note this only happens in interactive sessions. In non-interactive sessions, SIGINT will
         // cause fish to exit.
         let sig = signal_check_cancel();
         if sig != 0 {
-            if self.is_principal.load() && self.block_list.borrow().is_empty() {
+            if self.cancel_behavior == CancelBehavior::Clear && self.block_list.borrow().is_empty()
+            {
                 signal_clear_cancel();
             } else {
                 return EvalRes::new(ProcStatus::from_signal(Signal::new(sig)));
@@ -553,35 +594,23 @@ impl Parser {
         let cancel_checker: CancelChecker = Box::new(move || check_cancel_signal().is_some());
         op_ctx.cancel_checker = cancel_checker;
 
-        // Create and set a new execution context.
-        let exc = scoped_push_replacer(
-            |new_value| {
-                if self.execution_context.borrow().is_none() || new_value.is_none() {
-                    // Outermost node.
-                    std::mem::replace(&mut self.execution_context.borrow_mut(), new_value)
-                } else {
-                    #[allow(clippy::unnecessary_unwrap)]
-                    Some(ParseExecutionContext::swap(
-                        self.execution_context.borrow().as_ref().unwrap(),
-                        new_value.unwrap(),
-                    ))
-                }
-            },
-            Some(ParseExecutionContext::new(ps.clone(), block_io.clone())),
-        );
+        // Restore the line counter.
+        let line_counter = Rc::clone(&self.line_counter);
+        let scoped_line_counter =
+            scoped_push_replacer(|v| line_counter.replace(v), ps.line_counter());
+
+        // Create a new execution context.
+        let mut execution_context =
+            ExecutionContext::new(ps.clone(), block_io.clone(), Rc::clone(&line_counter));
 
         // Check the exec count so we know if anything got executed.
-        let prev_exec_count = self.libdata().pods.exec_count;
-        let prev_status_count = self.libdata().pods.status_count;
-        let reason =
-            self.execution_context()
-                .as_ref()
-                .unwrap()
-                .eval_node(&op_ctx, node, Some(scope_block));
-        let new_exec_count = self.libdata().pods.exec_count;
-        let new_status_count = self.libdata().pods.status_count;
+        let prev_exec_count = self.libdata().exec_count;
+        let prev_status_count = self.libdata().status_count;
+        let reason = execution_context.eval_node(&op_ctx, node, Some(scope_block));
+        let new_exec_count = self.libdata().exec_count;
+        let new_status_count = self.libdata().status_count;
 
-        ScopeGuarding::commit(exc);
+        ScopeGuarding::commit(scoped_line_counter);
         self.pop_block(scope_block);
 
         job_reap(self, false); // reap again
@@ -635,19 +664,11 @@ impl Parser {
     ///
     /// init.fish (line 127): ls|grep pancake
     pub fn current_line(&self) -> WString {
-        if self.execution_context().is_none() {
-            return WString::new();
-        };
-        let Some(source_offset) = self
-            .execution_context()
-            .as_ref()
-            .unwrap()
-            .get_current_source_offset()
-        else {
+        let Some(source_offset) = self.line_counter.borrow_mut().source_offset_of_node() else {
             return WString::new();
         };
 
-        let lineno = self.get_lineno().unwrap_or(0);
+        let lineno = self.get_lineno_for_display();
         let file = self.current_filename();
 
         let mut prefix = WString::new();
@@ -660,7 +681,7 @@ impl Parser {
                     &user_presentable_path(&file, self.vars()),
                     lineno
                 ));
-            } else if self.libdata().pods.within_fish_init {
+            } else if self.libdata().within_fish_init {
                 prefix.push_utfstr(&wgettext_fmt!("Startup (line %d): ", lineno));
             } else {
                 prefix.push_utfstr(&wgettext_fmt!("Standard input (line %d): ", lineno));
@@ -674,7 +695,7 @@ impl Parser {
         empty_error.source_start = source_offset;
 
         let mut line_info = empty_error.describe_with_prefix(
-            &self.execution_context().as_ref().unwrap().get_source(),
+            self.line_counter.borrow().get_source(),
             &prefix,
             self.is_interactive(),
             skip_caret,
@@ -687,35 +708,40 @@ impl Parser {
         line_info
     }
 
-    /// Returns the current line number.
-    pub fn get_lineno(&self) -> Option<usize> {
-        self.execution_context()
-            .as_ref()
-            .and_then(|ctx| ctx.get_current_line_number())
+    /// Returns the current line number, indexed from 1.
+    pub fn get_lineno(&self) -> Option<NonZeroU32> {
+        // The offset is 0 based; the number is 1 based.
+        self.line_counter
+            .borrow_mut()
+            .line_offset_of_node()
+            .map(|offset| NonZeroU32::new(offset.saturating_add(1)).unwrap())
+    }
+
+    /// Returns the current line number, indexed from 1, or zero if not sourced.
+    pub fn get_lineno_for_display(&self) -> u32 {
+        self.get_lineno().map(|val| val.get()).unwrap_or(0)
     }
 
     /// Return whether we are currently evaluating a "block" such as an if statement.
     /// This supports 'status is-block'.
     pub fn is_block(&self) -> bool {
         // Note historically this has descended into 'source', unlike 'is_function'.
-        let blocks = self.blocks();
-        for b in blocks.iter().rev() {
-            if ![BlockType::top, BlockType::subst].contains(&b.typ()) {
-                return true;
-            }
-        }
-        false
+        self.blocks().iter().rev().any(|b| {
+            ![
+                BlockType::top,
+                BlockType::subst,
+                BlockType::variable_assignment,
+            ]
+            .contains(&b.typ())
+        })
     }
 
     /// Return whether we have a breakpoint block.
     pub fn is_breakpoint(&self) -> bool {
-        let blocks = self.blocks();
-        for b in blocks.iter().rev() {
-            if b.typ() == BlockType::breakpoint {
-                return true;
-            }
-        }
-        false
+        self.blocks()
+            .iter()
+            .rev()
+            .any(|b| b.typ() == BlockType::breakpoint)
     }
 
     /// Return the list of blocks. The first block is at the top.
@@ -793,7 +819,6 @@ impl Parser {
     }
 
     /// Cover of vars().set(), which also fires any returned event handlers.
-    /// Return a value like ENV_OK.
     pub fn set_var_and_fire(
         &self,
         key: &wstr,
@@ -801,7 +826,7 @@ impl Parser {
         vals: Vec<WString>,
     ) -> EnvStackSetResult {
         let res = self.vars().set(key, mode, vals);
-        if res == EnvStackSetResult::ENV_OK {
+        if res == EnvStackSetResult::Ok {
             event::fire(self, Event::variable_set(key.to_owned()));
         }
         res
@@ -829,9 +854,8 @@ impl Parser {
         block.src_lineno = self.get_lineno();
         block.src_filename = self.current_filename();
         if block.typ() != BlockType::top {
-            let new_scope = block.typ() == BlockType::function_call;
+            let new_scope = block.typ() == BlockType::function_call { shadows: true };
             self.vars().push(new_scope);
-            block.wants_pop_env = true;
         }
 
         let mut block_list = self.block_list.borrow_mut();
@@ -846,7 +870,7 @@ impl Parser {
             assert!(expected == block_list.len() - 1);
             block_list.pop().unwrap()
         };
-        if block.wants_pop_env {
+        if block.wants_pop_env() {
             self.vars().pop();
         }
     }
@@ -857,34 +881,40 @@ impl Parser {
             // Return the function name for the level preceding the most recent breakpoint. If there
             // isn't one return the function name for the current level.
             // Walk until we find a breakpoint, then take the next function.
-            let mut found_breakpoint = false;
-            let blocks = self.blocks();
-            for b in blocks.iter().rev() {
-                if b.typ() == BlockType::breakpoint {
-                    found_breakpoint = true;
-                } else if found_breakpoint && b.is_function_call() {
-                    return Some(b.function_name.clone());
-                }
-            }
-            return None; // couldn't find a breakpoint frame
+            return self
+                .blocks()
+                .iter()
+                .rev()
+                .skip_while(|b| b.typ() != BlockType::breakpoint)
+                .find_map(|b| match b.data() {
+                    Some(BlockData::Function { name, .. }) => Some(name.clone()),
+                    _ => None,
+                });
         }
 
-        // Level 1 is the topmost function call. Level 2 is its caller. Etc.
-        let mut funcs_seen = 0;
-        let blocks = self.blocks();
-        for b in blocks.iter().rev() {
-            if b.is_function_call() {
-                funcs_seen += 1;
-                if funcs_seen == level {
-                    return Some(b.function_name.clone());
+        self.blocks()
+            .iter()
+            .rev()
+            // Historical: If we want the topmost function, but we are really in a file sourced by a
+            // function, don't consider ourselves to be in a function.
+            .take_while(|b| !(level == 1 && b.typ() == BlockType::source))
+            .map(|b| (b, 0))
+            .map(|(b, level)| {
+                if b.is_function_call() {
+                    (b, level + 1)
+                } else {
+                    (b, level)
                 }
-            } else if b.typ() == BlockType::source && level == 1 {
-                // Historical: If we want the topmost function, but we are really in a file sourced by a
-                // function, don't consider ourselves to be in a function.
-                break;
-            }
-        }
-        None
+            })
+            .skip_while(|(_, l)| *l != level)
+            .inspect(|(b, _)| debug_assert!(b.is_function_call()))
+            .map(|(b, _)| {
+                let Some(BlockData::Function { name, .. }) = b.data() else {
+                    unreachable!()
+                };
+                name.clone()
+            })
+            .next()
     }
 
     /// Promotes a job to the front of the list.
@@ -1011,42 +1041,39 @@ impl Parser {
     /// reader_current_filename, e.g. if we are evaluating a function defined in a different file
     /// than the one currently read.
     pub fn current_filename(&self) -> Option<FilenameRef> {
-        let blocks = self.blocks();
-        for b in blocks.iter().rev() {
-            if b.is_function_call() {
-                return function::get_props(&b.function_name)
-                    .and_then(|props| props.definition_file.clone());
-            } else if b.typ() == BlockType::source {
-                return b.sourced_file.clone();
-            }
-        }
-        // Fall back to the file being sourced.
-        self.libdata().current_filename.clone()
+        self.blocks()
+            .iter()
+            .rev()
+            .find_map(|b| match b.data() {
+                Some(BlockData::Function { name, .. }) => {
+                    function::get_props(name).and_then(|props| props.definition_file.clone())
+                }
+                Some(BlockData::Source { file }) => Some(file.clone()),
+                _ => None,
+            })
+            .or_else(|| self.libdata().current_filename.clone())
     }
 
     /// Return if we are interactive, which means we are executing a command that the user typed in
     /// (and not, say, a prompt).
     pub fn is_interactive(&self) -> bool {
-        self.libdata().pods.is_interactive
+        self.libdata().is_interactive
     }
 
     /// Return a string representing the current stack trace.
     pub fn stack_trace(&self) -> WString {
-        let mut trace = WString::new();
-        let blocks = self.blocks();
-        for b in blocks.iter().rev() {
-            append_block_description_to_stack_trace(self, b, &mut trace);
-
+        self.blocks()
+            .iter()
+            .rev()
             // Stop at event handler. No reason to believe that any other code is relevant.
-            //
             // It might make sense in the future to continue printing the stack trace of the code
             // that invoked the event, if this is a programmatic event, but we can't currently
             // detect that.
-            if b.typ() == BlockType::event {
-                break;
-            }
-        }
-        trace
+            .take_while(|b| b.typ() != BlockType::event)
+            .fold(WString::new(), |mut trace, b| {
+                append_block_description_to_stack_trace(self, b, &mut trace);
+                trace
+            })
     }
 
     /// Return whether the number of functions in the stack exceeds our stack depth limit.
@@ -1059,11 +1086,12 @@ impl Parser {
             return false;
         }
         // Count the functions.
-        let mut depth = 0;
-        let blocks = self.blocks();
-        for b in blocks.iter().rev() {
-            depth += if b.is_function_call() { 1 } else { 0 };
-        }
+        let depth = self
+            .blocks()
+            .iter()
+            .rev()
+            .filter(|b| b.is_function_call())
+            .count();
         depth > FISH_MAX_STACK_DEPTH
     }
 
@@ -1072,15 +1100,10 @@ impl Parser {
         self.syncs_uvars.store(flag);
     }
 
-    /// Return a shared pointer reference to this parser.
-    pub fn shared(&self) -> ParserRef {
-        self.this.upgrade().unwrap()
-    }
-
     /// Return the operation context for this parser.
-    pub fn context(&self) -> OperationContext<'static> {
+    pub fn context(&self) -> OperationContext<'_> {
         OperationContext::foreground(
-            self.shared(),
+            self,
             Box::new(|| signal_check_cancel() != 0),
             EXPANSION_LIMIT_DEFAULT,
         )
@@ -1138,11 +1161,14 @@ fn print_profile(items: &[ProfileItem], out: RawFd) {
 fn append_block_description_to_stack_trace(parser: &Parser, b: &Block, trace: &mut WString) {
     let mut print_call_site = false;
     match b.typ() {
-        BlockType::function_call | BlockType::function_call_no_shadow => {
-            trace.push_utfstr(&wgettext_fmt!("in function '%ls'", &b.function_name));
+        BlockType::function_call { .. } => {
+            let Some(BlockData::Function { name, args, .. }) = b.data() else {
+                unreachable!()
+            };
+            trace.push_utfstr(&wgettext_fmt!("in function '%ls'", name));
             // Print arguments on the same line.
             let mut args_str = WString::new();
-            for arg in &b.function_args {
+            for arg in args {
                 if !args_str.is_empty() {
                     args_str.push(' ');
                 }
@@ -1169,7 +1195,10 @@ fn append_block_description_to_stack_trace(parser: &Parser, b: &Block, trace: &m
             print_call_site = true;
         }
         BlockType::source => {
-            let source_dest = b.sourced_file.as_ref().unwrap();
+            let Some(BlockData::Source { file, .. }) = b.data() else {
+                unreachable!()
+            };
+            let source_dest = file;
             trace.push_utfstr(&wgettext_fmt!(
                 "from sourcing file %ls\n",
                 &user_presentable_path(source_dest, parser.vars())
@@ -1177,8 +1206,10 @@ fn append_block_description_to_stack_trace(parser: &Parser, b: &Block, trace: &m
             print_call_site = true;
         }
         BlockType::event => {
-            let description =
-                event::get_desc(parser, b.event.as_ref().expect("Should have an event"));
+            let Some(BlockData::Event(event)) = b.data() else {
+                unreachable!()
+            };
+            let description = event::get_desc(parser, event);
             trace.push_utfstr(&wgettext_fmt!("in event handler: %ls\n", &description));
             print_call_site = true;
         }
@@ -1197,10 +1228,10 @@ fn append_block_description_to_stack_trace(parser: &Parser, b: &Block, trace: &m
         if let Some(file) = b.src_filename.as_ref() {
             trace.push_utfstr(&sprintf!(
                 "\tcalled on line %d of file %ls\n",
-                b.src_lineno.unwrap_or(0),
+                b.src_lineno.map(|n| n.get()).unwrap_or(0),
                 user_presentable_path(file, parser.vars())
             ));
-        } else if parser.libdata().pods.within_fish_init {
+        } else if parser.libdata().within_fish_init {
             trace.push_str("\tcalled during startup\n");
         }
     }
@@ -1216,9 +1247,7 @@ pub enum BlockType {
     /// If block
     if_block,
     /// Function invocation block
-    function_call,
-    /// Function invocation block with no variable shadowing
-    function_call_no_shadow,
+    function_call { shadows: bool },
     /// Switch block
     switch_block,
     /// Command substitution scope
@@ -1246,68 +1275,4 @@ pub enum LoopStatus {
     breaks,
     /// current loop block should be skipped
     continues,
-}
-
-/// Plain-Old-Data components of `struct library_data_t` that can be shared over FFI
-#[derive(Default)]
-pub struct library_data_pod_t {
-    /// A counter incremented every time a command executes.
-    pub exec_count: u64,
-
-    /// A counter incremented every time a command produces a $status.
-    pub status_count: u64,
-
-    /// Last reader run count.
-    pub last_exec_run_counter: u64,
-
-    /// Number of recursive calls to the internal completion function.
-    pub complete_recursion_level: u32,
-
-    /// If set, we are currently within fish's initialization routines.
-    pub within_fish_init: bool,
-
-    /// If we're currently repainting the commandline.
-    /// Useful to stop infinite loops.
-    pub is_repaint: bool,
-
-    /// Whether we called builtin_complete -C without parameter.
-    pub builtin_complete_current_commandline: bool,
-
-    /// Whether we are currently cleaning processes.
-    pub is_cleaning_procs: bool,
-
-    /// The internal job id of the job being populated, or 0 if none.
-    /// This supports the '--on-job-exit caller' feature.
-    pub caller_id: u64, // TODO should be InternalJobId
-
-    /// Whether we are running a subshell command.
-    pub is_subshell: bool,
-
-    /// Whether we are running an event handler. This is not a bool because we keep count of the
-    /// event nesting level.
-    pub is_event: i32,
-
-    /// Whether we are currently interactive.
-    pub is_interactive: bool,
-
-    /// Whether to suppress fish_trace output. This occurs in the prompt, event handlers, and key
-    /// bindings.
-    pub suppress_fish_trace: bool,
-
-    /// Whether we should break or continue the current loop.
-    /// This is set by the 'break' and 'continue' commands.
-    pub loop_status: LoopStatus,
-
-    /// Whether we should return from the current function.
-    /// This is set by the 'return' command.
-    pub returning: bool,
-
-    /// Whether we should stop executing.
-    /// This is set by the 'exit' command, and unset after 'reader_read'.
-    /// Note this only exits up to the "current script boundary." That is, a call to exit within a
-    /// 'source' or 'read' command will only exit up to that command.
-    pub exit_current_script: bool,
-
-    /// The read limit to apply to captured subshell output, or 0 for none.
-    pub read_limit: usize,
 }

@@ -358,7 +358,7 @@ send('\x02\x02\x02') # ctrl-b, backward-char
 sendline('\x1bu') # alt+u, upcase word
 expect_prompt("fooBAR")
 
-send("""
+sendline("""
     bind ctrl-g "
         commandline --insert 'echo foo ar'
         commandline -f backward-word
@@ -367,10 +367,18 @@ send("""
         commandline -f backward-char
         commandline -f delete-char
     "
-""")
+""".strip())
 send('\x07') # ctrl-g
 send('\r')
 expect_prompt("foobar")
+
+# This should do nothing instead of crash
+sendline("commandline -f backward-jump")
+expect_prompt()
+sendline("commandline -f self-insert")
+expect_prompt()
+sendline("commandline -f and")
+expect_prompt()
 
 # Check that the builtin version of `exit` works
 # (for obvious reasons this MUST BE LAST)

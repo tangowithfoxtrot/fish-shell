@@ -230,6 +230,7 @@ fn escape_nonprintables(key_name: &wstr) -> WString {
     )
 }
 
+#[allow(clippy::nonminimal_bool)]
 pub(crate) fn parse_keys(value: &wstr) -> Result<Vec<Key>, WString> {
     let mut res = vec![];
     if value.is_empty() {
@@ -374,9 +375,9 @@ impl std::fmt::Display for Key {
     }
 }
 
-impl printf::ToArg<'static> for Key {
-    fn to_arg(self) -> printf::Arg<'static> {
-        printf::Arg::WString(self.into())
+impl fish_printf::ToArg<'static> for Key {
+    fn to_arg(self) -> fish_printf::Arg<'static> {
+        fish_printf::Arg::WString(self.into())
     }
 }
 

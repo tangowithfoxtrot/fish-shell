@@ -237,11 +237,11 @@ fn read_interactive(
 
     let mline = {
         let _interactive = scoped_push_replacer(
-            |new_value| std::mem::replace(&mut parser.libdata_mut().pods.is_interactive, new_value),
+            |new_value| std::mem::replace(&mut parser.libdata_mut().is_interactive, new_value),
             true,
         );
 
-        reader_readline(nchars)
+        reader_readline(parser, nchars)
     };
     if let Some(line) = mline {
         *buff = line;
@@ -539,7 +539,7 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Opt
         Err(retval) => return retval,
     };
     let cmd = argv[0];
-    let mut argv = &argv[..];
+    let mut argv: &[&wstr] = argv;
     if !opts.to_stdout {
         argv = &argv[optind..];
     }

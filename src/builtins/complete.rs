@@ -1,7 +1,5 @@
 use super::prelude::*;
-use crate::common::{
-    unescape_string, unescape_string_in_place, ScopeGuard, UnescapeFlags, UnescapeStringStyle,
-};
+use crate::common::{unescape_string, ScopeGuard, UnescapeFlags, UnescapeStringStyle};
 use crate::complete::{complete_add_wrapper, complete_remove_wrapper, CompletionRequestOptions};
 use crate::highlight::colorize;
 use crate::highlight::highlight_shell;
@@ -496,12 +494,9 @@ pub fn complete(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) ->
         });
 
         // Prevent accidental recursion (see #6171).
-        if !parser.libdata().pods.builtin_complete_current_commandline {
+        if !parser.libdata().builtin_complete_current_commandline {
             if !have_do_complete_param {
-                parser
-                    .libdata_mut()
-                    .pods
-                    .builtin_complete_current_commandline = true;
+                parser.libdata_mut().builtin_complete_current_commandline = true;
             }
 
             let (mut comp, _needs_load) = crate::complete::complete(
@@ -539,10 +534,11 @@ pub fn complete(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) ->
                     // The input data is meant to be something like you would have on the command
                     // line, e.g. includes backslashes. The output should be raw, i.e. unescaped. So
                     // we need to unescape the command line. See #1127.
-                    unescape_string_in_place(
-                        &mut faux_cmdline_with_completion,
+                    faux_cmdline_with_completion = unescape_string(
+                        &faux_cmdline_with_completion,
                         UnescapeStringStyle::Script(UnescapeFlags::default()),
-                    );
+                    )
+                    .expect("Unescaping commandline to complete failed");
                 }
 
                 // Append any description.
@@ -556,10 +552,7 @@ pub fn complete(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) ->
                 streams.out.append(faux_cmdline_with_completion);
             }
 
-            parser
-                .libdata_mut()
-                .pods
-                .builtin_complete_current_commandline = false;
+            parser.libdata_mut().builtin_complete_current_commandline = false;
         }
     } else if path.is_empty()
         && gnu_opt.is_empty()
