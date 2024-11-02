@@ -54,15 +54,11 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
     $legacy_bind --preset $argv -k sright forward-bigword
     $legacy_bind --preset $argv -k sleft backward-bigword
 
-    bind --preset $argv alt-right nextd-or-forward-word
-    bind --preset $argv alt-left prevd-or-backward-word
-    $legacy_bind --preset $argv \e\e\[C nextd-or-forward-word # iTerm2 default
-    $legacy_bind --preset $argv \e\e\[D prevd-or-backward-word # iTerm2 default
+    bind --preset $argv alt-right nextd-or-forward-token
+    bind --preset $argv alt-left prevd-or-backward-token
 
     bind --preset $argv alt-up history-token-search-backward
     bind --preset $argv alt-down history-token-search-forward
-    $legacy_bind --preset $argv \e\e\[A history-token-search-backward # iTerm2 default
-    $legacy_bind --preset $argv \e\e\[B history-token-search-forward # iTerm2 default
     # Bash compatibility
     # https://github.com/fish-shell/fish-shell/issues/89
     bind --preset $argv alt-. history-token-search-backward
@@ -116,7 +112,6 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
         bind --preset $argv ">" self-insert expand-abbr
         bind --preset $argv "<" self-insert expand-abbr
         bind --preset $argv shift-enter "commandline -i \n" expand-abbr
-        $legacy_bind --preset $argv \e\[27\;2\;13~ "commandline -i \n" expand-abbr # Sent with XTerm.vt100.formatOtherKeys: 0
         bind --preset $argv alt-enter "commandline -i \n" expand-abbr
         bind --preset $argv ")" self-insert expand-abbr # Closing a command substitution.
         bind --preset $argv ctrl-space 'test -n "$(commandline)" && commandline -i " "'
@@ -129,6 +124,5 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
         bind --preset $argv ctrl-m execute
         # Make Control+Return behave like Return because it's easy to mistype after accepting an autosuggestion.
         bind --preset $argv ctrl-enter execute
-        $legacy_bind --preset $argv \e\[27\;5\;13~ execute # Sent with XTerm.vt100.formatOtherKeys: 0
     end
 end

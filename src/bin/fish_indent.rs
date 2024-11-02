@@ -7,6 +7,7 @@
 #![allow(clippy::uninlined_format_args)]
 
 use std::ffi::{CString, OsStr};
+use std::fs;
 use std::io::{stdin, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::sync::atomic::Ordering;
@@ -29,6 +30,7 @@ use fish::eprintf;
 use fish::expand::INTERNAL_SEPARATOR;
 use fish::fds::set_cloexec;
 use fish::fprintf;
+#[allow(unused_imports)]
 use fish::future::{IsSomeAnd, IsSorted};
 use fish::global_safety::RelaxedAtomicBool;
 use fish::highlight::{colorize, highlight_shell, HighlightRole, HighlightSpec};
@@ -888,7 +890,7 @@ fn throwing_main() -> i32 {
             }
         } else {
             let arg = args[i];
-            match std::fs::File::open(OsStr::from_bytes(&wcs2string(arg))) {
+            match fs::File::open(OsStr::from_bytes(&wcs2string(arg))) {
                 Ok(file) => {
                     match read_file(file) {
                         Ok(s) => src = s,
@@ -971,20 +973,22 @@ fn throwing_main() -> i32 {
                 colored_output = no_colorize(&output_wtext);
             }
             OutputType::File => {
-                match std::fs::File::create(OsStr::from_bytes(&wcs2string(output_location))) {
-                    Ok(mut file) => {
-                        let _ = file.write_all(&wcs2string(&output_wtext));
-                    }
-                    Err(err) => {
-                        eprintf!(
-                            "%s",
-                            wgettext_fmt!(
-                                "Opening \"%s\" failed: %s\n",
-                                output_location,
-                                err.to_string()
-                            )
-                        );
-                        return STATUS_CMD_ERROR.unwrap();
+                if output_wtext != src {
+                    match fs::File::create(OsStr::from_bytes(&wcs2string(output_location))) {
+                        Ok(mut file) => {
+                            let _ = file.write_all(&wcs2string(&output_wtext));
+                        }
+                        Err(err) => {
+                            eprintf!(
+                                "%s",
+                                wgettext_fmt!(
+                                    "Opening \"%s\" failed: %s\n",
+                                    output_location,
+                                    err.to_string()
+                                )
+                            );
+                            return STATUS_CMD_ERROR.unwrap();
+                        }
                     }
                 }
             }

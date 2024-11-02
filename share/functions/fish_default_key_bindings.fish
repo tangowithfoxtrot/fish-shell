@@ -9,25 +9,8 @@ function fish_default_key_bindings -d "emacs-like key binds"
     if not set -q argv[1]
         bind --erase --all --preset # clear earlier bindings, if any
         if test "$fish_key_bindings" != fish_default_key_bindings
-            # Allow the user to set the variable universally
-            set -l scope
-            set -q fish_key_bindings
-            or set scope -g
-            true
-            # We try to use `set --no-event`, but to avoid leaving the user without bindings
-            # if they run this with an older version we fall back on setting the variable
-            # with an event.
-            if ! set --no-event $scope fish_key_bindings fish_default_key_bindings 2>/dev/null
-                # This triggers the handler, which calls us again
-                set $scope fish_key_bindings fish_default_key_bindings
-                # unless the handler somehow doesn't exist, which would leave us without bindings.
-                # this happens in no-config mode.
-                functions -q __fish_reload_key_bindings
-                and return
-            else
-                # (we need to set the bind mode to default)
-                set --no-event fish_bind_mode default
-            end
+            __fish_change_key_bindings fish_default_key_bindings || return
+            set fish_bind_mode default
         end
     end
 
@@ -74,7 +57,10 @@ function fish_default_key_bindings -d "emacs-like key binds"
     bind --preset $argv alt-u upcase-word
 
     bind --preset $argv alt-c capitalize-word
-    bind --preset $argv alt-backspace backward-kill-word
+    bind --preset $argv alt-backspace backward-kill-token
+    bind --preset $argv ctrl-backspace backward-kill-word
+    bind --preset $argv alt-delete kill-token
+    bind --preset $argv ctrl-delete kill-word
     bind --preset $argv alt-b backward-word
     bind --preset $argv alt-f forward-word
     if test "$TERM_PROGRAM" = Apple_Terminal
@@ -102,6 +88,4 @@ function fish_default_key_bindings -d "emacs-like key binds"
             # the following to tell a console to paste:
             $legacy_bind --preset $argv \e\x20ep fish_clipboard_paste
     end
-
-    set -e -g fish_cursor_selection_mode
 end

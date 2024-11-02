@@ -341,6 +341,10 @@ fn wildcard_test_flags_then_complete(
 ) -> bool {
     let executables_only = expand_flags.contains(ExpandFlags::EXECUTABLES_ONLY);
     let need_directory = expand_flags.contains(ExpandFlags::DIRECTORIES_ONLY);
+    let mut flags = CompleteFlags::default();
+    if expand_flags.contains(ExpandFlags::NO_SPACE_FOR_UNCLOSED_BRACE) {
+        flags |= CompleteFlags::NO_SPACE;
+    }
     // Fast path: If we need directories, and we already know it is one,
     // and we don't need to do anything else, just return it.
     // This is a common case for cd completions, and removes the `stat` entirely in case the system
@@ -357,15 +361,7 @@ fn wildcard_test_flags_then_complete(
         ) == WildcardResult::Match;
     }
     // Check if it will match before stat().
-    if wildcard_complete(
-        filename,
-        wc,
-        None,
-        None,
-        expand_flags,
-        CompleteFlags::default(),
-    ) != WildcardResult::Match
-    {
+    if wildcard_complete(filename, wc, None, None, expand_flags, flags) != WildcardResult::Match {
         return false;
     }
 
@@ -432,14 +428,8 @@ fn wildcard_test_flags_then_complete(
         ) == WildcardResult::Match;
     }
 
-    wildcard_complete(
-        filename,
-        wc,
-        desc_func,
-        Some(out),
-        expand_flags,
-        CompleteFlags::empty(),
-    ) == WildcardResult::Match
+    wildcard_complete(filename, wc, desc_func, Some(out), expand_flags, flags)
+        == WildcardResult::Match
 }
 
 use expander::WildCardExpander;
@@ -449,7 +439,8 @@ mod expander {
     use crate::{
         common::scoped_push,
         path::append_path_component,
-        wutil::{dir_iter::DirIter, normalize_path, FileId},
+        threads::is_main_thread,
+        wutil::{dir_iter::DirIter, normalize_path, DevInode},
     };
 
     use super::*;
@@ -461,8 +452,8 @@ mod expander {
         working_directory: &'e wstr,
         /// The set of items we have resolved, used to efficiently avoid duplication.
         completion_set: HashSet<WString>,
-        /// The set of file IDs we have visited, used to avoid symlink loops.
-        visited_files: HashSet<FileId>,
+        /// The set of (device, inode) pairs we have visited, used to avoid symlink loops.
+        visited_files: HashSet<DevInode>,
         /// Flags controlling expansion.
         flags: ExpandFlags,
         /// Resolved items get inserted into here. This is transient of course.
@@ -592,6 +583,10 @@ mod expander {
                     }
                 }
 
+                if is_main_thread() {
+                    crate::input_common::terminal_protocols_disable_ifn();
+                }
+
                 // return "." and ".." entries if we're doing completions
                 let Ok(mut dir) = self.open_dir(
                     base_dir, /* return . and .. */
@@ -607,7 +602,7 @@ mod expander {
                         &mut dir,
                         wc_segment,
                         wc_remainder,
-                        &(effective_prefix.to_owned() + wc_segment + L!("/")),
+                        effective_prefix,
                     );
                 } else {
                     // Last wildcard segment, nonempty wildcard.
@@ -736,12 +731,11 @@ mod expander {
                     continue;
                 }
 
-                let Some(statbuf) = entry.stat() else {
+                let Some(dev_inode) = entry.dev_inode() else {
                     continue;
                 };
 
-                let file_id = FileId::from_stat(&statbuf);
-                if !self.visited_files.insert(file_id.clone()) {
+                if !self.visited_files.insert(dev_inode) {
                     // Symlink loop! This directory was already visited, so skip it.
                     continue;
                 }
@@ -753,7 +747,7 @@ mod expander {
 
                 // Now remove the visited file. This is for #2414: only directories "beneath" us should be
                 // considered visited.
-                self.visited_files.remove(&file_id);
+                self.visited_files.remove(&dev_inode);
             }
         }
 

@@ -24,7 +24,6 @@ use crate::fork_exec::postfork::{
 #[cfg(FISH_USE_POSIX_SPAWN)]
 use crate::fork_exec::spawn::PosixSpawner;
 use crate::function::{self, FunctionProperties};
-use crate::input_common::terminal_protocols_disable_ifn;
 use crate::io::{
     BufferedOutputStream, FdOutputStream, IoBufferfill, IoChain, IoClose, IoMode, IoPipe,
     IoStreams, OutputStream, SeparatedBuffer, StringOutputStream,
@@ -73,7 +72,7 @@ pub fn exec_job(parser: &Parser, job: &Job, block_io: IoChain) -> bool {
     }
 
     if job.entitled_to_terminal() {
-        terminal_protocols_disable_ifn();
+        crate::input_common::terminal_protocols_disable_ifn();
     }
 
     // Handle an exec call.
@@ -441,7 +440,7 @@ fn launch_process_nofork(vars: &EnvStack, p: &Process) -> ! {
     let actual_cmd = wcs2zstring(&p.actual_cmd);
 
     // Ensure the terminal modes are what they were before we changed them.
-    restore_term_mode();
+    restore_term_mode(false);
     // Bounce to launch_process. This never returns.
     safe_launch_process(p, &actual_cmd, &argv, &*envp);
 }
@@ -1321,6 +1320,7 @@ fn exec_process_in_job(
             piped_output_needs_buffering,
         ),
         ProcessType::external => {
+            parser.libdata_mut().exec_external_count += 1;
             exec_external_command(parser, j, p, &process_net_io_chain)?;
             // It's possible (though unlikely) that this is a background process which recycled a
             // pid from another, previous background process. Forget any such old process.

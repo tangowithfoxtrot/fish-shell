@@ -21,7 +21,6 @@ use bitflags::bitflags;
 use core::slice;
 use libc::{EIO, O_WRONLY, SIGTTOU, SIG_IGN, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use once_cell::sync::OnceCell;
-use std::env;
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -30,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, MutexGuard};
 use std::time;
+use std::{env, process};
 
 pub const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -451,9 +451,13 @@ fn escape_string_var(input: &wstr) -> WString {
 /// \param in is the raw string to be searched for literally when substituted in a PCRE2 expression.
 fn escape_string_pcre2(input: &wstr) -> WString {
     let mut out = WString::new();
-    out.reserve(input.len());
+    out.reserve(input.len() + input.len() / 2);
 
     for c in input.chars() {
+        if c == '\n' {
+            out.push_str("\\n");
+            continue;
+        }
         if [
             '.', '^', '$', '*', '+', '(', ')', '?', '[', '{', '}', '\\', '|',
             // these two only *need* to be escaped within a character class, and technically it
@@ -510,6 +514,7 @@ fn unescape_string_internal(input: &wstr, flags: UnescapeFlags) -> Option<WStrin
     // We only read braces as expanders if there's a variable expansion or "," in them.
     let mut vars_or_seps = vec![];
     let mut brace_count = 0;
+    let mut potential_word_start = None;
 
     let mut errored = false;
     #[derive(PartialEq, Eq)]
@@ -550,7 +555,9 @@ fn unescape_string_internal(input: &wstr, flags: UnescapeFlags) -> Option<WStrin
                     }
                 }
                 '~' => {
-                    if unescape_special && input_position == 0 {
+                    if unescape_special
+                        && (input_position == 0 || Some(input_position) == potential_word_start)
+                    {
                         to_append_or_none = Some(HOME_DIRECTORY);
                     }
                 }
@@ -601,6 +608,7 @@ fn unescape_string_internal(input: &wstr, flags: UnescapeFlags) -> Option<WStrin
                         to_append_or_none = Some(BRACE_BEGIN);
                         // We need to store where the brace *ends up* in the output.
                         braces.push(result.len());
+                        potential_word_start = Some(input_position + 1);
                     }
                 }
                 '}' => {
@@ -641,6 +649,7 @@ fn unescape_string_internal(input: &wstr, flags: UnescapeFlags) -> Option<WStrin
                     if unescape_special && brace_count > 0 {
                         to_append_or_none = Some(BRACE_SEP);
                         vars_or_seps.push(input_position);
+                        potential_word_start = Some(input_position + 1);
                     }
                 }
                 ' ' => {
@@ -1625,12 +1634,16 @@ pub fn fish_reserved_codepoint(c: char) -> bool {
         || (c >= key::Backspace && c < ENCODE_DIRECT_END)
 }
 
-pub fn redirect_tty_output() {
+pub fn redirect_tty_output(in_signal_handler: bool) {
     unsafe {
         let mut t: libc::termios = mem::zeroed();
-        let s = CString::new("/dev/null").unwrap();
+        let s = CStr::from_bytes_with_nul(b"/dev/null\0").unwrap();
         let fd = libc::open(s.as_ptr(), O_WRONLY);
-        assert!(fd != -1, "Could not open /dev/null!");
+        if in_signal_handler && fd == -1 {
+            process::abort();
+        } else {
+            assert!(fd != -1, "Could not open /dev/null!");
+        }
         for stdfd in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
             if libc::tcgetattr(stdfd, &mut t) == -1 && errno::errno().0 == EIO {
                 libc::dup2(fd, stdfd);
@@ -1660,8 +1673,7 @@ pub fn get_executable_path(argv0: impl AsRef<Path>) -> PathBuf {
         // When /proc/self/exe points to a file that was deleted (or overwritten on update!)
         // then linux adds a " (deleted)" suffix.
         // If that's not a valid path, let's remove that awkward suffix.
-        let pathstr = path.to_str().unwrap_or("");
-        if !pathstr.ends_with(" (deleted)") {
+        if !path.ends_with(" (deleted)") {
             return path;
         }
 
@@ -1995,46 +2007,5 @@ impl ToCString for Vec<u8> {
 impl ToCString for &[u8] {
     fn to_cstring(self) -> CString {
         CString::new(self).unwrap()
-    }
-}
-
-#[allow(unused_macros)]
-#[deprecated = "use printf!, eprintf! or fprintf"]
-macro_rules! fwprintf {
-    ($args:tt) => {
-        panic!()
-    };
-}
-
-// test-only
-#[allow(unused_macros)]
-#[deprecated = "use printf!"]
-macro_rules! err {
-    ($format:expr $(, $args:expr)* $(,)? ) => {
-        printf!($format $(, $args )*);
-    }
-}
-
-#[macro_export]
-macro_rules! fprintf {
-    ($fd:expr, $format:expr $(, $arg:expr)* $(,)?) => {
-        {
-            let wide = $crate::wutil::sprintf!($format, $( $arg ),*);
-            $crate::wutil::wwrite_to_fd(&wide, $fd);
-        }
-    }
-}
-
-#[macro_export]
-macro_rules! printf {
-    ($format:expr $(, $arg:expr)* $(,)?) => {
-        fprintf!(libc::STDOUT_FILENO, $format $(, $arg)*)
-    }
-}
-
-#[macro_export]
-macro_rules! eprintf {
-    ($format:expr $(, $arg:expr)* $(,)?) => {
-        fprintf!(libc::STDERR_FILENO, $format $(, $arg)*)
     }
 }

@@ -84,20 +84,25 @@ The following options change the way ``commandline`` prints the current commandl
 
 **-x** or **--tokens-expanded**
     Perform argument expansion on the selection and print one argument per line.
-    Command substituions are not expanded but forwarded as-is.
+    Command substitutions are not expanded but forwarded as-is.
 
 **--tokens-raw**
     Print arguments in the selection as they appear on the command line, one per line.
 
 **-o** or **tokenize**
-    Deprecated, do not use.
+    Deprecated; do not use.
 
 If ``commandline`` is called during a call to complete a given string using ``complete -C STRING``, ``commandline`` will consider the specified string to be the current contents of the command line.
 
 The following options output metadata about the commandline state:
 
 **-L** or **--line**
-    Print the line that the cursor is on, with the topmost line starting at 1.
+    If no argument is given, print the line that the cursor is on, with the topmost line starting at 1.
+    Otherwise, set the cursor to the given line.
+
+**--column**
+    If no argument is given, print the 1-based offset from the start of the line to the cursor position in Unicode code points.
+    Otherwise, set the cursor to the given code point offset.
 
 **-S** or **--search-mode**
     Evaluates to true if the commandline is performing a history search.

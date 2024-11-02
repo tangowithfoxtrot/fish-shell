@@ -1,28 +1,30 @@
 use libc::STDOUT_FILENO;
 
 use crate::common::{
-    fish_reserved_codepoint, is_windows_subsystem_for_linux, read_blocked, shell_modes, WSL,
+    fish_reserved_codepoint, is_windows_subsystem_for_linux, read_blocked, shell_modes,
+    str2wcstring, WSL,
 };
 use crate::env::{EnvStack, Environment};
 use crate::fd_readable_set::FdReadableSet;
 use crate::flog::FLOG;
+use crate::fork_exec::flog_safe::FLOG_SAFE;
 use crate::global_safety::RelaxedAtomicBool;
 use crate::key::{
     self, alt, canonicalize_control_char, canonicalize_keyed_control_char, function_key, shift,
     Key, Modifiers,
 };
 use crate::reader::{reader_current_data, reader_test_and_clear_interrupted};
-use crate::threads::{iothread_port, MainThread};
+use crate::threads::{iothread_port, is_main_thread};
 use crate::universal_notifier::default_notifier;
 use crate::wchar::{encode_byte_to_char, prelude::*};
 use crate::wutil::encoding::{mbrtowc, mbstate_t, zero_mbstate};
 use crate::wutil::{fish_wcstol, write_to_fd};
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ops::ControlFlow;
 use std::os::fd::RawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 // The range of key codes for inputrc-style keyboard functions.
 pub const R_END_INPUT_FUNCTIONS: usize = (ReadlineCmd::ReverseRepeatJump as usize) + 1;
@@ -52,6 +54,8 @@ pub enum ReadlineCmd {
     BackwardWord,
     ForwardBigword,
     BackwardBigword,
+    ForwardToken,
+    BackwardToken,
     NextdOrForwardWord,
     PrevdOrBackwardWord,
     HistorySearchBackward,
@@ -75,9 +79,11 @@ pub enum ReadlineCmd {
     KillInnerLine,
     KillWord,
     KillBigword,
+    KillToken,
     BackwardKillWord,
     BackwardKillPathComponent,
     BackwardKillBigword,
+    BackwardKillToken,
     HistoryTokenSearchBackward,
     HistoryTokenSearchForward,
     SelfInsert,
@@ -257,14 +263,6 @@ impl CharEvent {
         })
     }
 
-    pub fn from_char_seq(c: char, seq: WString) -> CharEvent {
-        CharEvent::Key(KeyEvent {
-            key: Key::from_raw(c),
-            input_style: CharInputStyle::Normal,
-            seq,
-        })
-    }
-
     pub fn from_readline(cmd: ReadlineCmd) -> CharEvent {
         Self::from_readline_seq(cmd, WString::new())
     }
@@ -430,76 +428,97 @@ pub fn update_wait_on_sequence_key_ms(vars: &EnvStack) {
     }
 }
 
-static TERMINAL_PROTOCOLS: MainThread<RefCell<Option<TerminalProtocols>>> =
-    MainThread::new(RefCell::new(None));
+static TERMINAL_PROTOCOLS: AtomicBool = AtomicBool::new(false);
 
-pub(crate) static IS_TMUX: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
+static IS_TMUX: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
+pub static IN_MIDNIGHT_COMMANDER_PRE_CSI_U: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
+static IN_ITERM_PRE_CSI_U: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
+
+pub fn terminal_protocol_hacks() {
+    use std::env::var_os;
+    IS_TMUX.store(var_os("TMUX").is_some());
+    IN_ITERM_PRE_CSI_U.store(
+        var_os("LC_TERMINAL").is_some_and(|term| term.as_os_str().as_bytes() == b"iTerm2")
+            && var_os("LC_TERMINAL_VERSION").is_some_and(|version| {
+                let Some(version) = parse_version(&str2wcstring(version.as_os_str().as_bytes()))
+                else {
+                    return false;
+                };
+                version < (3, 5, 6)
+            }),
+    );
+}
+
+fn parse_version(version: &wstr) -> Option<(i64, i64, i64)> {
+    let mut numbers = version.split('.');
+    let major = fish_wcstol(numbers.next()?).ok()?;
+    let minor = fish_wcstol(numbers.next()?).ok()?;
+    let patch = numbers.next()?;
+    let patch = &patch[..patch
+        .chars()
+        .position(|c| !c.is_ascii_digit())
+        .unwrap_or(patch.len())];
+    let patch = fish_wcstol(patch).ok()?;
+    Some((major, minor, patch))
+}
+
+#[test]
+fn test_parse_version() {
+    assert_eq!(parse_version(L!("3.5.2")), Some((3, 5, 2)));
+    assert_eq!(parse_version(L!("3.5.3beta")), Some((3, 5, 3)));
+}
 
 pub fn terminal_protocols_enable_ifn() {
-    let mut term_protocols = TERMINAL_PROTOCOLS.get().borrow_mut();
-    if term_protocols.is_some() {
+    if TERMINAL_PROTOCOLS.load(Ordering::Relaxed) {
         return;
     }
-    *term_protocols = Some(TerminalProtocols::new());
+    TERMINAL_PROTOCOLS.store(true, Ordering::Release);
+    let sequences = if IN_MIDNIGHT_COMMANDER_PRE_CSI_U.load() {
+        "\x1b[?2004h"
+    } else if IN_ITERM_PRE_CSI_U.load() {
+        concat!("\x1b[?2004h", "\x1b[>4;1m", "\x1b[>5u", "\x1b=",)
+    } else {
+        concat!(
+            "\x1b[?2004h", // Bracketed paste
+            "\x1b[>4;1m",  // XTerm's modifyOtherKeys
+            "\x1b[=5u",    // CSI u with kitty progressive enhancement
+            "\x1b=",       // set application keypad mode, so the keypad keys send unique codes
+        )
+    };
+    FLOG!(term_protocols, "Enabling extended keys and bracketed paste");
+    let _ = write_to_fd(sequences.as_bytes(), STDOUT_FILENO);
+    if IS_TMUX.load() {
+        let _ = write_to_fd("\x1b[?1004h".as_bytes(), STDOUT_FILENO);
+    }
+    reader_current_data().map(|data| data.save_screen_state());
 }
 
 pub(crate) fn terminal_protocols_disable_ifn() {
-    TERMINAL_PROTOCOLS.get().replace(None);
-}
-
-pub(crate) fn terminal_protocols_try_disable_ifn() {
-    if let Ok(mut term_protocols) = TERMINAL_PROTOCOLS.get().try_borrow_mut() {
-        *term_protocols = None;
+    if !TERMINAL_PROTOCOLS.load(Ordering::Acquire) {
+        return;
     }
-}
-
-struct TerminalProtocols {}
-
-impl TerminalProtocols {
-    fn new() -> Self {
-        let sequences = concat!(
-            "\x1b[?2004h", // Bracketed paste
-            "\x1b[>4;1m",  // XTerm's modifyOtherKeys
-            "\x1b[>5u",    // CSI u with kitty progressive enhancement
-            "\x1b=",       // set application keypad mode, so the keypad keys send unique codes
-        );
-        FLOG!(
-            term_protocols,
-            format!(
-                "Enabling extended keys and bracketed paste: {:?}",
-                sequences
-            )
-        );
-        let _ = write_to_fd(sequences.as_bytes(), STDOUT_FILENO);
-        if IS_TMUX.load() {
-            let _ = write_to_fd("\x1b[?1004h".as_bytes(), STDOUT_FILENO);
-        }
-        reader_current_data().map(|data| data.save_screen_state());
-        Self {}
+    let sequences = if IN_ITERM_PRE_CSI_U.load() {
+        concat!("\x1b[?2004l", "\x1b[>4;0m", "\x1b[<1u", "\x1b>",)
+    } else {
+        concat!(
+            "\x1b[?2004l", // Bracketed paste
+            "\x1b[>4;0m",  // XTerm's modifyOtherKeys
+            "\x1b[=0u",    // CSI u with kitty progressive enhancement
+            "\x1b>",       // application keypad mode
+        )
+    };
+    FLOG_SAFE!(
+        term_protocols,
+        "Disabling extended keys and bracketed paste"
+    );
+    let _ = write_to_fd(sequences.as_bytes(), STDOUT_FILENO);
+    if IS_TMUX.load() {
+        let _ = write_to_fd("\x1b[?1004l".as_bytes(), STDOUT_FILENO);
     }
-}
-
-impl Drop for TerminalProtocols {
-    fn drop(&mut self) {
-        let sequences = concat!(
-            "\x1b[?2004l",
-            "\x1b[>4;0m",
-            "\x1b[<1u", // Konsole breaks unless we pass an explicit number of entries to pop.
-            "\x1b>",
-        );
-        FLOG!(
-            term_protocols,
-            format!(
-                "Disabling extended keys and bracketed paste: {:?}",
-                sequences
-            )
-        );
-        let _ = write_to_fd(sequences.as_bytes(), STDOUT_FILENO);
-        if IS_TMUX.load() {
-            let _ = write_to_fd("\x1b[?1004l".as_bytes(), STDOUT_FILENO);
-        }
+    if is_main_thread() {
         reader_current_data().map(|data| data.save_screen_state());
     }
+    TERMINAL_PROTOCOLS.store(false, Ordering::Release);
 }
 
 fn parse_mask(mask: u32) -> Modifiers {
@@ -686,6 +705,17 @@ pub trait InputEventQueuer {
             }
             return None;
         };
+        if buffer.len() == 2 && next == b'\x1b' {
+            return Some(
+                match self.parse_escape_sequence(buffer, have_escape_prefix) {
+                    Some(mut nested_sequence) => {
+                        nested_sequence.modifiers.alt = true;
+                        nested_sequence
+                    }
+                    None => Key::from_raw(key::Invalid),
+                },
+            );
+        }
         if next == b'[' {
             // potential CSI
             return Some(self.parse_csi(buffer).unwrap_or(alt('[')));
@@ -775,7 +805,8 @@ pub trait InputEventQueuer {
 
     fn parse_csi(&mut self, buffer: &mut Vec<u8>) -> Option<Key> {
         let mut next_char = |zelf: &mut Self| zelf.try_readb(buffer).unwrap_or(0xff);
-        let mut params = [[0_u32; 16]; 4];
+        // The maximum number of CSI parameters is defined by NPAR, nominally 16.
+        let mut params = [[0_u32; 4]; 16];
         let mut c = next_char(self);
         let private_mode;
         if matches!(c, b'?' | b'<' | b'=' | b'>') {
@@ -832,10 +863,10 @@ pub trait InputEventQueuer {
                     _ => return None,
                 }
             }
-            b'A' | b'a' => masked_key(key::Up, None),
-            b'B' | b'b' => masked_key(key::Down, None),
-            b'C' | b'c' => masked_key(key::Right, None),
-            b'D' | b'd' => masked_key(key::Left, None),
+            b'A' => masked_key(key::Up, None),
+            b'B' => masked_key(key::Down, None),
+            b'C' => masked_key(key::Right, None),
+            b'D' => masked_key(key::Left, None),
             b'E' => masked_key('5', None),       // Numeric keypad
             b'F' => masked_key(key::End, None),  // PC/xterm style
             b'H' => masked_key(key::Home, None), // PC/xterm style
@@ -869,7 +900,7 @@ pub trait InputEventQueuer {
             b'T' => {
                 self.disable_mouse_tracking();
                 // VT200 button released in mouse highlighting mode past end-of-line. 9 characters.
-                for _ in 0..7 {
+                for _ in 0..6 {
                     let _ = next_char(self);
                 }
                 return None;
@@ -902,6 +933,11 @@ pub trait InputEventQueuer {
                 25 | 26 => {
                     shift(char::from_u32(u32::from(function_key(3)) + params[0][0] - 25).unwrap())
                 } // rxvt style
+                27 => {
+                    let key =
+                        canonicalize_keyed_control_char(char::from_u32(params[2][0]).unwrap());
+                    masked_key(key, None)
+                }
                 28 | 29 => {
                     shift(char::from_u32(u32::from(function_key(5)) + params[0][0] - 28).unwrap())
                 } // rxvt style
@@ -1002,10 +1038,10 @@ pub trait InputEventQueuer {
         #[rustfmt::skip]
         let key = match code {
             b' ' => Key{modifiers, codepoint: key::Space},
-            b'A' | b'a' => Key{modifiers, codepoint: key::Up},
-            b'B' | b'b' => Key{modifiers, codepoint: key::Down},
-            b'C' | b'c' => Key{modifiers, codepoint: key::Right},
-            b'D' | b'd' => Key{modifiers, codepoint: key::Left},
+            b'A' => Key{modifiers, codepoint: key::Up},
+            b'B' => Key{modifiers, codepoint: key::Down},
+            b'C' => Key{modifiers, codepoint: key::Right},
+            b'D' => Key{modifiers, codepoint: key::Left},
             b'F' => Key{modifiers, codepoint: key::End},
             b'H' => Key{modifiers, codepoint: key::Home},
             b'I' => Key{modifiers, codepoint: key::Tab},

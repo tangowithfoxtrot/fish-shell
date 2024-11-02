@@ -15,6 +15,8 @@ fn main() {
     // OUT_DIR is set by Cargo when the build script is running (not compiling)
     let default_build_dir = env::var("OUT_DIR").unwrap();
     let build_dir = option_env!("FISH_BUILD_DIR").unwrap_or(&default_build_dir);
+    let build_dir = std::fs::canonicalize(build_dir).unwrap();
+    let build_dir = build_dir.to_str().unwrap();
     rsconf::set_env_value("FISH_BUILD_DIR", build_dir);
     // We need to canonicalize (i.e. realpath) the manifest dir because we want to be able to
     // compare it directly as a string at runtime.
@@ -48,6 +50,9 @@ fn main() {
     // Keep verbose mode on until we've ironed out rust build script stuff
     target.set_verbose(true);
     detect_cfgs(&mut target);
+
+    #[cfg(all(target_env = "gnu", target_feature = "crt-static"))]
+    compile_error!("Statically linking against glibc has unavoidable crashes and is unsupported. Use dynamic linking or link statically against musl.");
 }
 
 /// Check target system support for certain functionality dynamically when the build is invoked,
@@ -85,7 +90,12 @@ fn detect_cfgs(target: &mut Target) {
             Ok(target.has_symbol("pipe2"))
         }),
         ("HAVE_EVENTFD", &|target| {
-            Ok(target.has_header("sys/eventfd.h"))
+            // FIXME: NetBSD 10 has eventfd, but the libc crate does not expose it.
+            if cfg!(target_os = "netbsd") {
+                 Ok(false)
+             } else {
+                 Ok(target.has_header("sys/eventfd.h"))
+            }
         }),
         ("HAVE_WAITSTATUS_SIGNAL_RET", &|target| {
             Ok(target.r#if("WEXITSTATUS(0x007f) == 0x7f", &["sys/wait.h"]))
@@ -177,8 +187,12 @@ fn have_gettext(target: &Target) -> Result<bool, Box<dyn Error>> {
 /// 0.5 MiB is small enough that we'd have to drastically reduce MAX_STACK_DEPTH to less than 10, so
 /// we instead use a workaround to increase the main thread size.
 fn has_small_stack(_: &Target) -> Result<bool, Box<dyn Error>> {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "netbsd")))]
     return Ok(false);
+
+    // NetBSD 10 also needs this but can't find pthread_get_stacksize_np.
+    #[cfg(target_os = "netbsd")]
+    return Ok(true);
 
     #[cfg(target_os = "macos")]
     {
@@ -254,9 +268,22 @@ fn get_version(src_dir: &Path) -> String {
     if let Ok(output) = Command::new("git").args(args).output() {
         let rev = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !rev.is_empty() {
-            return rev;
+            // If it contains a ".", we have a proper version like "3.7",
+            // or "23.2.1-1234-gfab1234"
+            if rev.contains(".") {
+                return rev;
+            }
+            // If it doesn't, we probably got *just* the commit SHA,
+            // like "f1242abcdef".
+            // So we prepend the crate version so it at least looks like
+            // "3.8-gf1242abcdef"
+            // This lacks the commit *distance*, but that can't be helped without
+            // tags.
+            let version = env!("CARGO_PKG_VERSION").to_owned();
+            return version + "-g" + &rev;
         }
     }
+    // TODO: Do we just use the cargo version here?
 
     "unknown".to_string()
 }

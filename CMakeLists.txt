@@ -1,12 +1,11 @@
-# CMake 3.19 is needed for file(REAL_PATH)
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.5)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
 project(fish LANGUAGES C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(DEFAULT_BUILD_TYPE "Debug")
+set(DEFAULT_BUILD_TYPE "RelWithDebInfo")
 
 # Generate Xcode schemas (but not for tests).
 set(CMAKE_XCODE_GENERATE_SCHEME 1)
@@ -56,7 +55,8 @@ function(CREATE_TARGET target)
         env ${VARS_FOR_CARGO}
           ${Rust_CARGO}
             build --bin ${target}
-            $<$<CONFIG:Release,RelWithDebInfo>:--release>
+            $<$<CONFIG:Release>:--release>
+            $<$<CONFIG:RelWithDebInfo>:--release>
             --target ${Rust_CARGO_TARGET}
             ${CARGO_FLAGS}
             ${FEATURES_ARG}

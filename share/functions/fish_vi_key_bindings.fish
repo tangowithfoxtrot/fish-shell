@@ -23,29 +23,14 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
     # and without this would then have subtly broken bindings.
     if test "$fish_key_bindings" != fish_vi_key_bindings
         and test "$rebind" = true
-        # Allow the user to set the variable universally
-        set -l scope
-        set -q fish_key_bindings
-        or set scope -g
-        true
-        # We try to use `set --no-event`, but to avoid leaving the user without bindings
-        # if they run this with an older version we fall back on setting the variable
-        # with an event.
-        if ! set --no-event $scope fish_key_bindings fish_vi_key_bindings 2>/dev/null
-            # This triggers the handler, which calls us again
-            set $scope fish_key_bindings fish_vi_key_bindings
-            # unless the handler somehow doesn't exist, which would leave us without bindings.
-            # this happens in no-config mode.
-            functions -q __fish_reload_key_bindings
-            and return
-        end
+        __fish_change_key_bindings fish_vi_key_bindings || return
     end
 
     set -l init_mode insert
     # These are only the special vi-style keys
     # not end/home, we share those.
     set -l eol_keys \$ g,\$
-    set -l bol_keys \^ 0 g\^
+    set -l bol_keys \^ 0 g\^ _
 
     if contains -- $argv[1] insert default visual
         set init_mode $argv[1]
@@ -317,6 +302,8 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
     bind -s --preset -M visual t forward-jump-till
     bind -s --preset -M visual F backward-jump
     bind -s --preset -M visual T backward-jump-till
+    bind -s --preset -M visual ';' repeat-jump
+    bind -s --preset -M visual , repeat-jump-reverse
 
     for key in $eol_keys
         bind -s --preset -M visual $key end-of-line
@@ -352,7 +339,7 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
     set -g fish_cursor_selection_mode inclusive
     function __fish_vi_key_bindings_on_mode_change --on-variable fish_bind_mode
         switch $fish_bind_mode
-            case insert
+            case insert replace
                 set -g fish_cursor_end_mode exclusive
             case '*'
                 set -g fish_cursor_end_mode inclusive

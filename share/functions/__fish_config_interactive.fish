@@ -36,7 +36,7 @@ end" >$__fish_config_dir/config.fish
         # visible in whatever terminal setup.
         #
         __init_uvar fish_color_normal normal
-        __init_uvar fish_color_command blue
+        __init_uvar fish_color_command normal
         __init_uvar fish_color_param cyan
         __init_uvar fish_color_redirection cyan --bold
         __init_uvar fish_color_comment red
@@ -180,12 +180,8 @@ end" >$__fish_config_dir/config.fish
         end
         set -g __fish_active_key_bindings "$fish_key_bindings"
         set -g fish_bind_mode default
-        if test "$fish_key_bindings" = fish_default_key_bindings
-            # Redirect stderr per #1155
-            fish_default_key_bindings 2>/dev/null
-        else
-            $fish_key_bindings 2>/dev/null
-        end
+        # Redirect stderr per #1155
+        $fish_key_bindings 2>/dev/null
         # Load user key bindings if they are defined
         if functions --query fish_user_key_bindings >/dev/null
             fish_user_key_bindings 2>/dev/null

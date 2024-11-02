@@ -4,7 +4,7 @@ use crate::{
     common::{escape_string, EscapeFlags, EscapeStringStyle},
     fallback::fish_wcwidth,
     reader::TERMINAL_MODE_ON_STARTUP,
-    wchar::prelude::*,
+    wchar::{decode_byte_from_char, prelude::*},
     wutil::{fish_is_pua, fish_wcstoi},
 };
 
@@ -418,25 +418,14 @@ fn ctrl_to_symbol(buf: &mut WString, c: char) {
     // 2. key names that are given as raw escape sequence (\e123); those we want to display
     // similar to how they are given.
 
-    let ctrl_symbolic_names: [&wstr; 28] = {
-        std::array::from_fn(|i| match i {
-            8 => L!("\\b"),
-            9 => L!("\\t"),
-            10 => L!("\\n"),
-            13 => L!("\\r"),
-            27 => L!("\\e"),
-            _ => L!(""),
-        })
-    };
-
     let c = u8::try_from(c).unwrap();
-    let cu = usize::from(c);
-
-    if !ctrl_symbolic_names[cu].is_empty() {
-        sprintf!(=> buf, "%s", ctrl_symbolic_names[cu]);
-    } else {
-        sprintf!(=> buf, "\\x%02x", c);
-    }
+    let symbolic_name = match c {
+        9 => L!("\\t"),
+        13 => L!("\\r"),
+        27 => L!("\\e"),
+        _ => return sprintf!(=> buf, "\\x%02x", c),
+    };
+    buf.push_utfstr(symbolic_name);
 }
 
 /// Return true if the character must be escaped when used in the sequence of chars to be bound in
@@ -454,14 +443,16 @@ fn ascii_printable_to_symbol(buf: &mut WString, c: char) {
 }
 
 /// Convert a wide-char to a symbol that can be used in our output.
-pub(crate) fn char_to_symbol(c: char) -> WString {
+pub fn char_to_symbol(c: char) -> WString {
     let mut buff = WString::new();
     let buf = &mut buff;
-    if c <= ' ' {
+    if c <= ' ' || c == '\x7F' {
         ctrl_to_symbol(buf, c);
     } else if c < '\u{80}' {
         // ASCII characters that are not control characters
         ascii_printable_to_symbol(buf, c);
+    } else if let Some(byte) = decode_byte_from_char(c) {
+        sprintf!(=> buf, "\\x%02x", byte);
     } else if ('\u{e000}'..='\u{f8ff}').contains(&c) {
         // Unmapped key from https://sw.kovidgoyal.net/kitty/keyboard-protocol/#functional-key-definitions
         sprintf!(=> buf, "\\u%04X", u32::from(c));

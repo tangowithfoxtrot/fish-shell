@@ -20,11 +20,16 @@ use errno::Errno;
 use libc::{EAGAIN, EINTR, ENOENT, ENOTDIR, EPIPE, EWOULDBLOCK, STDOUT_FILENO};
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
-use std::cell::{RefCell, UnsafeCell};
+use once_cell::sync::Lazy;
+#[cfg(not(target_has_atomic = "64"))]
+use portable_atomic::AtomicU64;
+use std::cell::RefCell;
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd};
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_has_atomic = "64")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// separated_buffer_t represents a buffer of output from commands, prepared to be turned into a
@@ -334,23 +339,23 @@ impl IoData for IoPipe {
     }
 }
 
-/// Represents filling an io_buffer_t. Very similar to io_pipe_t.
+/// Represents filling an IoBuffer. Very similar to IoPipe.
 pub struct IoBufferfill {
     target: RawFd,
 
-    /// Write end. The other end is connected to an io_buffer_t.
+    /// Write end. The other end is connected to an IoBuffer.
     write_fd: OwnedFd,
 
     /// The receiving buffer.
     buffer: Arc<IoBuffer>,
 }
 impl IoBufferfill {
-    /// Create an io_bufferfill_t which, when written from, fills a buffer with the contents.
+    /// Create an IoBufferfill which, when written from, fills a buffer with the contents.
     /// Returns an error on failure, e.g. too many open fds.
     pub fn create() -> io::Result<Arc<IoBufferfill>> {
         Self::create_opts(0, STDOUT_FILENO)
     }
-    /// Create an io_bufferfill_t which, when written from, fills a buffer with the contents.
+    /// Create an IoBufferfill which, when written from, fills a buffer with the contents.
     /// Returns an error on failure, e.g. too many open fds.
     ///
     /// \param target the fd which this will be dup2'd to - typically stdout.
@@ -425,8 +430,8 @@ impl IoData for IoBufferfill {
     }
 }
 
-/// An io_buffer_t is a buffer which can populate itself by reading from an fd.
-/// It is not an io_data_t.
+/// An IoBuffer is a buffer which can populate itself by reading from an fd.
+/// It is not an IoData.
 pub struct IoBuffer {
     /// Buffer storing what we have read.
     buffer: Mutex<SeparatedBuffer>,
@@ -1029,14 +1034,8 @@ const NOCLOB_ERROR: &wstr = L!("The file '%ls' already exists");
 const OPEN_MASK: Mode = Mode::from_bits_truncate(0o666);
 
 /// Provide the fd monitor used for background fillthread operations.
-fn fd_monitor() -> &'static mut FdMonitor {
-    // Deliberately leaked to avoid shutdown dtors.
-    static mut FDM: *const UnsafeCell<FdMonitor> = std::ptr::null();
-    unsafe {
-        if FDM.is_null() {
-            FDM = Box::into_raw(Box::new(UnsafeCell::new(FdMonitor::new())))
-        }
-    }
-    let ptr: *mut FdMonitor = unsafe { (*FDM).get() };
-    unsafe { &mut *ptr }
+static FD_MONITOR: Lazy<FdMonitor> = Lazy::new(FdMonitor::new);
+
+pub fn fd_monitor() -> &'static FdMonitor {
+    &FD_MONITOR
 }

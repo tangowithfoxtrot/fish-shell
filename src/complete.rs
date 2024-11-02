@@ -1,10 +1,10 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     mem,
     sync::{
         atomic::{self, AtomicUsize},
-        Mutex,
+        Mutex, MutexGuard,
     },
     time::{Duration, Instant},
 };
@@ -13,9 +13,9 @@ use crate::{
     common::{charptr2wcstring, escape_string, EscapeFlags, EscapeStringStyle},
     reader::{get_quote, is_backslashed},
     util::wcsfilecmp,
+    wutil::sprintf,
 };
 use bitflags::bitflags;
-use fish_printf::sprintf;
 use once_cell::sync::Lazy;
 
 use crate::{
@@ -452,6 +452,7 @@ struct CompletionEntryIndex {
 }
 type CompletionEntryMap = BTreeMap<CompletionEntryIndex, CompletionEntry>;
 static COMPLETION_MAP: Mutex<CompletionEntryMap> = Mutex::new(BTreeMap::new());
+static COMPLETION_TOMBSTONES: Mutex<BTreeSet<WString>> = Mutex::new(BTreeSet::new());
 
 /// Completion "wrapper" support. The map goes from wrapping-command to wrapped-command-list.
 type WrapperMap = HashMap<WString, Vec<WString>>;
@@ -478,6 +479,12 @@ fn natural_compare_completions(a: &Completion, b: &Completion) -> Ordering {
     if (a.flags & b.flags).contains(CompleteFlags::DONT_SORT) {
         // Both completions are from a source with the --keep-order flag.
         return Ordering::Equal;
+    }
+    if (a.flags).contains(CompleteFlags::DONT_SORT) {
+        return Ordering::Less;
+    }
+    if (b.flags).contains(CompleteFlags::DONT_SORT) {
+        return Ordering::Greater;
     }
     wcsfilecmp(&a.completion, &b.completion)
 }
@@ -732,6 +739,7 @@ impl<'ctx> Completer<'ctx> {
                     &current_token[pos + 1..],
                     /*do_file=*/ true,
                     /*handle_as_special_cd=*/ false,
+                    cur_tok.is_unterminated_brace,
                 );
                 return;
             }
@@ -830,7 +838,13 @@ impl<'ctx> Completer<'ctx> {
         }
 
         // This function wants the unescaped string.
-        self.complete_param_expand(L!(""), current_argument, do_file, handle_as_special_cd);
+        self.complete_param_expand(
+            L!(""),
+            current_argument,
+            do_file,
+            handle_as_special_cd,
+            cur_tok.is_unterminated_brace,
+        );
 
         // Lastly mark any completions that appear to already be present in arguments.
         self.mark_completions_duplicating_arguments(&cmdline, current_token, tokens);
@@ -970,9 +984,12 @@ impl<'ctx> Completer<'ctx> {
             return;
         }
 
-        let lookup_cmd: WString = [L!("__fish_describe_command "), &escape(cmd)]
-            .into_iter()
-            .collect();
+        let lookup_cmd: WString = [
+            L!("functions -q __fish_describe_command && __fish_describe_command "),
+            &escape(cmd),
+        ]
+        .into_iter()
+        .collect();
 
         // First locate a list of possible descriptions using a single call to apropos or a direct
         // search if we know the location of the whatis database. This can take some time on slower
@@ -987,7 +1004,7 @@ impl<'ctx> Completer<'ctx> {
 
         // Then discard anything that is not a possible completion and put the result into a
         // hashtable with the completion as key and the description as value.
-        let mut lookup = HashMap::new();
+        let mut lookup = BTreeMap::new();
         // A typical entry is the command name, followed by a tab, followed by a description.
         for elstr in &mut list {
             // Skip keys that are too short.
@@ -1501,6 +1518,7 @@ impl<'ctx> Completer<'ctx> {
         s: &wstr,
         do_file: bool,
         handle_as_special_cd: bool,
+        is_unterminated_brace: bool,
     ) {
         if self.ctx.check_cancel() {
             return;
@@ -1511,6 +1529,9 @@ impl<'ctx> Completer<'ctx> {
             | ExpandFlags::PRESERVE_HOME_TILDES;
         if !do_file {
             flags |= ExpandFlags::SKIP_WILDCARDS;
+        }
+        if is_unterminated_brace {
+            flags |= ExpandFlags::NO_SPACE_FOR_UNCLOSED_BRACE;
         }
 
         if handle_as_special_cd && do_file {
@@ -1556,16 +1577,17 @@ impl<'ctx> Completer<'ctx> {
         if let Some(sep_index) = sep_index {
             let sep_string = s.slice_from(sep_index + 1);
             let mut local_completions = Vec::new();
-            if expand_string(
-                sep_string.to_owned(),
-                &mut local_completions,
-                flags,
-                self.ctx,
-                None,
-            )
-            .result
-                == ExpandResultCode::error
-            {
+            if matches!(
+                expand_string(
+                    sep_string.to_owned(),
+                    &mut local_completions,
+                    flags,
+                    self.ctx,
+                    None,
+                )
+                .result,
+                ExpandResultCode::error | ExpandResultCode::overflow
+            ) {
                 FLOGF!(complete, "Error while expanding string '%ls'", sep_string);
             }
 
@@ -1596,9 +1618,11 @@ impl<'ctx> Completer<'ctx> {
             }
 
             let first = self.completions.len();
-            if expand_to_receiver(s.to_owned(), &mut self.completions, flags, self.ctx, None).result
-                == ExpandResultCode::error
-            {
+            if matches!(
+                expand_to_receiver(s.to_owned(), &mut self.completions, flags, self.ctx, None)
+                    .result,
+                ExpandResultCode::error | ExpandResultCode::overflow,
+            ) {
                 FLOGF!(complete, "Error while expanding string '%ls'", s);
             }
             Self::escape_opening_brackets(&mut self.completions[first..], s);
@@ -2340,10 +2364,14 @@ pub fn complete_remove(cmd: WString, cmd_is_path: bool, option: &wstr, typ: Comp
 /// Removes all completions for a given command.
 pub fn complete_remove_all(cmd: WString, cmd_is_path: bool) {
     let mut completion_map = COMPLETION_MAP.lock().expect("mutex poisoned");
-    completion_map.remove(&CompletionEntryIndex {
+    let idx = CompletionEntryIndex {
         name: cmd,
         is_path: cmd_is_path,
-    });
+    };
+    let removed = completion_map.remove(&idx).is_some();
+    if !removed && !idx.is_path {
+        COMPLETION_TOMBSTONES.lock().unwrap().insert(idx.name);
+    }
 }
 
 /// Returns all completions of the command cmd.
@@ -2433,13 +2461,17 @@ fn completion2string(index: &CompletionEntryIndex, o: &CompleteEntryOpt) -> WStr
 /// Load command-specific completions for the specified command.
 /// Returns `true` if something new was loaded, `false` if not.
 pub fn complete_load(cmd: &wstr, parser: &Parser) -> bool {
+    if COMPLETION_TOMBSTONES.lock().unwrap().contains(cmd) {
+        return false;
+    }
+
     let mut loaded_new = false;
 
     // We have to load this as a function, since it may define a --wraps or signature.
     // See issue #2466.
     if function::load(cmd, parser) {
         // We autoloaded something; check if we have a --wraps.
-        loaded_new |= !complete_get_wrap_targets(cmd).is_empty();
+        loaded_new |= complete_wrap_map().get(cmd).is_some();
     }
 
     // It's important to NOT hold the lock around completion loading.
@@ -2553,6 +2585,11 @@ pub fn complete_remove_wrapper(command: WString, target_to_remove: &wstr) -> boo
     }
 
     result
+}
+
+/// Returns a list of wrap targets for a given command.
+pub fn complete_wrap_map() -> MutexGuard<'static, HashMap<WString, Vec<WString>>> {
+    wrapper_map.lock().unwrap()
 }
 
 /// Returns a list of wrap targets for a given command.

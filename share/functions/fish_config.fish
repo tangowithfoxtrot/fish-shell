@@ -17,6 +17,8 @@ function fish_config --description "Launch fish's web based configuration"
     # Also opened with just `fish_config` or `fish_config browse`.
     if contains -- $cmd browse
         set -lx __fish_bin_dir $__fish_bin_dir
+        set -l fish_path (status fish-path)
+        and set __fish_bin_dir (path dirname -- $fish_path)
         if set -l python (__fish_anypython)
             $python "$__fish_data_dir/tools/web_config/webconfig.py" $argv
 
@@ -118,12 +120,20 @@ function fish_config --description "Launch fish's web based configuration"
                         # or we'd throw an error on a stock fish.
                         path is $__fish_config_dir/functions/fish_prompt.fish
                         and cp $__fish_config_dir/functions/fish_prompt.fish{,.bak}
+                        path is $__fish_config_dir/functions/fish_right_prompt.fish
+                        and cp $__fish_config_dir/functions/fish_right_prompt.fish{,.bak}
 
                         set -l have
                         if set -q argv[1]
                             for f in $prompt_dir/$argv[1].fish
                                 if test -f $f
                                     set have $f
+                                    # Set the functions to empty so we empty the file
+                                    # if necessary.
+                                    function fish_prompt
+                                    end
+                                    function fish_right_prompt
+                                    end
                                     source $f
                                     or return 2
                                 end

@@ -72,6 +72,8 @@ bitflags! {
         /// Do expansions specifically to support external command completions. This means using PATH as
         /// a list of potential working directories.
         const SPECIAL_FOR_COMMAND = 1 << 13;
+        /// The token has an unclosed brace, so don't add a space.
+        const NO_SPACE_FOR_UNCLOSED_BRACE = 1 << 14;
     }
 }
 
@@ -1130,7 +1132,9 @@ fn get_home_directory_name<'a>(input: &'a wstr, out_tail_idx: &mut usize) -> &'a
 
 /// Attempts tilde expansion of the string specified, modifying it in place.
 fn expand_home_directory(input: &mut WString, vars: &dyn Environment) {
-    if input.as_char_slice().first() != Some(&HOME_DIRECTORY) {
+    let starts_with_tilde = input.as_char_slice().first() == Some(&HOME_DIRECTORY);
+    *input = input.replace([HOME_DIRECTORY], L!("~"));
+    if !starts_with_tilde {
         return;
     }
 
@@ -1171,8 +1175,6 @@ fn expand_home_directory(input: &mut WString, vars: &dyn Environment) {
 
     if let Some(home) = home {
         input.replace_range(..tail_idx, &normalize_path(&home, true));
-    } else {
-        input.replace_range(0..1, L!("~"));
     }
 }
 
@@ -1275,14 +1277,20 @@ impl<'a, 'b, 'c> Expander<'a, 'b, 'c> {
                 }
                 let this_result = (stage)(&mut expand, comp.completion, &mut output_storage);
                 total_result = this_result;
-                if total_result == ExpandResultCode::error {
+                if matches!(
+                    total_result.result,
+                    ExpandResultCode::error | ExpandResultCode::overflow
+                ) {
                     break;
                 }
             }
 
             // Output becomes our next stage's input.
             completions = output_storage.take();
-            if total_result == ExpandResultCode::error {
+            if matches!(
+                total_result.result,
+                ExpandResultCode::error | ExpandResultCode::overflow
+            ) {
                 break;
             }
         }
@@ -1487,7 +1495,7 @@ impl<'a, 'b, 'c> Expander<'a, 'b, 'c> {
             let mut expanded = expanded_recv.take();
             expanded.sort_by(|a, b| wcsfilecmp_glob(&a.completion, &b.completion));
             if !out.extend(expanded) {
-                result = ExpandResult::new(ExpandResultCode::error);
+                result = ExpandResult::new(ExpandResultCode::overflow);
             }
         } else {
             // Can't fully justify this check. I think it's that SKIP_WILDCARDS is used when completing
@@ -1558,6 +1566,8 @@ impl<'a, 'b, 'c> Expander<'a, 'b, 'c> {
 pub enum ExpandResultCode {
     /// There was an error, for example, unmatched braces.
     error,
+    /// Expansion would exceed the maximum number of elements.
+    overflow,
     /// Expansion succeeded.
     ok,
     /// Expansion was cancelled (e.g. control-C).

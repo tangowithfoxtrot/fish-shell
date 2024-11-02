@@ -24,8 +24,7 @@ use crate::topic_monitor::{topic_monitor_principal, GenerationsList, Topic};
 use crate::wait_handle::{InternalJobId, WaitHandle, WaitHandleRef, WaitHandleStore};
 use crate::wchar::{wstr, WString, L};
 use crate::wchar_ext::ToWString;
-use crate::wutil::{perror, wbasename, wgettext, wperror};
-use fish_printf::sprintf;
+use crate::wutil::{perror, sprintf, wbasename, wgettext, wperror};
 use libc::{
     EBADF, EINVAL, ENOTTY, EPERM, EXIT_SUCCESS, SIGABRT, SIGBUS, SIGCONT, SIGFPE, SIGHUP, SIGILL,
     SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSYS, SIGTTOU, SIG_DFL, SIG_IGN, STDIN_FILENO,
@@ -33,12 +32,16 @@ use libc::{
     WUNTRACED, _SC_CLK_TCK,
 };
 use once_cell::sync::Lazy;
+#[cfg(not(target_has_atomic = "64"))]
+use portable_atomic::AtomicU64;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::fs;
 use std::io::{Read, Write};
 use std::os::fd::RawFd;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, Ordering};
+#[cfg(target_has_atomic = "64")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 /// Types of processes.
@@ -422,7 +425,7 @@ impl TtyTransfer {
                     }
                     EBADF => {
                         // stdin has been closed. Workaround a glibc bug - see #3644.
-                        redirect_tty_output();
+                        redirect_tty_output(false);
                         return false;
                     }
                     _ => {

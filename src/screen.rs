@@ -7,18 +7,19 @@
 //! The current implementation is less smart than ncurses allows and can not for example move blocks
 //! of text around to handle text insertion.
 
-use crate::pager::{PageRendering, Pager};
+use crate::pager::{PageRendering, Pager, PAGER_MIN_HEIGHT};
 use std::cell::RefCell;
 use std::collections::LinkedList;
 use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::time::SystemTime;
 
 use libc::{ONLCR, STDERR_FILENO, STDOUT_FILENO};
 
 use crate::common::{
-    fish_reserved_codepoint, get_ellipsis_char, get_omitted_newline_str, get_omitted_newline_width,
+    get_ellipsis_char, get_omitted_newline_str, get_omitted_newline_width,
     has_working_tty_timestamps, shell_modes, str2wcstring, wcs2string, write_loop, ScopeGuard,
     ScopeGuarding,
 };
@@ -26,6 +27,7 @@ use crate::curses::{term, tparm0, tparm1};
 use crate::env::{Environment, TERM_HAS_XN};
 use crate::fallback::fish_wcwidth;
 use crate::flog::FLOGF;
+#[allow(unused_imports)]
 use crate::future::IsSomeAnd;
 use crate::global_safety::RelaxedAtomicBool;
 use crate::highlight::HighlightColorResolver;
@@ -34,6 +36,7 @@ use crate::output::Outputter;
 use crate::termsize::{termsize_last, Termsize};
 use crate::wchar::prelude::*;
 use crate::wcstringutil::string_prefixes_string;
+use crate::wutil::fstat;
 
 #[derive(Clone, Default)]
 pub struct HighlightedChar {
@@ -101,7 +104,7 @@ impl Line {
     pub fn wcswidth_min_0(&self, max: usize /* = usize::MAX */) -> usize {
         let mut result: usize = 0;
         for c in &self.text[..max.min(self.text.len())] {
-            result += wcwidth_rendered(c.character);
+            result += wcwidth_rendered_min_0(c.character);
         }
         result
     }
@@ -174,6 +177,8 @@ impl ScreenData {
 pub struct Screen {
     /// Whether the last-drawn autosuggestion (if any) is truncated, or hidden entirely.
     pub autosuggestion_is_truncated: bool,
+    /// True if the last rendering was so large we could only display part of the command line.
+    pub scrolled: bool,
 
     /// Receiver for our output.
     outp: &'static RefCell<Outputter>,
@@ -199,10 +204,10 @@ pub struct Screen {
     /// is used when resizing the window larger: if the cursor jumps to the line above, we need to
     /// remember to clear the subsequent lines.
     actual_lines_before_reset: usize,
-    /// These status buffers are used to check if any output has occurred other than from fish's
+    /// Modification times to check if any output has occurred other than from fish's
     /// main loop, in which case we need to redraw.
-    prev_buff_1: libc::stat,
-    prev_buff_2: libc::stat,
+    mtime_stdout: Option<SystemTime>,
+    mtime_stderr: Option<SystemTime>,
 }
 
 impl Screen {
@@ -210,6 +215,7 @@ impl Screen {
         Self {
             outp: Outputter::stdoutput(),
             autosuggestion_is_truncated: Default::default(),
+            scrolled: Default::default(),
             desired: Default::default(),
             actual: Default::default(),
             actual_left_prompt: Default::default(),
@@ -218,8 +224,8 @@ impl Screen {
             need_clear_lines: Default::default(),
             need_clear_screen: Default::default(),
             actual_lines_before_reset: Default::default(),
-            prev_buff_1: unsafe { std::mem::zeroed() },
-            prev_buff_2: unsafe { std::mem::zeroed() },
+            mtime_stdout: Default::default(),
+            mtime_stderr: Default::default(),
         }
     }
 
@@ -234,7 +240,6 @@ impl Screen {
     /// of the command line \param colors the colors to use for the commanad line \param indent the
     /// indent to use for the command line \param cursor_pos where the cursor is \param pager the
     /// pager to render below the command line \param page_rendering to cache the current pager view
-    /// \param cursor_is_within_pager whether the position is within the pager line (first line)
     pub fn write(
         &mut self,
         left_prompt: &wstr,
@@ -244,20 +249,27 @@ impl Screen {
         colors: &[HighlightSpec],
         indent: &[i32],
         cursor_pos: usize,
+        pager_search_field_position: Option<usize>,
         vars: &dyn Environment,
         pager: &mut Pager,
         page_rendering: &mut PageRendering,
-        cursor_is_within_pager: bool,
+        is_final_rendering: bool,
     ) {
         let curr_termsize = termsize_last();
         let screen_width = curr_termsize.width;
+        let screen_height = curr_termsize.height;
         static REPAINTS: AtomicU32 = AtomicU32::new(0);
         FLOGF!(
             screen,
             "Repaint %u",
             1 + REPAINTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
-        let mut cursor_arr = Cursor::default();
+        #[derive(Clone, Copy)]
+        struct ScrolledCursor {
+            cursor: Cursor,
+            scroll_amount: usize,
+        }
+        let mut scrolled_cursor: Option<ScrolledCursor> = None;
 
         // Turn the command line into the explicit portion and the autosuggestion.
         let (explicit_command_line, autosuggestion) = commandline.split_at(explicit_len);
@@ -282,6 +294,10 @@ impl Screen {
             return;
         }
         let screen_width = usize::try_from(screen_width).unwrap();
+        if screen_height == 0 {
+            return;
+        }
+        let screen_height = usize::try_from(curr_termsize.height).unwrap();
 
         // Compute a layout.
         let layout = compute_layout(
@@ -304,7 +320,14 @@ impl Screen {
 
         // Append spaces for the left prompt.
         for _ in 0..layout.left_prompt_space {
-            self.desired_append_char(' ', HighlightSpec::new(), 0, layout.left_prompt_space, 1);
+            let _ = self.desired_append_char(
+                usize::MAX,
+                ' ',
+                HighlightSpec::new(),
+                0,
+                layout.left_prompt_space,
+                1,
+            );
         }
 
         // If overflowing, give the prompt its own line to improve the situation.
@@ -315,54 +338,109 @@ impl Screen {
 
         // Output the command line.
         let mut i = 0;
-        while i < effective_commandline.len() {
+        assert!((0..=effective_commandline.len()).contains(&cursor_pos));
+        let scrolled_cursor = loop {
             // Grab the current cursor's x,y position if this character matches the cursor's offset.
-            if !cursor_is_within_pager && i == cursor_pos {
-                cursor_arr = self.desired.cursor;
+            if i == cursor_pos {
+                scrolled_cursor = Some(ScrolledCursor {
+                    cursor: self.desired.cursor,
+                    scroll_amount: (self.desired.line_count()
+                        + if self
+                            .desired
+                            .line_datas
+                            .last()
+                            .as_ref()
+                            .map(|ld| ld.is_soft_wrapped)
+                            .unwrap_or_default()
+                        {
+                            1
+                        } else {
+                            0
+                        })
+                    .saturating_sub(screen_height),
+                });
             }
-            self.desired_append_char(
+            if i == effective_commandline.len() {
+                break scrolled_cursor.unwrap();
+            }
+            if !self.desired_append_char(
+                if is_final_rendering {
+                    usize::MAX
+                } else {
+                    scrolled_cursor
+                        .map(|sc| {
+                            if sc.scroll_amount != 0 {
+                                sc.cursor.y
+                            } else {
+                                screen_height - 1
+                            }
+                        })
+                        .unwrap_or(usize::MAX)
+                },
                 effective_commandline.as_char_slice()[i],
                 colors[i],
                 usize::try_from(indent[i]).unwrap(),
                 first_line_prompt_space,
-                wcwidth_rendered(effective_commandline.as_char_slice()[i]),
-            );
+                wcwidth_rendered_min_0(effective_commandline.as_char_slice()[i]),
+            ) {
+                break scrolled_cursor.unwrap();
+            }
             i += 1;
-        }
-
-        // Cursor may have been at the end too.
-        if !cursor_is_within_pager && i == cursor_pos {
-            cursor_arr = self.desired.cursor;
-        }
+        };
 
         let full_line_count = self.desired.cursor.y + 1;
+        let pager_available_height = std::cmp::max(
+            1,
+            curr_termsize
+                .height
+                .saturating_sub_unsigned(full_line_count),
+        );
 
         // Now that we've output everything, set the cursor to the position that we saved in the loop
         // above.
-        self.desired.cursor = cursor_arr;
-
-        if cursor_is_within_pager {
-            self.desired.cursor.x = cursor_pos;
-            self.desired.cursor.y = self.desired.line_count();
-        }
+        self.desired.cursor = match pager_search_field_position {
+            Some(pager_cursor_pos)
+                if pager_available_height >= isize::try_from(PAGER_MIN_HEIGHT).unwrap() =>
+            {
+                Cursor {
+                    x: pager_cursor_pos,
+                    y: self.desired.line_count(),
+                }
+            }
+            _ => {
+                let ScrolledCursor {
+                    mut cursor,
+                    scroll_amount,
+                } = scrolled_cursor;
+                if scroll_amount != 0 {
+                    if !is_final_rendering {
+                        self.desired.line_datas = self.desired.line_datas.split_off(scroll_amount);
+                    }
+                    cursor.y -= scroll_amount;
+                }
+                cursor
+            }
+        };
 
         // Re-render our completions page if necessary. Limit the term size of the pager to the true
         // term size, minus the number of lines consumed by our string.
         pager.set_term_size(&Termsize::new(
             std::cmp::max(1, curr_termsize.width),
-            std::cmp::max(
-                1,
-                curr_termsize
-                    .height
-                    .saturating_sub_unsigned(full_line_count),
-            ),
+            pager_available_height,
         ));
 
         pager.update_rendering(page_rendering);
         // Append pager_data (none if empty).
         self.desired.append_lines(&page_rendering.screen_data);
 
-        self.update(&layout.left_prompt, &layout.right_prompt, vars);
+        self.scrolled = scrolled_cursor.scroll_amount != 0;
+
+        self.update(
+            vars,
+            &layout.left_prompt,
+            &layout.right_prompt,
+            is_final_rendering,
+        );
         self.save_status();
     }
 
@@ -499,10 +577,7 @@ impl Screen {
     /// Stat stdout and stderr and save result as the current timestamp.
     /// This is used to avoid reacting to changes that we ourselves made to the screen.
     pub fn save_status(&mut self) {
-        unsafe {
-            libc::fstat(STDOUT_FILENO, &mut self.prev_buff_1);
-            libc::fstat(STDERR_FILENO, &mut self.prev_buff_2);
-        }
+        (self.mtime_stdout, self.mtime_stderr) = mtime_stdout_stderr();
     }
 
     /// Return whether we believe the cursor is wrapped onto the last line, and that line is
@@ -519,17 +594,21 @@ impl Screen {
     /// automatically handles linebreaks and lines longer than the screen width.
     fn desired_append_char(
         &mut self,
+        max_y: usize,
         b: char,
         c: HighlightSpec,
         indent: usize,
         prompt_width: usize,
         bwidth: usize,
-    ) {
+    ) -> bool {
         let mut line_no = self.desired.cursor.y;
 
         if b == '\n' {
             // Current line is definitely hard wrapped.
             // Create the next line.
+            if self.desired.cursor.y + 1 > max_y {
+                return false;
+            }
             self.desired.create_line(self.desired.cursor.y + 1);
             self.desired.line_mut(self.desired.cursor.y).is_soft_wrapped = false;
             self.desired.cursor.y += 1;
@@ -539,7 +618,16 @@ impl Screen {
             let line = self.desired.line_mut(line_no);
             line.indentation = indentation;
             for _ in 0..indentation {
-                self.desired_append_char(' ', HighlightSpec::default(), indent, prompt_width, 1);
+                if !self.desired_append_char(
+                    max_y,
+                    ' ',
+                    HighlightSpec::default(),
+                    indent,
+                    prompt_width,
+                    1,
+                ) {
+                    return false;
+                }
             }
         } else if b == '\r' {
             let current = self.desired.line_mut(line_no);
@@ -549,10 +637,16 @@ impl Screen {
             let screen_width = self.desired.screen_width;
             let cw = bwidth;
 
+            if line_no > max_y {
+                return false;
+            }
             self.desired.create_line(line_no);
 
             // Check if we are at the end of the line. If so, continue on the next line.
             if screen_width.is_none_or(|sw| (self.desired.cursor.x + cw) > sw) {
+                if self.desired.cursor.y + 1 > max_y {
+                    return false;
+                }
                 // Current line is soft wrapped (assuming we support it).
                 self.desired.line_mut(self.desired.cursor.y).is_soft_wrapped = true;
 
@@ -573,6 +667,7 @@ impl Screen {
                 self.desired.cursor.y += 1;
             }
         }
+        true
     }
 
     /// Stat stdout and stderr and compare result to previous result in reader_save_status. Repaint
@@ -587,22 +682,9 @@ impl Screen {
             return;
         }
 
-        let mut post_buff_1: libc::stat = unsafe { std::mem::zeroed() };
-        let mut post_buff_2: libc::stat = unsafe { std::mem::zeroed() };
-        unsafe { libc::fstat(STDOUT_FILENO, &mut post_buff_1) };
-        unsafe { libc::fstat(STDERR_FILENO, &mut post_buff_2) };
-
-        // Yes these differ in one `_`. I hate it.
-        #[cfg(not(target_os = "netbsd"))]
-        let changed = self.prev_buff_1.st_mtime != post_buff_1.st_mtime
-            || self.prev_buff_1.st_mtime_nsec != post_buff_1.st_mtime_nsec
-            || self.prev_buff_2.st_mtime != post_buff_2.st_mtime
-            || self.prev_buff_2.st_mtime_nsec != post_buff_2.st_mtime_nsec;
-        #[cfg(target_os = "netbsd")]
-        let changed = self.prev_buff_1.st_mtime != post_buff_1.st_mtime
-            || self.prev_buff_1.st_mtimensec != post_buff_1.st_mtimensec
-            || self.prev_buff_2.st_mtime != post_buff_2.st_mtime
-            || self.prev_buff_2.st_mtimensec != post_buff_2.st_mtimensec;
+        let mtime_out = fstat(STDOUT_FILENO).and_then(|md| md.modified()).ok();
+        let mtime_err = fstat(STDERR_FILENO).and_then(|md| md.modified()).ok();
+        let changed = self.mtime_stdout != mtime_out || self.mtime_stderr != mtime_err;
 
         if changed {
             // Ok, someone has been messing with our screen. We will want to repaint. However, we do not
@@ -690,7 +772,7 @@ impl Screen {
             (term.cursor_right.as_ref(), term.parm_right_cursor.as_ref())
         };
 
-        // Use the bulk ('multi') zelf.output for cursor movement if it is supported and it would be shorter
+        // Use the bulk ('multi') output for cursor movement if it is supported and it would be shorter
         // Note that this is required to avoid some visual glitches in iTerm (issue #1448).
         let use_multi = multi_str.is_some_and(|ms| !ms.as_bytes().is_empty())
             && x_steps.abs_diff(0) * s.map_or(0, |s| s.as_bytes().len())
@@ -777,7 +859,13 @@ impl Screen {
     }
 
     /// Update the screen to match the desired output.
-    fn update(&mut self, left_prompt: &wstr, right_prompt: &wstr, vars: &dyn Environment) {
+    fn update(
+        &mut self,
+        vars: &dyn Environment,
+        left_prompt: &wstr,
+        right_prompt: &wstr,
+        is_final_rendering: bool,
+    ) {
         // Helper function to set a resolved color, using the caching resolver.
         let mut color_resolver = HighlightColorResolver::new();
         let mut set_color = |zelf: &mut Self, c| {
@@ -833,16 +921,30 @@ impl Screen {
         let term = term.as_ref();
 
         // Output the left prompt if it has changed.
-        if left_prompt != zelf.actual_left_prompt {
+        if zelf.scrolled && !is_final_rendering {
             zelf.r#move(0, 0);
-            zelf.write_bytes(b"\x1b]133;A;special_key=1\x07");
+            zelf.outp
+                .borrow_mut()
+                .tputs_if_some(&term.and_then(|term| term.clr_eol.as_ref()));
+            zelf.actual_left_prompt.clear();
+            zelf.actual.cursor.x = 0;
+        } else if left_prompt != zelf.actual_left_prompt || (zelf.scrolled && is_final_rendering) {
+            zelf.r#move(0, 0);
             let mut start = 0;
-            for line_break in left_prompt_layout.line_breaks {
-                zelf.write_str(&left_prompt[start..line_break]);
+            let osc_133_prompt_start =
+                |zelf: &mut Screen| zelf.write_bytes(b"\x1b]133;A;special_key=1\x07");
+            if left_prompt_layout.line_breaks.is_empty() {
+                osc_133_prompt_start(&mut zelf);
+            }
+            for (i, &line_break) in left_prompt_layout.line_breaks.iter().enumerate() {
                 zelf.outp
                     .borrow_mut()
                     .tputs_if_some(&term.and_then(|term| term.clr_eol.as_ref()));
-                start = line_break;
+                if i == 0 {
+                    osc_133_prompt_start(&mut zelf);
+                }
+                zelf.write_str(&left_prompt[start..=line_break]);
+                start = line_break + 1;
             }
             zelf.write_str(&left_prompt[start..]);
             zelf.actual_left_prompt = left_prompt.to_owned();
@@ -876,7 +978,11 @@ impl Screen {
             // Note that skip_remaining is a width, not a character count.
             let mut skip_remaining = start_pos;
 
-            let shared_prefix = line_shared_prefix(o_line(&zelf, i), s_line(&zelf, i));
+            let shared_prefix = if zelf.scrolled {
+                0
+            } else {
+                line_shared_prefix(o_line(&zelf, i), s_line(&zelf, i))
+            };
             let mut skip_prefix = shared_prefix;
             if shared_prefix < o_line(&zelf, i).indentation {
                 if o_line(&zelf, i).indentation > s_line(&zelf, i).indentation
@@ -932,7 +1038,7 @@ impl Screen {
             // Skip over skip_remaining width worth of characters.
             let mut j = 0;
             while j < o_line(&zelf, i).len() {
-                let width = wcwidth_rendered(o_line(&zelf, i).char_at(j));
+                let width = wcwidth_rendered_min_0(o_line(&zelf, i).char_at(j));
                 if skip_remaining < width {
                     break;
                 }
@@ -943,7 +1049,7 @@ impl Screen {
 
             // Skip over zero-width characters (e.g. combining marks at the end of the prompt).
             while j < o_line(&zelf, i).len() {
-                let width = wcwidth_rendered(o_line(&zelf, i).char_at(j));
+                let width = wcwidth_rendered_min_0(o_line(&zelf, i).char_at(j));
                 if width > 0 {
                     break;
                 }
@@ -976,7 +1082,7 @@ impl Screen {
                 let color = o_line(&zelf, i).color_at(j);
                 set_color(&mut zelf, color);
                 let ch = o_line(&zelf, i).char_at(j);
-                let width = wcwidth_rendered(ch);
+                let width = wcwidth_rendered_min_0(ch);
                 zelf.write_char(ch, isize::try_from(width).unwrap());
                 current_width += width;
                 j += 1;
@@ -1069,6 +1175,13 @@ impl Screen {
         zelf.actual = zelf.desired.clone();
         zelf.last_right_prompt_width = right_prompt_width;
     }
+}
+
+/// Helper to get the mtime of stdout and stderr.
+pub fn mtime_stdout_stderr() -> (Option<SystemTime>, Option<SystemTime>) {
+    let mtime_out = fstat(STDOUT_FILENO).and_then(|md| md.modified()).ok();
+    let mtime_err = fstat(STDERR_FILENO).and_then(|md| md.modified()).ok();
+    (mtime_out, mtime_err)
 }
 
 /// Issues an immediate clr_eos.
@@ -1524,7 +1637,7 @@ fn measure_run_from(
             width = next_tab_stop(width);
         } else {
             // Ordinary char. Add its width with care to ignore control chars which have width -1.
-            width += wcwidth_rendered(input.char_at(idx));
+            width += wcwidth_rendered_min_0(input.char_at(idx));
         }
         idx += 1;
     }
@@ -1570,7 +1683,7 @@ fn truncate_run(
             curr_width = measure_run_from(run, 0, None, cache);
             idx = 0;
         } else {
-            let char_width = wcwidth_rendered(c);
+            let char_width = wcwidth_rendered_min_0(c);
             curr_width -= std::cmp::min(curr_width, char_width);
             run.remove(idx);
         }
@@ -1719,7 +1832,7 @@ fn compute_layout(
             multiline = true;
             break;
         } else {
-            first_line_width += wcwidth_rendered(c);
+            first_line_width += wcwidth_rendered_min_0(c);
         }
     }
     let first_command_line_width = first_line_width;
@@ -1734,7 +1847,7 @@ fn compute_layout(
         autosuggest_truncated_widths.reserve(1 + autosuggestion_str.len());
         for c in autosuggestion.chars() {
             autosuggest_truncated_widths.push(autosuggest_total_width);
-            autosuggest_total_width += wcwidth_rendered(c);
+            autosuggest_total_width += wcwidth_rendered_min_0(c);
         }
     }
 
@@ -1832,9 +1945,6 @@ fn compute_layout(
 // \n.
 // See https://unicode-table.com/en/blocks/control-pictures/
 fn rendered_character(c: char) -> char {
-    if fish_reserved_codepoint(c) {
-        return '�'; // replacement character
-    }
     if c <= '\x1F' {
         char::from_u32(u32::from(c) + 0x2400).unwrap()
     } else {
@@ -1842,6 +1952,12 @@ fn rendered_character(c: char) -> char {
     }
 }
 
-fn wcwidth_rendered(c: char) -> usize {
-    usize::try_from(fish_wcwidth(rendered_character(c))).unwrap_or_default()
+fn wcwidth_rendered_min_0(c: char) -> usize {
+    usize::try_from(wcwidth_rendered(c)).unwrap()
+}
+pub fn wcwidth_rendered(c: char) -> isize {
+    fish_wcwidth(rendered_character(c))
+}
+pub fn wcswidth_rendered(s: &wstr) -> isize {
+    s.chars().map(|c| fish_wcwidth(rendered_character(c))).sum()
 }

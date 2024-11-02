@@ -31,16 +31,18 @@ use crate::wait_handle::WaitHandleStore;
 use crate::wchar::{wstr, WString, L};
 use crate::wutil::{perror, wgettext, wgettext_fmt};
 use crate::{function, FLOG};
-use fish_printf::sprintf;
 use libc::c_int;
+#[cfg(not(target_has_atomic = "64"))]
+use portable_atomic::AtomicU64;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::{CStr, OsStr};
 use std::num::NonZeroU32;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
-use std::os::unix::prelude::OsStrExt;
 use std::rc::Rc;
+#[cfg(target_has_atomic = "64")]
+use std::sync::atomic::AtomicU64;
 use std::sync::{
-    atomic::{AtomicIsize, AtomicU64, Ordering},
+    atomic::{AtomicIsize, Ordering},
     Arc,
 };
 
@@ -233,6 +235,9 @@ pub struct LibraryData {
 
     /// A counter incremented every time a command executes.
     pub exec_count: u64,
+
+    /// A counter incremented every time an external command executes.
+    pub exec_external_count: u64,
 
     /// A counter incremented every time a command produces a $status.
     pub status_count: u64,
@@ -650,9 +655,10 @@ impl Parser {
         let list = ast.top().as_freestanding_argument_list().unwrap();
         for arg in &list.arguments {
             let arg_src = arg.source(arg_list_src);
-            if expand_string(arg_src.to_owned(), &mut result, flags, ctx, None)
-                == ExpandResultCode::error
-            {
+            if matches!(
+                expand_string(arg_src.to_owned(), &mut result, flags, ctx, None).result,
+                ExpandResultCode::error | ExpandResultCode::overflow
+            ) {
                 break; // failed to expand a string
             }
         }
@@ -972,17 +978,17 @@ impl Parser {
     }
 
     /// Output profiling data to the given filename.
-    pub fn emit_profiling(&self, path: &[u8]) {
+    pub fn emit_profiling(&self, path: &OsStr) {
         // Save profiling information. OK to not use CLO_EXEC here because this is called while fish is
         // exiting (and hence will not fork).
-        let f = match std::fs::File::create(OsStr::from_bytes(path)) {
+        let f = match std::fs::File::create(path) {
             Ok(f) => f,
             Err(err) => {
                 FLOG!(
                     warning,
                     wgettext_fmt!(
                         "Could not write profiling information to file '%s': %s",
-                        &String::from_utf8_lossy(path),
+                        path.to_string_lossy(),
                         err.to_string()
                     )
                 );

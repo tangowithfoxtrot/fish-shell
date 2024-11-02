@@ -27,9 +27,8 @@ use fish::{
         BUILTIN_ERR_MISSING, BUILTIN_ERR_UNKNOWN, STATUS_CMD_OK, STATUS_CMD_UNKNOWN,
     },
     common::{
-        escape, get_executable_path, restore_term_foreground_process_group_for_exit,
-        save_term_foreground_process_group, scoped_push_replacer, str2wcstring, wcs2string,
-        ScopeGuard, PACKAGE_NAME, PROFILING_ACTIVE, PROGRAM_NAME,
+        escape, get_executable_path, save_term_foreground_process_group, scoped_push_replacer,
+        str2wcstring, wcs2string, PACKAGE_NAME, PROFILING_ACTIVE, PROGRAM_NAME,
     },
     env::{
         environment::{env_init, EnvStack, Environment},
@@ -445,21 +444,6 @@ fn fish_parse_opt(args: &mut [WString], opts: &mut FishCmdOpts) -> ControlFlow<i
     ControlFlow::Continue(optind)
 }
 
-fn cstr_from_osstr(s: &OsStr) -> CString {
-    // is there no better way to do this?
-    // this is
-    // CStr::from_bytes_until_nul(s.as_bytes()).unwrap()
-    // except we need to add the nul if it is not present
-    CString::new(
-        s.as_bytes()
-            .iter()
-            .cloned()
-            .take_while(|&c| c != b'\0')
-            .collect::<Vec<_>>(),
-    )
-    .unwrap()
-}
-
 fn main() {
     PROGRAM_NAME.set(L!("fish")).unwrap();
     if !cfg!(small_main_stack) {
@@ -588,9 +572,7 @@ fn throwing_main() -> i32 {
     features::set_from_string(opts.features.as_utfstr());
     proc_init();
     fish::env::misc_init();
-    let _restore_term_foreground_process_group =
-        ScopeGuard::new((), |()| restore_term_foreground_process_group_for_exit());
-    let _restore_term = reader_init();
+    reader_init(true);
 
     // Construct the root parser!
     let env = Rc::new(EnvStack::globals().create_child(true /* dispatches_var_changes */));
@@ -621,8 +603,7 @@ fn throwing_main() -> i32 {
 
     // TODO: if-let-chains
     if opts.profile_startup_output.is_some() && opts.profile_startup_output != opts.profile_output {
-        let s = cstr_from_osstr(&opts.profile_startup_output.unwrap());
-        parser.emit_profiling(s.as_bytes());
+        parser.emit_profiling(&opts.profile_startup_output.unwrap());
 
         // If we are profiling both, ensure the startup data only
         // ends up in the startup file.
@@ -724,8 +705,7 @@ fn throwing_main() -> i32 {
     );
 
     if let Some(profile_output) = opts.profile_output {
-        let s = cstr_from_osstr(&profile_output);
-        parser.emit_profiling(s.as_bytes());
+        parser.emit_profiling(&profile_output);
     }
 
     history::save_all();
