@@ -21,8 +21,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #![allow(unstable_name_collisions)]
 #![allow(clippy::uninlined_format_args)]
 
+#[cfg(feature = "installable")]
+use fish::common::wcs2osstring;
+#[allow(unused_imports)]
+use fish::future::IsSomeAnd;
 use fish::{
     ast::Ast,
+    builtins::fish_indent,
+    builtins::fish_key_reader,
     builtins::shared::{
         BUILTIN_ERR_MISSING, BUILTIN_ERR_UNKNOWN, STATUS_CMD_OK, STATUS_CMD_UNKNOWN,
     },
@@ -40,7 +46,7 @@ use fish::{
     fprintf, function, future_feature_flags as features,
     history::{self, start_private_mode},
     io::IoChain,
-    nix::{getpid, isatty},
+    nix::{getpid, getrusage, isatty, RUsage},
     panic::panic_handler,
     parse_constants::{ParseErrorList, ParseTreeFlags},
     parse_tree::ParsedSource,
@@ -50,7 +56,7 @@ use fish::{
     printf,
     proc::{
         get_login, is_interactive_session, mark_login, mark_no_exec, proc_init,
-        set_interactive_session,
+        set_interactive_session, Pid,
     },
     reader::{reader_init, reader_read, term_copy_modes},
     signal::{signal_clear_cancel, signal_unblock_all},
@@ -61,7 +67,6 @@ use fish::{
 };
 use std::ffi::{CString, OsStr, OsString};
 use std::fs::File;
-use std::mem::MaybeUninit;
 use std::os::unix::prelude::*;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -71,8 +76,128 @@ use std::{env, ops::ControlFlow};
 
 const DOC_DIR: &str = env!("DOCDIR");
 const DATA_DIR: &str = env!("DATADIR");
+const DATA_DIR_SUBDIR: &str = env!("DATADIR_SUBDIR");
 const SYSCONF_DIR: &str = env!("SYSCONFDIR");
 const BIN_DIR: &str = env!("BINDIR");
+
+#[cfg(feature = "installable")]
+// Disable for clippy because otherwise it would require sphinx
+#[cfg(not(clippy))]
+fn install(confirm: bool, dir: PathBuf) -> bool {
+    use rust_embed::RustEmbed;
+
+    #[derive(RustEmbed)]
+    #[folder = "share/"]
+    struct Asset;
+
+    #[derive(RustEmbed)]
+    #[folder = "target/man/man1"]
+    #[prefix = "man/man1/"]
+    struct Docs;
+
+    use std::fs;
+    use std::io::ErrorKind;
+    use std::io::Write;
+    use std::io::{stderr, stdin};
+
+    // TODO: Translation,
+    // FLOG?
+    // - Install: Translations
+    // - Install: Manpages (build via build.rs)
+    // - Don't install: __fish_build_paths.fish.in
+    if confirm {
+        if isatty(libc::STDIN_FILENO) {
+            eprintln!(
+                "This will write fish's data files to '{}'.\n\
+                 Please enter 'yes' to continue.",
+                dir.display()
+            );
+            eprint!("> ");
+            let _ = stderr().flush();
+        }
+
+        let mut input = String::new();
+        if let Err(error) = stdin().read_line(&mut input) {
+            eprintln!("error: {error}")
+        }
+
+        if input != "yes\n" {
+            eprintln!("Exiting without writing any files\n");
+            return false;
+        }
+    } else {
+        eprintln!("Installing fish's data files to '{}'.", dir.display());
+    }
+
+    // Remove the install directory first, to clean out any removed files.
+    if let Err(err) = fs::remove_dir_all(dir.clone()) {
+        if err.kind() != ErrorKind::NotFound {
+            eprintln!("Removing '{}' failed: {}", dir.display(), err);
+            return false;
+        }
+    }
+
+    // TODO: These are duplicated, no idea how to extract
+    //       them into a function
+    for file in Asset::iter() {
+        let path = dir.join(file.as_ref());
+        let Ok(_) = fs::create_dir_all(path.parent().unwrap()) else {
+            eprintln!(
+                "Creating directory '{}' failed",
+                path.parent().unwrap().display()
+            );
+            return false;
+        };
+        let res = File::create(&path);
+        let Ok(mut f) = res else {
+            eprintln!("Creating file '{}' failed", path.display());
+            continue;
+        };
+        // This should be impossible.
+        let d = Asset::get(&file).expect("File was somehow not included???");
+        if let Err(error) = f.write_all(&d.data) {
+            eprintln!("error: {error}");
+            return false;
+        }
+    }
+
+    for file in Docs::iter() {
+        let path = dir.join(file.as_ref());
+        let Ok(_) = fs::create_dir_all(path.parent().unwrap()) else {
+            eprintln!(
+                "Creating directory '{}' failed",
+                path.parent().unwrap().display()
+            );
+            return false;
+        };
+        let res = File::create(&path);
+        let Ok(mut f) = res else {
+            eprintln!("Creating file '{}' failed", path.display());
+            continue;
+        };
+        // This should be impossible.
+        let d = Docs::get(&file).expect("File was somehow not included???");
+        if let Err(error) = f.write_all(&d.data) {
+            eprintln!("error: {error}");
+            return false;
+        }
+    }
+
+    let verfile = dir.join("fish-install-version");
+    let res = File::create(&verfile);
+    if let Ok(mut f) = res {
+        f.write_all(fish::BUILD_VERSION.as_bytes())
+            .expect("FAILED TO WRITE");
+    } else {
+        eprintln!("Creating file '{}' failed", verfile.display());
+    };
+    return true;
+}
+
+#[cfg(clippy)]
+fn install(_confirm: bool, _dir: PathBuf) -> bool {
+    unreachable!()
+}
 
 /// container to hold the options specified within the command line
 #[derive(Default, Debug)]
@@ -113,13 +238,7 @@ fn tv_to_msec(tv: &libc::timeval) -> i64 {
 }
 
 fn print_rusage_self() {
-    let mut rs = MaybeUninit::uninit();
-    if unsafe { libc::getrusage(libc::RUSAGE_SELF, rs.as_mut_ptr()) } != 0 {
-        let s = CString::new("getrusage").unwrap();
-        unsafe { libc::perror(s.as_ptr()) }
-        return;
-    }
-    let rs: libc::rusage = unsafe { rs.assume_init() };
+    let rs = getrusage(RUsage::RSelf);
     let rss_kb = if cfg!(target_os = "macos") {
         // mac use bytes.
         rs.ru_maxrss / 1024
@@ -156,7 +275,7 @@ fn determine_config_directory_paths(argv0: impl AsRef<Path>) -> ConfigPaths {
 
         // Detect if we're running right out of the CMAKE build directory
         if exec_path.starts_with(env!("CARGO_MANIFEST_DIR")) {
-            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
             FLOG!(
                 config,
                 "Running out of target directory, using paths relative to CARGO_MANIFEST_DIR:\n",
@@ -167,19 +286,26 @@ fn determine_config_directory_paths(argv0: impl AsRef<Path>) -> ConfigPaths {
                 data: manifest_dir.join("share"),
                 sysconf: manifest_dir.join("etc"),
                 doc: manifest_dir.join("user_doc/html"),
-                bin: exec_path.parent().unwrap().to_owned(),
+                bin: Some(exec_path.parent().unwrap().to_owned()),
             }
         }
 
         if !done {
-            // The next check is that we are in a reloctable directory tree
+            // The next check is that we are in a relocatable directory tree
             if exec_path.ends_with("bin/fish") {
                 let base_path = exec_path.parent().unwrap().parent().unwrap();
                 paths = ConfigPaths {
+                    // One obvious path is ~/.local (with fish in ~/.local/bin/).
+                    // If we picked ~/.local/share/fish as our data path,
+                    // we would install there and erase history.
+                    // So let's isolate us a bit more.
+                    #[cfg(feature = "installable")]
+                    data: base_path.join("share/fish/install"),
+                    #[cfg(not(feature = "installable"))]
                     data: base_path.join("share/fish"),
                     sysconf: base_path.join("etc/fish"),
                     doc: base_path.join("share/doc/fish"),
-                    bin: base_path.join("bin"),
+                    bin: Some(base_path.join("bin")),
                 }
             } else if exec_path.ends_with("fish") {
                 FLOG!(
@@ -188,10 +314,13 @@ fn determine_config_directory_paths(argv0: impl AsRef<Path>) -> ConfigPaths {
                 );
                 let base_path = exec_path.parent().unwrap();
                 paths = ConfigPaths {
+                    #[cfg(feature = "installable")]
+                    data: base_path.join("share/install"),
+                    #[cfg(not(feature = "installable"))]
                     data: base_path.join("share"),
                     sysconf: base_path.join("etc"),
                     doc: base_path.join("user_doc/html"),
-                    bin: base_path.to_path_buf(),
+                    bin: Some(base_path.to_path_buf()),
                 }
             }
 
@@ -207,12 +336,32 @@ fn determine_config_directory_paths(argv0: impl AsRef<Path>) -> ConfigPaths {
 
     if !done {
         // Fall back to what got compiled in.
+        let data = if cfg!(feature = "installable") {
+            let Some(home) = fish::env::get_home() else {
+                FLOG!(
+                    error,
+                    "Cannot find home directory and will refuse to read configuration.\n",
+                    "Consider installing into a directory tree with `fish --install=PATH`."
+                );
+                return paths;
+            };
+
+            PathBuf::from(home).join(DATA_DIR).join(DATA_DIR_SUBDIR)
+        } else {
+            Path::new(DATA_DIR).join(DATA_DIR_SUBDIR)
+        };
+        let bin = if cfg!(feature = "installable") {
+            exec_path.parent().map(|x| x.to_path_buf())
+        } else {
+            Some(PathBuf::from(BIN_DIR))
+        };
+
         FLOG!(config, "Using compiled in paths:");
         paths = ConfigPaths {
-            data: PathBuf::from(DATA_DIR).join("fish"),
-            sysconf: PathBuf::from(SYSCONF_DIR).join("fish"),
+            data,
+            sysconf: Path::new(SYSCONF_DIR).join("fish"),
             doc: DOC_DIR.into(),
-            bin: BIN_DIR.into(),
+            bin,
         }
     }
 
@@ -223,7 +372,11 @@ fn determine_config_directory_paths(argv0: impl AsRef<Path>) -> ConfigPaths {
         paths.data.display().to_string(),
         paths.sysconf.display().to_string(),
         paths.doc.display().to_string(),
-        paths.bin.display().to_string()
+        paths
+            .bin
+            .clone()
+            .map(|x| x.display().to_string())
+            .unwrap_or("|not found|".to_string()),
     );
 
     paths
@@ -259,9 +412,59 @@ fn source_config_in_directory(parser: &Parser, dir: &wstr) -> bool {
     return true;
 }
 
+#[cfg(feature = "installable")]
+fn check_version_file(paths: &ConfigPaths, datapath: &wstr) -> Option<bool> {
+    // (false-positive, is_none_or is a backport, this builds with 1.70)
+    #[allow(clippy::incompatible_msrv)]
+    if paths
+        .bin
+        .clone()
+        .is_none_or(|x| !x.starts_with(env!("CARGO_MANIFEST_DIR")))
+    {
+        // When fish is installable, we write the version to a file,
+        // now we check it.
+        let verfile = PathBuf::from(wcs2osstring(datapath)).join("fish-install-version");
+        let version = std::fs::read_to_string(verfile).ok()?;
+
+        return Some(version == fish::BUILD_VERSION);
+    }
+    // When running from the manifest dir, we'll just run.
+    return Some(true);
+}
+
 /// Parse init files. exec_path is the path of fish executable as determined by argv[0].
 fn read_init(parser: &Parser, paths: &ConfigPaths) {
     let datapath = str2wcstring(paths.data.as_os_str().as_bytes());
+
+    #[cfg(feature = "installable")]
+    {
+        // If the version file is non-existent or out of date,
+        // we try to install automatically, but only if we're interactive.
+        // If we're not interactive, we still print an error later on pointing to `--install` if they don't exist,
+        // but don't complain if they're merely out-of-date.
+        // We do specifically check for a tty because we want to read input to confirm.
+        let v = check_version_file(paths, &datapath);
+
+        #[allow(clippy::incompatible_msrv)]
+        if v.is_none_or(|x| !x) && is_interactive_session() && isatty(libc::STDIN_FILENO) {
+            if v.is_none() {
+                FLOG!(
+                    warning,
+                    "Fish's asset files are missing. Trying to install them."
+                );
+            } else {
+                FLOG!(
+                    warning,
+                    "Fish's asset files are out of date. Trying to install them."
+                );
+            }
+
+            install(true, PathBuf::from(wcs2osstring(&datapath)));
+            // We try to go on if installation failed (or was rejected) here
+            // If the assets are missing, we will trigger a later error,
+            // if they are outdated, things will probably (tm) work somewhat.
+        }
+    }
     if !source_config_in_directory(parser, &datapath) {
         // If we cannot read share/config.fish, our internal configuration,
         // something is wrong.
@@ -270,8 +473,14 @@ fn read_init(parser: &Parser, paths: &ConfigPaths) {
         let escaped_pathname = escape(&datapath);
         FLOGF!(
             error,
-            "Fish cannot find its asset files in '%ls'. Refusing to read configuration.",
-            escaped_pathname
+            "Fish cannot find its asset files in '%ls'.\n\
+             Refusing to read configuration because of this.",
+            escaped_pathname,
+        );
+        #[cfg(feature = "installable")]
+        FLOG!(
+            error,
+            "If you installed via `cargo install`, please run `fish --install` and restart fish."
         );
         return;
     }
@@ -319,7 +528,7 @@ fn fish_parse_opt(args: &mut [WString], opts: &mut FishCmdOpts) -> ControlFlow<i
     const PRINT_DEBUG_CATEGORIES_ARG: char = 2 as char;
     const PROFILE_STARTUP_ARG: char = 3 as char;
 
-    const SHORT_OPTS: &wstr = L!("+hPilNnvc:C:p:d:f:D:o:");
+    const SHORT_OPTS: &wstr = L!("+:hPilNnvc:C:p:d:f:D:o:");
     const LONG_OPTS: &[WOption<'static>] = &[
         wopt(L!("command"), RequiredArgument, 'c'),
         wopt(L!("init-command"), RequiredArgument, 'C'),
@@ -332,6 +541,7 @@ fn fish_parse_opt(args: &mut [WString], opts: &mut FishCmdOpts) -> ControlFlow<i
         wopt(L!("no-config"), NoArgument, 'N'),
         wopt(L!("no-execute"), NoArgument, 'n'),
         wopt(L!("print-rusage-self"), NoArgument, RUSAGE_ARG),
+        wopt(L!("install"), OptionalArgument, 'I'),
         wopt(
             L!("print-debug-categories"),
             NoArgument,
@@ -366,6 +576,62 @@ fn fish_parse_opt(args: &mut [WString], opts: &mut FishCmdOpts) -> ControlFlow<i
             'f' => opts.features = w.woptarg.unwrap().to_owned(),
             'h' => opts.batch_cmds.push("__fish_print_help fish".into()),
             'i' => opts.is_interactive_session = true,
+            'I' => {
+                #[cfg(not(feature = "installable"))]
+                eprintln!("Fish was built without support for self-installation");
+                #[cfg(feature = "installable")]
+                if let Some(path) = w.woptarg {
+                    // We were given an explicit path.
+                    // Install us there as a relocatable install.
+                    // That means:
+                    // path/bin/fish is the fish binary
+                    // path/share/fish/ is the data directory
+                    // path/etc/fish is sysconf????
+                    use std::fs;
+                    let dir = PathBuf::from(wcs2osstring(path));
+                    if install(true, dir.join("share/fish/install")) {
+                        for sub in &["share/fish/install", "etc/fish", "bin"] {
+                            let p = dir.join(sub);
+                            let Ok(_) = fs::create_dir_all(p.clone()) else {
+                                eprintln!("Creating directory '{}' failed", p.display());
+                                std::process::exit(1);
+                            };
+                        }
+
+                        // Copy ourselves there.
+                        let argv0 = OsString::from_vec(wcs2string(&args[0]));
+                        let exec_path =
+                            get_executable_path(<OsString as AsRef<Path>>::as_ref(&argv0));
+                        let binpath = dir.join("bin/fish");
+                        if let Ok(exec_path) = exec_path.canonicalize() {
+                            if exec_path != binpath {
+                                if let Err(err) = std::fs::copy(exec_path, binpath.clone()) {
+                                    FLOG!(error, "Cannot copy fish to", binpath.display());
+                                    FLOG!(error, err);
+                                    std::process::exit(1);
+                                }
+                                println!(
+                                    "Fish installed in '{}'. Start that from now on.",
+                                    binpath.display()
+                                );
+                                // TODO: Reexec fish?
+                                std::process::exit(0);
+                            }
+                        } else {
+                            FLOG!(error, "Cannot copy fish to '%ls'. Please copy the fish binary there manually", binpath.display());
+                        }
+                    }
+                } else {
+                    let paths = Some(determine_config_directory_paths(OsString::from_vec(
+                        wcs2string(&args[0]),
+                    )));
+                    let Some(paths) = paths else {
+                        FLOG!(error, "Cannot find config paths");
+                        std::process::exit(1);
+                    };
+                    install(true, paths.data);
+                }
+            }
             'l' => opts.is_login = true,
             'N' => {
                 opts.no_config = true;
@@ -445,6 +711,15 @@ fn fish_parse_opt(args: &mut [WString], opts: &mut FishCmdOpts) -> ControlFlow<i
 }
 
 fn main() {
+    // If we are called as "/path/to/fish_key_reader", become fish_key_reader.
+    if let Some(name) = env::args_os().next() {
+        let p = Path::new(&name).file_name().and_then(|x| x.to_str());
+        if p == Some("fish_key_reader") {
+            return fish_key_reader::main();
+        } else if p == Some("fish_indent") {
+            return fish_indent::main();
+        }
+    }
     PROGRAM_NAME.set(L!("fish")).unwrap();
     if !cfg!(small_main_stack) {
         panic_handler(throwing_main);
@@ -457,10 +732,6 @@ fn main() {
 }
 
 fn throwing_main() -> i32 {
-    let mut args: Vec<WString> = env::args_os()
-        .map(|osstr| str2wcstring(osstr.as_bytes()))
-        .collect();
-
     let mut res = 1;
 
     signal_unblock_all();
@@ -474,6 +745,9 @@ fn throwing_main() -> i32 {
         }
     }
 
+    let mut args: Vec<WString> = env::args_os()
+        .map(|osstr| str2wcstring(osstr.as_bytes()))
+        .collect();
     if args.is_empty() {
         args.push("fish".into());
     }
@@ -503,7 +777,7 @@ fn throwing_main() -> i32 {
             .write(true)
             .truncate(true)
             .create(true)
-            .open(debug_path.clone())
+            .open(&debug_path)
         {
             Ok(dbg_file) => {
                 // Rust sets O_CLOEXEC by default
@@ -548,10 +822,9 @@ fn throwing_main() -> i32 {
         save_term_foreground_process_group();
     }
 
-    let mut paths: Option<ConfigPaths> = None;
     // If we're not executing, there's no need to find the config.
-    if !opts.no_exec {
-        paths = Some(determine_config_directory_paths(OsString::from_vec(
+    let paths: Option<ConfigPaths> = if !opts.no_exec {
+        let paths = Some(determine_config_directory_paths(OsString::from_vec(
             wcs2string(&args[0]),
         )));
         env_init(
@@ -559,7 +832,10 @@ fn throwing_main() -> i32 {
             /* do uvars */ !opts.no_config,
             /* default paths */ opts.no_config,
         );
-    }
+        paths
+    } else {
+        None
+    };
 
     // Set features early in case other initialization depends on them.
     // Start with the ones set in the environment, then those set on the command line (so the
@@ -576,7 +852,7 @@ fn throwing_main() -> i32 {
 
     // Construct the root parser!
     let env = Rc::new(EnvStack::globals().create_child(true /* dispatches_var_changes */));
-    let parser: &Parser = &Parser::new(env, CancelBehavior::Clear);
+    let parser = &Parser::new(env, CancelBehavior::Clear);
     parser.set_syncs_uvars(!opts.no_config);
 
     if !opts.no_exec && !opts.no_config {
@@ -695,7 +971,10 @@ fn throwing_main() -> i32 {
         parser.get_last_status()
     };
 
-    event::fire(parser, Event::process_exit(getpid(), exit_status));
+    event::fire(
+        parser,
+        Event::process_exit(Pid::new(getpid()).unwrap(), exit_status),
+    );
 
     // Trigger any exit handlers.
     event::fire_generic(
@@ -736,7 +1015,6 @@ fn fish_xdm_login_hack_hack_hack_hack(cmds: &mut [OsString], args: &[WString]) -
         return false;
     }
 
-    let mut result = false;
     let cmd = &cmds[0];
     if cmd == "exec \"${@}\"" || cmd == "exec \"$@\"" {
         // We're going to construct a new command that starts with exec, and then has the
@@ -748,7 +1026,8 @@ fn fish_xdm_login_hack_hack_hack_hack(cmds: &mut [OsString], args: &[WString]) -
         }
 
         cmds[0] = new_cmd;
-        result = true;
+        true
+    } else {
+        false
     }
-    result
 }

@@ -8,7 +8,7 @@ use crate::common::{escape_string, timef, EscapeFlags, EscapeStringStyle};
 use crate::io::IoStreams;
 use crate::job_group::{JobId, MaybeJobId};
 use crate::parser::Parser;
-use crate::proc::{clock_ticks_to_seconds, have_proc_stat, proc_get_jiffies, Job, INVALID_PID};
+use crate::proc::{clock_ticks_to_seconds, have_proc_stat, proc_get_jiffies, Job, Pid};
 use crate::wchar_ext::WExt;
 use crate::wgetopt::{wopt, ArgType, WGetopter, WOption};
 use crate::wutil::wgettext;
@@ -19,7 +19,6 @@ use crate::{
 };
 use libc::c_int;
 use std::num::NonZeroU32;
-use std::sync::atomic::Ordering;
 
 /// Print modes for the jobs builtin.
 
@@ -36,9 +35,9 @@ enum JobsPrintMode {
 /// This may exceed 1 if there are multiple CPUs!
 fn cpu_use(j: &Job) -> f64 {
     let mut u = 0.0;
-    for p in j.processes() {
+    for p in j.external_procs() {
         let now = timef();
-        let jiffies = proc_get_jiffies(p.pid.load(Ordering::Relaxed));
+        let jiffies = proc_get_jiffies(p.pid.load().unwrap());
         let last_jiffies = p.last_times.get().jiffies;
         let since = now - last_jiffies as f64;
         if since > 0.0 && jiffies > last_jiffies {
@@ -50,12 +49,10 @@ fn cpu_use(j: &Job) -> f64 {
 
 /// Print information about the specified job.
 fn builtin_jobs_print(j: &Job, mode: JobsPrintMode, header: bool, streams: &mut IoStreams) {
-    let mut pgid = INVALID_PID;
-    {
-        if let Some(job_pgid) = j.get_pgid() {
-            pgid = job_pgid;
-        }
-    }
+    let pgid = match j.get_pgid() {
+        Some(pgid) => pgid.to_string(),
+        None => "-".to_string(),
+    };
 
     let mut out = WString::new();
     match mode {
@@ -70,7 +67,7 @@ fn builtin_jobs_print(j: &Job, mode: JobsPrintMode, header: bool, streams: &mut 
                 out += wgettext!("State\tCommand\n");
             }
 
-            sprintf!(=> &mut out, "%d\t%d\t", j.job_id(), pgid);
+            sprintf!(=> &mut out, "%d\t%s\t", j.job_id(), pgid);
 
             if have_proc_stat() {
                 sprintf!(=> &mut out, "%.0f%%\t", 100.0 * cpu_use(j));
@@ -97,7 +94,7 @@ fn builtin_jobs_print(j: &Job, mode: JobsPrintMode, header: bool, streams: &mut 
                 // Print table header before first job.
                 out += wgettext!("Group\n");
             }
-            out += &sprintf!("%d\n", pgid)[..];
+            out += &sprintf!("%s\n", pgid)[..];
             streams.out.append(out);
         }
         JobsPrintMode::PrintPid => {
@@ -106,8 +103,8 @@ fn builtin_jobs_print(j: &Job, mode: JobsPrintMode, header: bool, streams: &mut 
                 out += wgettext!("Process\n");
             }
 
-            for p in j.processes() {
-                out += &sprintf!("%d\n", p.pid.load(Ordering::Relaxed))[..];
+            for p in j.external_procs() {
+                out += &sprintf!("%d\n", p.pid.load().unwrap())[..];
             }
             streams.out.append(out);
         }
@@ -214,7 +211,7 @@ pub fn jobs(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Opt
                     }
                 }
             } else {
-                match fish_wcstoi(arg).ok().filter(|&pid| pid >= 0) {
+                match fish_wcstoi(arg).ok().and_then(Pid::new) {
                     None => {
                         streams.err.append(wgettext_fmt!(
                             "%ls: '%ls' is not a valid process id\n",

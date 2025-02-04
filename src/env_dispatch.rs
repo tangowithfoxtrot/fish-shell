@@ -2,7 +2,7 @@ use crate::common::ToCString;
 use crate::complete::complete_invalidate_path;
 use crate::curses::{self, Term};
 use crate::env::{setenv_lock, unsetenv_lock, EnvMode, EnvStack, Environment};
-use crate::env::{CURSES_INITIALIZED, READ_BYTE_LIMIT, TERM_HAS_XN};
+use crate::env::{CURSES_INITIALIZED, DEFAULT_READ_BYTE_LIMIT, READ_BYTE_LIMIT, TERM_HAS_XN};
 use crate::flog::FLOG;
 use crate::function;
 use crate::input_common::{update_wait_on_escape_ms, update_wait_on_sequence_key_ms};
@@ -157,8 +157,8 @@ fn guess_emoji_width(vars: &EnvStack) {
 
     if let Some(width_str) = vars.get(L!("fish_emoji_width")) {
         // The only valid values are 1 or 2; we default to 1 if it was an invalid int.
-        let new_width = fish_wcstoi(&width_str.as_string()).unwrap_or(1).clamp(1, 2);
-        FISH_EMOJI_WIDTH.store(isize::try_from(new_width).unwrap(), Ordering::Relaxed);
+        let new_width = fish_wcstoi(&width_str.as_string()).unwrap_or(1).clamp(1, 2) as isize;
+        FISH_EMOJI_WIDTH.store(new_width, Ordering::Relaxed);
         FLOG!(
             term_support,
             "Overriding default fish_emoji_width w/",
@@ -228,9 +228,8 @@ fn handle_change_ambiguous_width(vars: &EnvStack) {
         .and_then(|fish_ambiguous_width| fish_wcstoi(&fish_ambiguous_width).ok())
         .unwrap_or(1)
         // Clamp in case of negative values.
-        .max(0);
-    crate::fallback::FISH_AMBIGUOUS_WIDTH
-        .store(isize::try_from(new_width).unwrap(), Ordering::Relaxed);
+        .max(0) as isize;
+    crate::fallback::FISH_AMBIGUOUS_WIDTH.store(new_width, Ordering::Relaxed);
 }
 
 fn handle_term_size_change(vars: &EnvStack) {
@@ -339,15 +338,9 @@ fn handle_read_limit_change(vars: &EnvStack) {
             }
         });
 
-    // Clippy should recognize comments in an empty match branch as a valid pattern!
-    #[allow(clippy::single_match)]
     match read_byte_limit {
         Some(new_limit) => READ_BYTE_LIMIT.store(new_limit, Ordering::Relaxed),
-        None => {
-            // TODO: reset READ_BYTE_LIMIT to the default value on receiving an invalid value
-            // instead of persisting the previous value, which may or may not have been the
-            // default.
-        }
+        None => READ_BYTE_LIMIT.store(DEFAULT_READ_BYTE_LIMIT, Ordering::Relaxed),
     }
 }
 
@@ -360,7 +353,7 @@ pub fn env_dispatch_init(vars: &EnvStack) {
     use once_cell::sync::Lazy;
 
     run_inits(vars);
-    // env_dispatch_var_change() purposely supresses change notifications until the dispatch table
+    // env_dispatch_var_change() purposely suppresses change notifications until the dispatch table
     // was initialized elsewhere (either explicitly as below or via deref of VAR_DISPATCH_TABLE).
     Lazy::force(&VAR_DISPATCH_TABLE);
 }
@@ -501,62 +494,6 @@ fn update_fish_color_support(vars: &EnvStack) {
     crate::output::set_color_support(color_support);
 }
 
-/// Try to initialize the terminfo/curses subsystem using our fallback terminal name. Do not set
-/// `$TERM` to our fallback. We're only doing this in the hope of getting a functional shell.
-/// If we launch an external command that uses `$TERM`, it should get the same value we were given,
-/// if any.
-fn initialize_curses_using_fallbacks(vars: &EnvStack) {
-    // xterm-256color is the most used terminal type by a massive margin, especially counting
-    // terminals that are mostly compatible.
-    const FALLBACKS: [&str; 4] = ["xterm-256color", "xterm", "ansi", "dumb"];
-
-    let current_term = vars
-        .get_unless_empty(L!("TERM"))
-        .map(|v| v.as_string())
-        .unwrap_or(Default::default());
-
-    let mut success = false;
-    if current_term == "xterm-256color" {
-        // If we have xterm-256color, let's just use our hard-coded version
-        // instead of trying to read xterm or "ansi".
-        // It's almost certain we can't find terminfo.
-        FLOG!(
-            term_support,
-            "Could not read xterm-256color. Using fallback."
-        );
-        curses::setup_fallback_term();
-        return;
-    }
-
-    for term in FALLBACKS {
-        // If $TERM is already set to the fallback name we're about to use, there's no point in
-        // seeing if the fallback name can be used.
-        if current_term == term {
-            continue;
-        }
-
-        // `term` here is one of our hard-coded strings above; we can unwrap because we can
-        // guarantee it doesn't contain any interior NULs.
-        success = curses::setup(Some(term), |term| apply_term_hacks(vars, term)).is_some();
-        if is_interactive_session() && success {
-            FLOG!(warning, wgettext!("Using fallback terminal type"), term);
-        }
-
-        if success {
-            break;
-        }
-    }
-    if !success {
-        if is_interactive_session() {
-            FLOG!(
-                warning,
-                wgettext!("Could not get any terminfo database, falling back to hardcoded xterm-256color values"),
-            );
-        }
-        curses::setup_fallback_term();
-    }
-}
-
 /// Apply any platform- or environment-specific hacks to our curses [`Term`] instance.
 fn apply_term_hacks(vars: &EnvStack, term: &mut Term) {
     if cfg!(target_os = "macos") {
@@ -618,20 +555,21 @@ fn init_curses(vars: &EnvStack) {
             let term = vars.get_unless_empty(L!("TERM")).map(|v| v.as_string());
             // We do not warn for xterm-256color at all, we know that one.
             if term != Some("xterm-256color".into()) {
-                FLOG!(warning, wgettext!("Could not set up terminal."));
                 if let Some(term) = term {
-                    FLOG!(warning, wgettext!("TERM environment variable set to"), term);
                     FLOG!(
                         warning,
-                        wgettext!("Check that this terminal type is supported on this system.")
+                        wgettext_fmt!("Could not set up terminal for $TERM '%ls'. Falling back to hardcoded xterm-256color values", term)
                     );
                 } else {
-                    FLOG!(warning, wgettext!("TERM environment variable not set."));
+                    FLOG!(
+                        warning,
+                        wgettext!("Could not set up terminal because $TERM is unset. Falling back to hardcoded xterm-256color values")
+                    );
                 }
             }
         }
 
-        initialize_curses_using_fallbacks(vars);
+        curses::setup_fallback_term();
     }
 
     // Configure hacks that apply regardless of whether we successfully init curses or not.

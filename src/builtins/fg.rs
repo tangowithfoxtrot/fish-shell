@@ -1,6 +1,7 @@
 //! Implementation of the fg builtin.
 
 use crate::fds::make_fd_blocking;
+use crate::proc::Pid;
 use crate::reader::reader_write_title;
 use crate::tokenizer::tok_command;
 use crate::wutil::perror;
@@ -49,11 +50,10 @@ pub fn fg(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Optio
     } else if optind + 1 < argv.len() {
         // Specifying more than one job to put to the foreground is a syntax error, we still
         // try to locate the job $argv[1], since we need to determine which error message to
-        // emit (ambigous job specification vs malformed job id).
+        // emit (ambiguous job specification vs malformed job id).
         let mut found_job = false;
-        match fish_wcstoi(argv[optind]) {
-            Ok(pid) if pid > 0 => found_job = parser.job_get_from_pid(pid).is_some(),
-            _ => (),
+        if let Ok(Some(pid)) = fish_wcstoi(argv[optind]).map(Pid::new) {
+            found_job = parser.job_get_from_pid(pid).is_some();
         };
 
         if found_job {
@@ -82,14 +82,15 @@ pub fn fg(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Optio
                 builtin_print_error_trailer(parser, streams.err, cmd);
             }
             Ok(pid) => {
-                let pid = pid.abs();
-                let j = parser.job_get_with_index_from_pid(pid);
+                let raw_pid = pid;
+                let pid = Pid::new(pid.abs());
+                let j = pid.and_then(|pid| parser.job_get_with_index_from_pid(pid));
                 if j.as_ref()
                     .map_or(true, |(_pos, j)| !j.is_constructed() || j.is_completed())
                 {
                     streams
                         .err
-                        .append(wgettext_fmt!("%ls: No suitable job: %d\n", cmd, pid));
+                        .append(wgettext_fmt!("%ls: No suitable job: %d\n", cmd, raw_pid));
                     job_pos = None;
                     job = None
                 } else {
@@ -102,7 +103,7 @@ pub fn fg(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Optio
                                 "it is not under job control\n"
                             ),
                             cmd,
-                            pid,
+                            raw_pid,
                             j.command()
                         ));
                         None

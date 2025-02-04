@@ -119,10 +119,8 @@ bitflags! {
         const NO_TILDE = 1 << 2;
         /// Replace non-printable control characters with Unicode symbols.
         const SYMBOLIC = 1 << 3;
-        /// Escape : and =
-        const SEPARATORS = 1 << 4;
         /// Escape ,
-        const COMMA = 1 << 5;
+        const COMMA = 1 << 4;
     }
 }
 
@@ -183,7 +181,6 @@ pub fn escape_string(s: &wstr, style: EscapeStringStyle) -> WString {
 /// Escape a string in a fashion suitable for using in fish script.
 fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
     let escape_printables = !flags.contains(EscapeFlags::NO_PRINTABLES);
-    let escape_separators = flags.contains(EscapeFlags::SEPARATORS);
     let escape_comma = flags.contains(EscapeFlags::COMMA);
     let no_quoted = flags.contains(EscapeFlags::NO_QUOTED);
     let no_tilde = flags.contains(EscapeFlags::NO_TILDE);
@@ -196,7 +193,7 @@ fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
     );
 
     let mut need_escape = false;
-    let mut need_complex_escape = false;
+    let mut need_complex_escape = no_tilde && input.char_at(0) == '~';
     let mut double_quotes = 0;
     let mut single_quotes = 0;
     let mut dollars = 0;
@@ -294,13 +291,6 @@ fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
             }
             ANY_STRING_RECURSIVE => {
                 out += L!("**");
-            }
-            ':' | '=' => {
-                if escape_separators {
-                    need_escape = true;
-                    out.push('\\');
-                }
-                out.push(c);
             }
             ',' => {
                 if escape_comma {
@@ -1369,9 +1359,7 @@ pub fn valid_func_name(name: &wstr) -> bool {
 
 /// A rusty port of the C++ `write_loop()` function from `common.cpp`. This should be deprecated in
 /// favor of native rust read/write methods at some point.
-///
-/// Returns the number of bytes written or an IO error.
-pub fn write_loop<Fd: AsRawFd>(fd: &Fd, buf: &[u8]) -> std::io::Result<usize> {
+pub fn write_loop<Fd: AsRawFd>(fd: &Fd, buf: &[u8]) -> std::io::Result<()> {
     let fd = fd.as_raw_fd();
     let mut total = 0;
     while total < buf.len() {
@@ -1387,7 +1375,7 @@ pub fn write_loop<Fd: AsRawFd>(fd: &Fd, buf: &[u8]) -> std::io::Result<usize> {
             }
         }
     }
-    Ok(total)
+    Ok(())
 }
 
 /// A rusty port of the C++ `read_loop()` function from `common.cpp`. This should be deprecated in
@@ -1503,7 +1491,7 @@ pub fn restore_term_foreground_process_group_for_exit() {
     // failure because doing so is unlikely to be noticed.
     // Safety: All of getpgrp, signal, and tcsetpgrp are async-signal-safe.
     let initial_fg_process_group = INITIAL_FG_PROCESS_GROUP.load(Ordering::Relaxed);
-    if initial_fg_process_group > 0 && initial_fg_process_group != unsafe { libc::getpgrp() } {
+    if initial_fg_process_group > 0 && initial_fg_process_group != crate::nix::getpgrp() {
         unsafe {
             libc::signal(SIGTTOU, SIG_IGN);
             libc::tcsetpgrp(STDIN_FILENO, initial_fg_process_group);
@@ -1554,7 +1542,7 @@ pub fn is_windows_subsystem_for_linux(v: WSL) -> bool {
     // any allocations or mutexes. We can't rely on all the std functions to be alloc-free in both
     // Debug and Release modes, so we just mandate that the result already be available.
     //
-    // is_wsl() is called by has_working_timestamps() which is called by `screen.cpp` in the main
+    // is_wsl() is called by has_working_tty_timestamps() which is called by `screen.rs` in the main
     // process. If that's not good enough, we can call is_wsl() manually at shell startup.
     if crate::threads::is_forked_child() {
         debug_assert!(
@@ -1942,8 +1930,8 @@ pub trait Named {
     fn name(&self) -> &'static wstr;
 }
 
-/// Return a pointer to the first entry with the given name, assuming the entries are sorted by
-/// name. Return nullptr if not found.
+/// Return a reference to the first entry with the given name, assuming the entries are sorted by
+/// name. Return None if not found.
 pub fn get_by_sorted_name<T: Named>(name: &wstr, vals: &'static [T]) -> Option<&'static T> {
     match vals.binary_search_by_key(&name, |val| val.name()) {
         Ok(index) => Some(&vals[index]),

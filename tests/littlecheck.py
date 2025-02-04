@@ -32,6 +32,8 @@ CHECK_STDOUT_RE = re.compile(COMMENT_RE + r"CHECK:\s+(.*)\n")
 # A regex capturing lines that should be checked against stderr.
 CHECK_STDERR_RE = re.compile(COMMENT_RE + r"CHECKERR:\s+(.*)\n")
 
+VARIABLE_OVERRIDE_RE = re.compile(r"\w+=.*")
+
 SKIP = object()
 
 def find_command(program):
@@ -367,7 +369,10 @@ def perform_substitution(input_str, subs):
         text = m.group(1)
         for key, replacement in subs_ordered:
             if text.startswith(key):
-                return replacement + text[len(key) :]
+                # shell-quote the replacement, so it's usable in #RUN lines.
+                # We could loosen this and only do it for #RUN/#REQUIRES,
+                # but so far we don't need it anywhere.
+                return shlex.quote(replacement + text[len(key) :])
         # No substitution found, so we default to running it as-is,
         # which will end up running it via $PATH.
         return text
@@ -475,7 +480,7 @@ class TestRun(object):
             """Decode a string and split it by newlines only,
             retaining the newlines.
             """
-            return [s + "\n" for s in s.decode("utf-8").split("\n")]
+            return [s + "\n" for s in s.decode("utf-8", errors="backslashreplace").split("\n")]
 
         if self.config.verbose:
             print(self.subbed_command)
@@ -486,7 +491,7 @@ class TestRun(object):
         # most likely when the last command in a shell script doesn't exist.
         # So we check if the command *we execute* exists, and complain then.
         status = proc.returncode
-        cmd = shlex.split(self.subbed_command)[0]
+        cmd = next((word for word in shlex.split(self.subbed_command) if not VARIABLE_OVERRIDE_RE.match(word)))
         if status == 127 and not find_command(cmd):
             raise CheckerError("Command could not be found: " + cmd)
         if status == 126 and not find_command(cmd):

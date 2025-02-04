@@ -18,10 +18,7 @@ import signal
 import subprocess
 import sys
 
-if "CI" in os.environ and platform.system() == "Darwin":
-    sys.exit(127)
-
-if platform.system() == "FreeBSD": # Spurious failure. TODO Only disable this in CI.
+if "CI" in os.environ and platform.system() in ["Darwin", "FreeBSD"]:
     sys.exit(127)
 
 expect_prompt()
@@ -48,7 +45,7 @@ expect_prompt()
 sendline("function postexec --on-event fish_postexec; echo fish_postexec spotted; end")
 expect_prompt()
 sendline("read")
-expect_re(r"\r\n?read> $", timeout=10)
+expect_re(r"\r\n?.*read> .*", timeout=10)
 sleep(0.1)
 os.kill(sp.spawn.pid, signal.SIGINT)
 expect_str("fish_postexec spotted", timeout=10)
@@ -80,7 +77,7 @@ sendline("mkfifo fifoo")
 expect_prompt()
 sendline("cat >fifoo")
 subprocess.call(["kill", "-WINCH", str(sp.spawn.pid)])
-expect_re("open: ", shouldfail=True, timeout=10)
+expect_re("open: ", shouldfail=True, timeout=2)
 subprocess.call(["kill", "-INT", str(sp.spawn.pid)])
 expect_prompt()
 

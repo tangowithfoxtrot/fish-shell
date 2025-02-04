@@ -105,6 +105,8 @@ impl DirEntry {
         let narrow = wcs2zstring(&self.name);
         let mut s: libc::stat = unsafe { std::mem::zeroed() };
         if unsafe { libc::fstatat(fd, narrow.as_ptr(), &mut s, 0) } == 0 {
+            // st_dev is a dev_t, which is i32 on OpenBSD/Haiku and u32 in FreeBSD 11
+            #[allow(clippy::unnecessary_cast)]
             let dev_inode = DevInode {
                 device: s.st_dev as u64,
                 inode: s.st_ino as u64,
@@ -276,13 +278,8 @@ impl DirIter {
             return self.next();
         }
 
-        let nul_pos = dent.d_name.iter().position(|b| *b == 0).unwrap();
-        let d_name: Vec<u8> = dent.d_name[..nul_pos + 1]
-            .iter()
-            .map(|b| *b as u8)
-            .collect();
         self.entry.reset();
-        self.entry.name = cstr2wcstring(&d_name);
+        self.entry.name = cstr2wcstring(d_name);
         #[cfg(any(target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))]
         {
             self.entry.inode = dent.d_fileno;
@@ -338,7 +335,6 @@ fn test_no_dots() {
     // DirIter does not return . or .. by default.
     let dir = DirIter::new(L!(".")).expect("Should be able to open CWD");
     for entry in dir {
-        assert!(entry.is_ok());
         let entry = entry.unwrap();
         assert_ne!(entry.name, ".");
         assert_ne!(entry.name, "..");
@@ -353,7 +349,6 @@ fn test_dots() {
     let mut seen_dot = false;
     let mut seen_dotdot = false;
     for entry in dir {
-        assert!(entry.is_ok());
         let entry = entry.unwrap();
         if entry.name == "." {
             seen_dot = true;

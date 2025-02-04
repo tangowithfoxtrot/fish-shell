@@ -14,6 +14,7 @@ use crate::expand::{
 };
 use crate::fds::{open_dir, BEST_O_SEARCH};
 use crate::global_safety::RelaxedAtomicBool;
+use crate::input_common::terminal_protocols_disable_ifn;
 use crate::io::IoChain;
 use crate::job_group::MaybeJobId;
 use crate::operation_context::{OperationContext, EXPANSION_LIMIT_DEFAULT};
@@ -23,7 +24,7 @@ use crate::parse_constants::{
 };
 use crate::parse_execution::{EndExecutionReason, ExecutionContext};
 use crate::parse_tree::{parse_source, LineCounter, ParsedSourceRef};
-use crate::proc::{job_reap, JobGroupRef, JobList, JobRef, ProcStatus};
+use crate::proc::{job_reap, JobGroupRef, JobList, JobRef, Pid, ProcStatus};
 use crate::signal::{signal_check_cancel, signal_clear_cancel, Signal};
 use crate::threads::assert_is_main_thread;
 use crate::util::get_time;
@@ -355,16 +356,21 @@ pub enum ParserStatusVar {
     count_,
 }
 
-pub type BlockId = usize;
+/// A newtype for the block index.
+/// This is the naive position in the block list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockId(usize);
 
-// Controls the behavior when fish itself receives a signal and there are
-// no blocks on the stack.
-// The "outermost" parser is responsible for clearing the signal.
+/// Controls the behavior when fish itself receives a signal and there are
+/// no blocks on the stack.
+/// The "outermost" parser is responsible for clearing the signal.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum CancelBehavior {
     #[default]
-    Return, // Return the signal to the caller.
-    Clear, // Clear the signal.
+    /// Return the signal to the caller
+    Return,
+    /// Clear the signal
+    Clear,
 }
 
 pub struct Parser {
@@ -444,9 +450,7 @@ impl Parser {
 
     /// Return whether we are currently evaluating a function.
     pub fn is_function(&self) -> bool {
-        self.blocks()
-            .iter()
-            .rev()
+        self.blocks_iter_rev()
             // If a function sources a file, don't descend further.
             .take_while(|b| b.typ() != BlockType::source)
             .any(|b| b.is_function_call())
@@ -454,9 +458,7 @@ impl Parser {
 
     /// Return whether we are currently evaluating a command substitution.
     pub fn is_command_substitution(&self) -> bool {
-        self.blocks()
-            .iter()
-            .rev()
+        self.blocks_iter_rev()
             // If a function sources a file, don't descend further.
             .take_while(|b| b.typ() != BlockType::source)
             .any(|b| b.typ() == BlockType::subst)
@@ -608,6 +610,8 @@ impl Parser {
         let mut execution_context =
             ExecutionContext::new(ps.clone(), block_io.clone(), Rc::clone(&line_counter));
 
+        terminal_protocols_disable_ifn();
+
         // Check the exec count so we know if anything got executed.
         let prev_exec_count = self.libdata().exec_count;
         let prev_status_count = self.libdata().status_count;
@@ -732,7 +736,7 @@ impl Parser {
     /// This supports 'status is-block'.
     pub fn is_block(&self) -> bool {
         // Note historically this has descended into 'source', unlike 'is_function'.
-        self.blocks().iter().rev().any(|b| {
+        self.blocks_iter_rev().any(|b| {
             ![
                 BlockType::top,
                 BlockType::subst,
@@ -744,35 +748,49 @@ impl Parser {
 
     /// Return whether we have a breakpoint block.
     pub fn is_breakpoint(&self) -> bool {
-        self.blocks()
-            .iter()
-            .rev()
+        self.blocks_iter_rev()
             .any(|b| b.typ() == BlockType::breakpoint)
     }
 
-    /// Return the list of blocks. The first block is at the top.
-    /// todo!("this RAII object should only be used for iterating over it (in reverse). Maybe enforce this")
-    pub fn blocks(&self) -> Ref<'_, Vec<Block>> {
-        self.block_list.borrow()
+    // Return an iterator over the blocks, in reverse order.
+    // That is, the first block is the innermost block.
+    pub fn blocks_iter_rev<'a>(&'a self) -> impl Iterator<Item = Ref<'a, Block>> {
+        let blocks = self.block_list.borrow();
+        let mut indices = (0..blocks.len()).rev();
+        std::iter::from_fn(move || {
+            let last = indices.next()?;
+            // note this clone is cheap
+            Some(Ref::map(Ref::clone(&blocks), |bl| &bl[last]))
+        })
     }
+
+    // Return the block at a given index, where 0 is the innermost block.
     pub fn block_at_index(&self, index: usize) -> Option<Ref<'_, Block>> {
-        let block_list = self.blocks();
-        if index >= block_list.len() {
+        let block_list = self.block_list.borrow();
+        let block_count = block_list.len();
+        if index >= block_count {
             None
         } else {
-            Some(Ref::map(block_list, |bl| &bl[bl.len() - 1 - index]))
+            Some(Ref::map(block_list, |bl| &bl[block_count - 1 - index]))
         }
     }
+
+    // Return the block at a given index, where 0 is the innermost block.
     pub fn block_at_index_mut(&self, index: usize) -> Option<RefMut<'_, Block>> {
         let block_list = self.block_list.borrow_mut();
-        if index >= block_list.len() {
+        let block_count = block_list.len();
+        if index >= block_count {
             None
         } else {
             Some(RefMut::map(block_list, |bl| {
-                let len = bl.len();
-                &mut bl[len - 1 - index]
+                &mut bl[block_count - 1 - index]
             }))
         }
+    }
+
+    // Return the block with the given id, asserting it exists. Note ids are recycled.
+    pub fn block_with_id(&self, id: BlockId) -> Ref<'_, Block> {
+        Ref::map(self.block_list.borrow(), |bl| &bl[id.0])
     }
 
     pub fn blocks_size(&self) -> usize {
@@ -855,7 +873,7 @@ impl Parser {
         }
     }
 
-    /// Pushes a new block. Returns a pointer to the block, stored in the parser.
+    /// Pushes a new block. Returns an id (index) of the block, which is stored in the parser.
     pub fn push_block(&self, mut block: Block) -> BlockId {
         block.src_lineno = self.get_lineno();
         block.src_filename = self.current_filename();
@@ -866,14 +884,14 @@ impl Parser {
 
         let mut block_list = self.block_list.borrow_mut();
         block_list.push(block);
-        block_list.len() - 1
+        BlockId(block_list.len() - 1)
     }
 
     /// Remove the outermost block, asserting it's the given one.
     pub fn pop_block(&self, expected: BlockId) {
         let block = {
             let mut block_list = self.block_list.borrow_mut();
-            assert!(expected == block_list.len() - 1);
+            assert!(expected.0 == block_list.len() - 1);
             block_list.pop().unwrap()
         };
         if block.wants_pop_env() {
@@ -888,9 +906,7 @@ impl Parser {
             // isn't one return the function name for the current level.
             // Walk until we find a breakpoint, then take the next function.
             return self
-                .blocks()
-                .iter()
-                .rev()
+                .blocks_iter_rev()
                 .skip_while(|b| b.typ() != BlockType::breakpoint)
                 .find_map(|b| match b.data() {
                     Some(BlockData::Function { name, .. }) => Some(name.clone()),
@@ -898,9 +914,7 @@ impl Parser {
                 });
         }
 
-        self.blocks()
-            .iter()
-            .rev()
+        self.blocks_iter_rev()
             // Historical: If we want the topmost function, but we are really in a file sourced by a
             // function, don't consider ourselves to be in a function.
             .take_while(|b| !(level == 1 && b.typ() == BlockType::source))
@@ -940,15 +954,15 @@ impl Parser {
     }
 
     /// Returns the job with the given pid.
-    pub fn job_get_from_pid(&self, pid: libc::pid_t) -> Option<JobRef> {
+    pub fn job_get_from_pid(&self, pid: Pid) -> Option<JobRef> {
         self.job_get_with_index_from_pid(pid).map(|t| t.1)
     }
 
     /// Returns the job and job index with the given pid.
-    pub fn job_get_with_index_from_pid(&self, pid: libc::pid_t) -> Option<(usize, JobRef)> {
+    pub fn job_get_with_index_from_pid(&self, pid: Pid) -> Option<(usize, JobRef)> {
         for (i, job) in self.jobs().iter().enumerate() {
-            for p in job.processes().iter() {
-                if p.pid.load(Ordering::Relaxed) == pid {
+            for p in job.external_procs() {
+                if p.pid.load().unwrap() == pid {
                     return Some((i, job.clone()));
                 }
             }
@@ -1047,9 +1061,7 @@ impl Parser {
     /// reader_current_filename, e.g. if we are evaluating a function defined in a different file
     /// than the one currently read.
     pub fn current_filename(&self) -> Option<FilenameRef> {
-        self.blocks()
-            .iter()
-            .rev()
+        self.blocks_iter_rev()
             .find_map(|b| match b.data() {
                 Some(BlockData::Function { name, .. }) => {
                     function::get_props(name).and_then(|props| props.definition_file.clone())
@@ -1068,16 +1080,14 @@ impl Parser {
 
     /// Return a string representing the current stack trace.
     pub fn stack_trace(&self) -> WString {
-        self.blocks()
-            .iter()
-            .rev()
+        self.blocks_iter_rev()
             // Stop at event handler. No reason to believe that any other code is relevant.
             // It might make sense in the future to continue printing the stack trace of the code
             // that invoked the event, if this is a programmatic event, but we can't currently
             // detect that.
             .take_while(|b| b.typ() != BlockType::event)
             .fold(WString::new(), |mut trace, b| {
-                append_block_description_to_stack_trace(self, b, &mut trace);
+                append_block_description_to_stack_trace(self, &b, &mut trace);
                 trace
             })
     }
@@ -1093,9 +1103,7 @@ impl Parser {
         }
         // Count the functions.
         let depth = self
-            .blocks()
-            .iter()
-            .rev()
+            .blocks_iter_rev()
             .filter(|b| b.is_function_call())
             .count();
         depth > FISH_MAX_STACK_DEPTH

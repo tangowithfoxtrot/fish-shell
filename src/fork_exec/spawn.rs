@@ -3,7 +3,7 @@
 use super::blocked_signals_for_job;
 use crate::proc::Job;
 use crate::redirection::Dup2List;
-use crate::signal::get_signals_with_handlers;
+use crate::signal::signals_to_default;
 use crate::{exec::is_thompson_shell_script, libc::_PATH_BSHELL};
 use errno::Errno;
 use libc::{c_char, posix_spawn_file_actions_t, posix_spawnattr_t};
@@ -105,27 +105,17 @@ impl PosixSpawner {
         // desired_pgid tracks the pgroup for the process. If it is none, the pgroup is left unchanged.
         // If it is zero, create a new pgroup from the pid. If it is >0, join that pgroup.
         let desired_pgid = if let Some(pgid) = j.get_pgid() {
-            Some(pgid)
+            Some(pgid.get())
         } else if j.processes()[0].leads_pgrp {
             Some(0)
         } else {
             None
         };
 
-        // Set the handling for job control signals back to the default.
-        let reset_signal_handlers = true;
-
-        // Remove all signal blocks.
-        let reset_sigmask = true;
-
         // Set our flags.
         let mut flags: i32 = 0;
-        if reset_signal_handlers {
-            flags |= libc::POSIX_SPAWN_SETSIGDEF;
-        }
-        if reset_sigmask {
-            flags |= libc::POSIX_SPAWN_SETSIGMASK;
-        }
+        flags |= libc::POSIX_SPAWN_SETSIGDEF;
+        flags |= libc::POSIX_SPAWN_SETSIGMASK;
         if desired_pgid.is_some() {
             flags |= libc::POSIX_SPAWN_SETPGROUP;
         }
@@ -136,19 +126,13 @@ impl PosixSpawner {
         }
 
         // Everybody gets default handlers.
-        if reset_signal_handlers {
-            let mut sigdefault: libc::sigset_t = unsafe { std::mem::zeroed() };
-            get_signals_with_handlers(&mut sigdefault);
-            attr.set_sigdefault(&sigdefault)?;
-        }
+        attr.set_sigdefault(&signals_to_default)?;
 
-        // Potentially reset the sigmask.
-        if reset_sigmask {
-            let mut sigmask = unsafe { std::mem::zeroed() };
-            unsafe { libc::sigemptyset(&mut sigmask) };
-            blocked_signals_for_job(j, &mut sigmask);
-            attr.set_sigmask(&sigmask)?;
-        }
+        // Reset the sigmask.
+        let mut sigmask = unsafe { std::mem::zeroed() };
+        unsafe { libc::sigemptyset(&mut sigmask) };
+        blocked_signals_for_job(j, &mut sigmask);
+        attr.set_sigmask(&sigmask)?;
 
         // Apply our dup2s.
         for act in dup2s.get_actions() {

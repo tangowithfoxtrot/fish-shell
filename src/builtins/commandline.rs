@@ -22,6 +22,7 @@ use crate::wcstringutil::join_strings;
 use std::ops::Range;
 
 /// Which part of the comandbuffer are we operating on.
+#[derive(Eq, PartialEq)]
 enum TextScope {
     String,
     Job,
@@ -103,6 +104,7 @@ fn replace_part(
 fn write_part(
     parser: &Parser,
     range: Range<usize>,
+    range_is_single_token: bool,
     cut_at_cursor: bool,
     token_mode: Option<TokenMode>,
     buffer: &wstr,
@@ -121,19 +123,8 @@ fn write_part(
         return;
     };
 
-    let buff = &buffer[range];
-    let mut tok = Tokenizer::new(buff, TOK_ACCEPT_UNFINISHED);
     let mut args = vec![];
-    while let Some(token) = tok.next() {
-        if cut_at_cursor && token.end() >= pos {
-            break;
-        }
-        if token.type_ != TokenType::string {
-            continue;
-        }
-
-        let token_text = tok.text_of(&token);
-
+    let mut add_token = |token_text: &wstr| {
         match token_mode {
             TokenMode::Expanded => {
                 const COMMANDLINE_TOKENS_MAX_EXPANSION: usize = 512;
@@ -175,7 +166,26 @@ fn write_part(
                 args.push(Completion::from_completion(unescaped));
             }
         }
-    }
+    };
+
+    let buff = &buffer[range];
+    if range_is_single_token {
+        add_token(buff);
+    } else {
+        let mut tok = Tokenizer::new(buff, TOK_ACCEPT_UNFINISHED);
+        while let Some(token) = tok.next() {
+            if cut_at_cursor && token.end() >= pos {
+                break;
+            }
+            if token.type_ != TokenType::string {
+                continue;
+            }
+
+            let token_text = tok.text_of(&token);
+            add_token(token_text);
+        }
+    };
+
     for arg in args {
         streams.out.appendln(arg.completion);
     }
@@ -206,7 +216,6 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
     let mut is_valid = false;
     let mut showing_suggestion = false;
 
-    let mut range = 0..0;
     let mut override_buffer = None;
 
     const short_options: &wstr = L!(":abijpctfxorhI:CBELSsP");
@@ -397,8 +406,8 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
         return STATUS_INVALID_ARGS;
     }
 
-    if search_field_mode && buffer_part.is_some() {
-        streams.err.append(wgettext_fmt!(BUILTIN_ERR_COMBO, cmd,));
+    if search_field_mode && (buffer_part.is_some() || token_mode.is_some()) {
+        streams.err.append(wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
         builtin_print_error_trailer(parser, streams.err, cmd);
         return STATUS_INVALID_ARGS;
     }
@@ -592,6 +601,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
         return Some(1);
     }
 
+    let range;
     if search_field_mode {
         range = 0..current_buffer.len();
     } else {
@@ -606,7 +616,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
                 range = parse_util_process_extent(current_buffer, current_cursor_pos, None);
             }
             TextScope::Token => {
-                parse_util_token_extent(current_buffer, current_cursor_pos, &mut range, None);
+                (range, _) = parse_util_token_extent(current_buffer, current_cursor_pos);
             }
         }
     }
@@ -633,7 +643,9 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
             );
             commandline_set_buffer(None, Some(new_pos));
         } else {
-            streams.out.append(sprintf!("%lu\n", current_cursor_pos));
+            streams
+                .out
+                .append(sprintf!("%lu\n", current_cursor_pos - range.start));
         }
         return STATUS_CMD_OK;
     }
@@ -642,6 +654,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
         write_part(
             parser,
             range,
+            buffer_part == TextScope::Token,
             cut_at_cursor,
             token_mode,
             current_buffer,

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.15)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
@@ -7,9 +7,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(DEFAULT_BUILD_TYPE "RelWithDebInfo")
 
-# Generate Xcode schemas (but not for tests).
-set(CMAKE_XCODE_GENERATE_SCHEME 1)
-
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     message(STATUS "Setting build type to default '${DEFAULT_BUILD_TYPE}'")
     set(CMAKE_BUILD_TYPE "${DEFAULT_BUILD_TYPE}")
@@ -17,7 +14,6 @@ endif()
 
 # Set up standard directories.
 include(GNUInstallDirs)
-add_definitions(-D_UNICODE=1)
 
 include(cmake/gettext.cmake)
 
@@ -29,12 +25,6 @@ include(cmake/Rust.cmake)
 
 # Work around issue where archive-built libs go in the wrong place.
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
-
-if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR)
-  set(FISH_IN_TREE_BUILD TRUE)
-else()
-  set(FISH_IN_TREE_BUILD FALSE)
-endif()
 
 # Set up the machinery around FISH-BUILD-VERSION-FILE
 # This defines the FBVF variable.
@@ -56,8 +46,9 @@ function(CREATE_TARGET target)
           ${Rust_CARGO}
             build --bin ${target}
             $<$<CONFIG:Release>:--release>
-            $<$<CONFIG:RelWithDebInfo>:--release>
+            $<$<CONFIG:RelWithDebInfo>:--profile=release-with-debug>
             --target ${Rust_CARGO_TARGET}
+            --no-default-features
             ${CARGO_FLAGS}
             ${FEATURES_ARG}
       &&
@@ -80,8 +71,6 @@ create_target(fish_key_reader)
 # Set up the docs.
 include(cmake/Docs.cmake)
 
-# A helper for running tests.
-add_executable(fish_test_helper src/fish_test_helper.c)
 # Set up tests.
 include(cmake/Tests.cmake)
 

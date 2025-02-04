@@ -23,7 +23,7 @@ If both ``KEYS`` and ``COMMAND`` are given, ``bind`` adds (or replaces) a bindin
 If only ``KEYS`` is given, any existing binding in the given ``MODE`` will be printed.
 
 ``KEYS`` is a comma-separated list of key names.
-Modifier keys can be specified by prefixing a key name with a combination of ``ctrl-``/``c-``, ``alt-``/``a-`` and ``shift-``.
+Modifier keys can be specified by prefixing a key name with a combination of ``ctrl-``, ``alt-`` and ``shift-``.
 For example, pressing :kbd:`w` while holding the Alt modifier is written as ``alt-w``.
 Key names are case-sensitive; for example ``alt-W`` is the same as ``alt-shift-w``.
 ``ctrl-x,ctrl-e`` would mean pressing :kbd:`ctrl-x` followed by :kbd:`ctrl-e`.
@@ -170,8 +170,14 @@ The following special input functions are available:
 ``capitalize-word``
     make the current word begin with a capital letter
 
+``clear-commandline``
+    empty the entire commandline
+
 ``clear-screen``
-    clears the screen and redraws the prompt. if the terminal doesn't support clearing the screen it is the same as ``repaint``.
+    clears the screen and redraws the prompt.
+
+``scrollback-push``
+    pushes earlier output to the terminal scrollback, positioning the prompt at the top.
 
 ``complete``
     guess the remainder of the current token
@@ -237,7 +243,7 @@ The following special input functions are available:
 ``history-pager``
     invoke the searchable pager on history (incremental search); or if the history pager is already active, search further backwards in time.
 
-``history-pager-delete``
+``history-delete``
     permanently delete the current history item, either from the history pager or from an active up-arrow history search
 
 ``history-search-backward``
@@ -259,7 +265,7 @@ The following special input functions are available:
     search the history for the next matching argument
 
 ``forward-jump`` and ``backward-jump``
-    read another character and jump to its next occurence after/before the cursor
+    read another character and jump to its next occurrence after/before the cursor
 
 ``forward-jump-till`` and ``backward-jump-till``
     jump to right *before* the next occurrence
@@ -269,7 +275,7 @@ The following special input functions are available:
 
 ``jump-to-matching-bracket``
     jump to matching bracket if the character under the cursor is bracket;
-    otherwise, jump to the next occurence of *any right* bracket after the cursor.
+    otherwise, jump to the next occurrence of *any right* bracket after the cursor.
     The following brackets are considered: ``([{}])``
 
 ``jump-till-matching-bracket``
@@ -292,7 +298,7 @@ The following special input functions are available:
     move the selected text to the killring
 
 ``kill-whole-line``
-    move the line (including the following newline) to the killring. If the line is the last line, its preceeding newline is also removed
+    move the line (including the following newline) to the killring. If the line is the last line, its preceding newline is also removed
 
 ``kill-inner-line``
     move the line (without the following newline) to the killring

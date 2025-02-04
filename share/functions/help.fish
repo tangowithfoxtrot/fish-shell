@@ -34,6 +34,10 @@ function help --description 'Show help for the fish shell'
         if set -q BROWSER
             # User has manually set a preferred browser, so we respect that
             echo $BROWSER | read -at fish_browser
+            if not type -q $fish_browser[1]
+                printf (_ 'help: %s is not a valid command: %s\n') '$fish_browser' "$fish_browser"
+                return 2
+            end
         else
             # No browser set up, inferring.
             # We check a bunch and use the last we find.
@@ -93,18 +97,18 @@ function help --description 'Show help for the fish shell'
                 end
             end
         end
-    end
-
-    if not set -q fish_browser[1]
-        printf (_ '%s: Could not find a web browser.\n') help >&2
-        printf (_ 'Please try `BROWSER=some_browser help`, `man fish-doc`, or `man fish-tutorial`.\n\n') >&2
-        return 1
+    else
+        if not type -q $fish_browser[1]
+            printf (_ 'help: %s is not a valid command: %s\n') '$fish_help_browser' "$fish_browser"
+            return 2
+        end
     end
 
     # In Cygwin, start the user-specified browser using cygstart,
     # only if a Windows browser is to be used.
     if type -q cygstart
-        if test $fish_browser != cygstart
+        if test "$fish_browser" != cygstart
+            and set -q fish_browser[1]
             and not command -sq $fish_browser[1]
             # Escaped quotes are necessary to work with spaces in the path
             # when the command is finally eval'd.
@@ -125,6 +129,8 @@ function help --description 'Show help for the fish shell'
 
     set -l fish_help_page
     switch "$fish_help_item"
+        case "!"
+            set fish_help_page "cmds/not.html"
         case "."
             set fish_help_page "cmds/source.html"
         case ":"
@@ -186,7 +192,7 @@ function help --description 'Show help for the fish shell'
     set -l version_string (string split . -f 1,2 -- $version | string join .)
     set -l ext_url https://fishshell.com/docs/$version_string/$fish_help_page
     set -l page_url
-    if test -f $__fish_help_dir/index.html; and not set -lq chromeos_linux_garcon
+    if set -q __fish_help_dir[1]; and test -f $__fish_help_dir/index.html; and not set -lq chromeos_linux_garcon
         # Help is installed, use it
         set page_url file://$__fish_help_dir/$fish_help_page
 
@@ -204,6 +210,13 @@ function help --description 'Show help for the fish shell'
         set page_url $ext_url
         # We don't need a trampoline for a remote URL.
         set need_trampoline
+    end
+
+    if not set -q fish_browser[1]
+        printf (_ '%s: Could not find a web browser.\n') help >&2
+        printf (_ 'Please try `BROWSER=some_browser help`, `man fish-doc`, or `man fish-tutorial`.\n\n') >&2
+        printf (_ 'Or open %s in your browser of choice.\n') $ext_url >&2
+        return 1
     end
 
     if set -q need_trampoline[1]

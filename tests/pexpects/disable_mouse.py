@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 from pexpect_helper import SpawnedProc
-import subprocess
-import sys
-import time
 
 sp = SpawnedProc(args=["-d", "reader"])
 sp.expect_prompt()
 
-# Verify we correctly diable mouse tracking.
+# Verify we correctly disable mouse tracking.
 
 # Five char sequence.
 sp.send("\x1b[tDE")

@@ -27,6 +27,9 @@ pub enum FeatureFlag {
 
     /// Remove `test`'s one and zero arg mode (make `test -n` return false etc)
     test_require_arg,
+
+    /// Buffered enter (typed while running a command) does not execute.
+    buffered_enter_noexec,
 }
 
 struct Features {
@@ -94,7 +97,7 @@ pub const METADATA: &[FeatureMetadata] = &[
     FeatureMetadata {
         flag: FeatureFlag::remove_percent_self,
         name: L!("remove-percent-self"),
-        groups: L!("3.8"),
+        groups: L!("4.0"),
         description: L!("%self is no longer expanded (use $fish_pid)"),
         default_value: false,
         read_only: false,
@@ -102,8 +105,16 @@ pub const METADATA: &[FeatureMetadata] = &[
     FeatureMetadata {
         flag: FeatureFlag::test_require_arg,
         name: L!("test-require-arg"),
-        groups: L!("3.8"),
+        groups: L!("4.0"),
         description: L!("builtin test requires an argument"),
+        default_value: false,
+        read_only: false,
+    },
+    FeatureMetadata {
+        flag: FeatureFlag::buffered_enter_noexec,
+        name: L!("buffered-enter-noexec"),
+        groups: L!("4.1"),
+        description: L!("enter typed while executing will not execute"),
         default_value: false,
         read_only: false,
     },
@@ -168,6 +179,7 @@ impl Features {
                 AtomicBool::new(METADATA[3].default_value),
                 AtomicBool::new(METADATA[4].default_value),
                 AtomicBool::new(METADATA[5].default_value),
+                AtomicBool::new(METADATA[6].default_value),
             ],
         }
     }

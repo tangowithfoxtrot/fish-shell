@@ -3,6 +3,7 @@ resolver = "2"
 members = ["printf"]
 
 [workspace.package]
+# To build revisions that use Corrosion (those before 2024-01), CMake 3.19 and Rustc 1.78 seem to work.
 rust-version = "1.70"
 edition = "2021"
 
@@ -10,9 +11,13 @@ edition = "2021"
 overflow-checks = true
 lto = true
 
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
 [package]
 name = "fish"
-version = "0.1.0"
+version = "4.0.0-beta.1"
 edition.workspace = true
 rust-version.workspace = true
 default-run = "fish"
@@ -30,8 +35,7 @@ pcre2 = { git = "https://github.com/fish-shell/rust-pcre2", tag = "0.2.9-utf32",
 
 bitflags = "2.5.0"
 errno = "0.3.0"
-lazy_static = "1.4.0"
-libc = "0.2.155"
+libc = "0.2"
 # lru pulls in hashbrown by default, which uses a faster (though less DoS resistant) hashing algo.
 # disabling default features uses the stdlib instead, but it doubles the time to rewrite the history
 # files as of 22 April 2024.
@@ -53,6 +57,7 @@ rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 widestring = "1.1.0"
 # We need 0.9.0 specifically for some crash fixes.
 terminfo = "0.9.0"
+rust-embed = { version = "8.2.0", optional = true }
 
 [target.'cfg(not(target_has_atomic = "64"))'.dependencies]
 portable-atomic = { version = "1", default-features = false, features = [
@@ -60,7 +65,7 @@ portable-atomic = { version = "1", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-serial_test = { version = "1.0.0", default-features = false }
+serial_test = { version = "3", default-features = false }
 
 [build-dependencies]
 cc = "1.0.94"
@@ -83,8 +88,9 @@ name = "fish_key_reader"
 path = "src/bin/fish_key_reader.rs"
 
 [features]
-default = []
+default = ["installable"]
 benchmark = []
+installable = ["dep:rust-embed"]
 
 # The following features are auto-detected by the build-script and should not be enabled manually.
 asan = []
@@ -97,3 +103,4 @@ rust.unknown_lints = "allow"
 rust.unstable_name_collisions = "allow"
 clippy.manual_range_contains = "allow"
 clippy.needless_return = "allow"
+clippy.needless_lifetimes = "allow"

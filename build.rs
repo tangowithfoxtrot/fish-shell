@@ -29,13 +29,25 @@ fn main() {
             .unwrap(),
     );
 
+    // Some build info
+    rsconf::set_env_value("BUILD_TARGET_TRIPLE", &env::var("TARGET").unwrap());
+    rsconf::set_env_value("BUILD_HOST_TRIPLE", &env::var("HOST").unwrap());
+    rsconf::set_env_value("BUILD_PROFILE", &env::var("PROFILE").unwrap());
+
+    let version = &get_version(&env::current_dir().unwrap());
     // Per https://doc.rust-lang.org/cargo/reference/build-scripts.html#inputs-to-the-build-script,
     // the source directory is the current working directory of the build script
-    rsconf::set_env_value(
-        "FISH_BUILD_VERSION",
-        &get_version(&env::current_dir().unwrap()),
-    );
+    rsconf::set_env_value("FISH_BUILD_VERSION", version);
 
+    std::env::set_var("FISH_BUILD_VERSION", version);
+
+    #[cfg(feature = "installable")]
+    #[cfg(not(clippy))]
+    {
+        let cman = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let targetman = cman.as_path().join("target").join("man");
+        build_man(&targetman);
+    }
     rsconf::rebuild_if_path_changed("src/libc.c");
     cc::Build::new()
         .file("src/libc.c")
@@ -215,7 +227,7 @@ fn has_small_stack(_: &Target) -> Result<bool, Box<dyn Error>> {
 }
 
 fn setup_paths() {
-    fn get_path(name: &str, default: &str, onvar: PathBuf) -> PathBuf {
+    fn get_path(name: &str, default: &str, onvar: &Path) -> PathBuf {
         let mut var = PathBuf::from(env::var(name).unwrap_or(default.to_string()));
         if var.is_relative() {
             var = onvar.join(var);
@@ -223,30 +235,51 @@ fn setup_paths() {
         var
     }
 
-    let prefix = PathBuf::from(env::var("PREFIX").unwrap_or("/usr/local".to_string()));
-    if prefix.is_relative() {
+    let (prefix_from_home, prefix) = if let Ok(pre) = env::var("PREFIX") {
+        (false, PathBuf::from(pre))
+    } else {
+        (true, PathBuf::from(".local/"))
+    };
+
+    // If someone gives us a $PREFIX, we need it to be absolute.
+    // Otherwise we would try to get it from $HOME and that won't really work.
+    if !prefix_from_home && prefix.is_relative() {
         panic!("Can't have relative prefix");
     }
+
     rsconf::rebuild_if_env_changed("PREFIX");
     rsconf::set_env_value("PREFIX", prefix.to_str().unwrap());
 
-    let datadir = get_path("DATADIR", "share/", prefix.clone());
+    let datadir = get_path("DATADIR", "share/", &prefix);
     rsconf::set_env_value("DATADIR", datadir.to_str().unwrap());
     rsconf::rebuild_if_env_changed("DATADIR");
 
-    let bindir = get_path("BINDIR", "bin/", prefix.clone());
+    let datadir_subdir = if prefix_from_home {
+        "fish/install"
+    } else {
+        "fish"
+    };
+    rsconf::set_env_value("DATADIR_SUBDIR", datadir_subdir);
+
+    let bindir = get_path("BINDIR", "bin/", &prefix);
     rsconf::set_env_value("BINDIR", bindir.to_str().unwrap());
     rsconf::rebuild_if_env_changed("BINDIR");
 
-    let sysconfdir = get_path("SYSCONFDIR", "etc/", datadir.clone());
+    let sysconfdir = get_path(
+        "SYSCONFDIR",
+        // If we get our prefix from $HOME, we should use the system's /etc/
+        // ~/.local/share/etc/ makes no sense
+        if prefix_from_home { "/etc/" } else { "etc/" },
+        &datadir,
+    );
     rsconf::set_env_value("SYSCONFDIR", sysconfdir.to_str().unwrap());
     rsconf::rebuild_if_env_changed("SYSCONFDIR");
 
-    let localedir = get_path("LOCALEDIR", "locale/", datadir.clone());
+    let localedir = get_path("LOCALEDIR", "locale/", &datadir);
     rsconf::set_env_value("LOCALEDIR", localedir.to_str().unwrap());
     rsconf::rebuild_if_env_changed("LOCALEDIR");
 
-    let docdir = get_path("DOCDIR", "doc/fish", datadir.clone());
+    let docdir = get_path("DOCDIR", "doc/fish", &datadir);
     rsconf::set_env_value("DOCDIR", docdir.to_str().unwrap());
     rsconf::rebuild_if_env_changed("DOCDIR");
 }
@@ -259,7 +292,7 @@ fn get_version(src_dir: &Path) -> String {
         return var;
     }
 
-    let path = PathBuf::from(src_dir).join("version");
+    let path = src_dir.join("version");
     if let Ok(strver) = read_to_string(path) {
         return strver.to_string();
     }
@@ -270,7 +303,7 @@ fn get_version(src_dir: &Path) -> String {
         if !rev.is_empty() {
             // If it contains a ".", we have a proper version like "3.7",
             // or "23.2.1-1234-gfab1234"
-            if rev.contains(".") {
+            if rev.contains('.') {
                 return rev;
             }
             // If it doesn't, we probably got *just* the commit SHA,
@@ -283,7 +316,117 @@ fn get_version(src_dir: &Path) -> String {
             return version + "-g" + &rev;
         }
     }
-    // TODO: Do we just use the cargo version here?
 
-    "unknown".to_string()
+    // git did not tell us a SHA either because it isn't installed,
+    // or because it refused (safe.directory applies to `git describe`!)
+    // So we read the SHA ourselves.
+    fn get_git_hash() -> Result<String, Box<dyn std::error::Error>> {
+        let gitdir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".git");
+        let jjdir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".jj");
+        let commit_id = if gitdir.exists() {
+            // .git/HEAD contains ref: refs/heads/branch
+            let headpath = gitdir.join("HEAD");
+            let headstr = read_to_string(headpath)?;
+            let headref = headstr.split(' ').collect::<Vec<_>>()[1].trim();
+
+            // .git/refs/heads/branch contains the SHA
+            let refpath = gitdir.join(headref);
+            // Shorten to 9 characters (what git describe does currently)
+            read_to_string(refpath)?
+        } else if jjdir.exists() {
+            let output = Command::new("jj")
+                .args([
+                    "log",
+                    "--revisions",
+                    "@",
+                    "--no-graph",
+                    "--ignore-working-copy",
+                    "--template",
+                    "commit_id",
+                ])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&output.stdout).to_string()
+        } else {
+            return Err("did not find either of .git or .jj".into());
+        };
+        let refstr = &commit_id[0..9];
+        let refstr = refstr.trim();
+
+        let version = env!("CARGO_PKG_VERSION").to_owned();
+        Ok(version + "-g" + refstr)
+    }
+
+    get_git_hash().expect("Could not get a version. Either set $FISH_BUILD_VERSION or install git.")
+}
+
+#[cfg(feature = "installable")]
+// disable clippy because otherwise it would panic without sphinx
+#[cfg(not(clippy))]
+fn build_man(build_dir: &Path) {
+    use std::process::Command;
+    let mandir = build_dir;
+    let sec1dir = mandir.join("man1");
+    let docsrc_path = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+        .unwrap()
+        .as_path()
+        .join("doc_src");
+    let docsrc = docsrc_path.to_str().unwrap();
+    let args = &[
+        "-j",
+        "auto",
+        "-q",
+        "-b",
+        "man",
+        "-c",
+        docsrc,
+        // doctree path - put this *above* the man1 dir to exclude it.
+        // this is ~6M
+        "-d",
+        mandir.to_str().unwrap(),
+        docsrc,
+        sec1dir.to_str().unwrap(),
+    ];
+    let _ = std::fs::create_dir_all(sec1dir.to_str().unwrap());
+
+    rsconf::rebuild_if_env_changed("FISH_BUILD_DOCS");
+    if env::var("FISH_BUILD_DOCS") == Ok("0".to_string()) {
+        println!("cargo:warning=Skipping man pages because $FISH_BUILD_DOCS is set to 0");
+        return;
+    }
+
+    // We run sphinx to build the man pages.
+    // Every error here is fatal so cargo doesn't cache the result
+    // - if we skipped the docs with sphinx not installed, installing it would not then build the docs.
+    // That means you need to explicitly set $FISH_BUILD_DOCS=0 (`FISH_BUILD_DOCS=0 cargo install --path .`),
+    // which is unfortunate - but the docs are pretty important because they're also used for --help.
+    match Command::new("sphinx-build").args(args).spawn() {
+        Err(x) if x.kind() == std::io::ErrorKind::NotFound => {
+            if env::var("FISH_BUILD_DOCS") == Ok("1".to_string()) {
+                panic!("Could not find sphinx-build to build man pages.\nInstall sphinx or disable building the docs by setting $FISH_BUILD_DOCS=0.");
+            }
+            println!("cargo:warning=Cannot find sphinx-build to build man pages.");
+            println!("cargo:warning=If you install it now you need to run `cargo clean` and rebuild, or set $FISH_BUILD_DOCS=1 explicitly.");
+        }
+        Err(x) => {
+            // Another error - permissions wrong etc
+            panic!("Error starting sphinx-build to build man pages: {:?}", x);
+        }
+        Ok(mut x) => match x.wait() {
+            Err(err) => {
+                panic!(
+                    "Error waiting for sphinx-build to build man pages: {:?}",
+                    err
+                );
+            }
+            Ok(out) => {
+                if out.success() {
+                    // Success!
+                    return;
+                } else {
+                    panic!("sphinx-build failed to build the man pages.");
+                }
+            }
+        },
+    }
 }

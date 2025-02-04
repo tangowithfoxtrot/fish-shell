@@ -39,16 +39,16 @@ endmacro()
 function(_findrust_version_ok ACTUAL_VERSION OUT_IS_OK)
     if(DEFINED Rust_FIND_VERSION_RANGE)
         if(Rust_FIND_VERSION_RANGE_MAX STREQUAL "INCLUDE")
-            set(COMPARSION_OPERATOR "VERSION_LESS_EQUAL")
+            set(COMPARISON_OPERATOR "VERSION_LESS_EQUAL")
         elseif(Rust_FIND_VERSION_RANGE_MAX STREQUAL "EXCLUDE")
-            set(COMPARSION_OPERATOR "VERSION_LESS")
+            set(COMPARISON_OPERATOR "VERSION_LESS")
         else()
             message(FATAL_ERROR "Unexpected value in `<PackageName>_FIND_VERSION_RANGE_MAX`: "
                     "`${Rust_FIND_VERSION_RANGE_MAX}`.")
         endif()
         if(("${ACTUAL_VERSION}" VERSION_GREATER_EQUAL "${Rust_FIND_VERSION_RANGE_MIN}")
                 AND
-            ( "${ACTUAL_VERSION}" ${COMPARSION_OPERATOR} "${Rust_FIND_VERSION_RANGE_MAX}" )
+            ( "${ACTUAL_VERSION}" ${COMPARISON_OPERATOR} "${Rust_FIND_VERSION_RANGE_MAX}" )
         )
             set("${OUT_IS_OK}" TRUE PARENT_SCOPE)
         else()
@@ -265,18 +265,6 @@ else()
     endif()
 
     if (_RUSTC_VERSION_RAW MATCHES "rustup [0-9\\.]+")
-        if (_USER_SPECIFIED_RUSTC)
-            message(
-                WARNING "User-specified Rust_COMPILER pointed to rustup's rustc proxy. Corrosion's "
-                "FindRust will always try to evaluate to an actual Rust toolchain, and so the "
-                "user-specified Rust_COMPILER will be discarded in favor of the default "
-                "rustup-managed toolchain."
-            )
-
-            unset(Rust_COMPILER)
-            unset(Rust_COMPILER CACHE)
-        endif()
-
         # Get `rustup` next to the `rustc` proxy
         get_filename_component(_RUST_PROXIES_PATH "${_Rust_COMPILER_TEST}" DIRECTORY)
         find_program(Rust_RUSTUP rustup HINTS "${_RUST_PROXIES_PATH}" NO_DEFAULT_PATH)

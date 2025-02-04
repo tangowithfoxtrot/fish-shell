@@ -37,11 +37,12 @@ use portable_atomic::AtomicU64;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::fs;
 use std::io::{Read, Write};
+use std::num::NonZeroU32;
 use std::os::fd::RawFd;
 use std::rc::Rc;
 #[cfg(target_has_atomic = "64")]
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 /// Types of processes.
@@ -232,14 +233,14 @@ impl ProcStatus {
     }
 
     /// Return the exit code, given that we normal exited.
-    pub fn exit_code(&self) -> libc::c_int {
+    pub fn exit_code(&self) -> u8 {
         assert!(self.normal_exited(), "Process is not normal exited");
-        WEXITSTATUS(self.status())
+        u8::try_from(WEXITSTATUS(self.status()) & 0xff).unwrap() // Workaround for libc bug
     }
 
     /// Return if this status represents success.
     pub fn is_success(&self) -> bool {
-        self.normal_exited() && self.exit_code() == EXIT_SUCCESS
+        self.normal_exited() && self.exit_code() == u8::try_from(EXIT_SUCCESS).unwrap()
     }
 
     /// Return the value appropriate to populate $status.
@@ -247,7 +248,7 @@ impl ProcStatus {
         if self.signal_exited() {
             128 + self.signal_code()
         } else if self.normal_exited() {
-            self.exit_code()
+            i32::from(self.exit_code())
         } else {
             panic!("Process is not exited")
         }
@@ -308,12 +309,6 @@ impl InternalProc {
     }
 }
 
-/// 0 should not be used; although it is not a valid PGID in userspace,
-///   the Linux kernel will use it for kernel processes.
-/// -1 should not be used; it is a possible return value of the getpgid()
-///   function
-pub const INVALID_PID: i32 = -2;
-
 // Allows transferring the tty to a job group, while it runs.
 #[derive(Default)]
 pub struct TtyTransfer {
@@ -366,11 +361,13 @@ impl TtyTransfer {
 
         // Get the pgid; we must have one if we want the terminal.
         let pgid = jg.get_pgid().unwrap();
-        assert!(pgid >= 0, "Invalid pgid");
 
         // It should never be fish's pgroup.
-        let fish_pgrp = unsafe { libc::getpgrp() };
-        assert!(pgid != fish_pgrp, "Job should not have fish's pgroup");
+        let fish_pgrp = crate::nix::getpgrp();
+        assert!(
+            pgid.as_pid_t() != fish_pgrp,
+            "Job should not have fish's pgroup"
+        );
 
         // Ok, we want to transfer to the child.
         // Note it is important to be very careful about calling tcsetpgrp()!
@@ -380,7 +377,7 @@ impl TtyTransfer {
         //   1. There is no tty at all (tcgetpgrp() returns -1). For example running from a pure script.
         //      Of course do not transfer it in that case.
         //   2. The tty is owned by the process. This comes about often, as the process will call
-        //      tcsetpgrp() on itself between fork ane exec. This is the essential race inherent in
+        //      tcsetpgrp() on itself between fork and exec. This is the essential race inherent in
         //      tcsetpgrp(). In this case we want to reclaim the tty, but do not need to transfer it
         //      ourselves since the child won the race.
         //   3. The tty is owned by a different process. This may come about if fish is running in the
@@ -390,10 +387,10 @@ impl TtyTransfer {
         if current_owner < 0 {
             // Case 1.
             return false;
-        } else if current_owner == pgid {
+        } else if current_owner == pgid.get() {
             // Case 2.
             return true;
-        } else if current_owner != pgid && current_owner != fish_pgrp {
+        } else if current_owner != pgid.get() && current_owner != fish_pgrp {
             // Case 3.
             return false;
         }
@@ -408,7 +405,7 @@ impl TtyTransfer {
         // 4.4.0), EPERM does indeed disappear on retry. The important thing is that we can
         // guarantee the process isn't going to exit while we wait (which would cause us to possibly
         // block indefinitely).
-        while unsafe { libc::tcsetpgrp(STDIN_FILENO, pgid) } != 0 {
+        while unsafe { libc::tcsetpgrp(STDIN_FILENO, pgid.as_pid_t()) } != 0 {
             FLOGF!(proc_termowner, "tcsetpgrp failed: %d", errno::errno().0);
 
             // Before anything else, make sure that it's even necessary to call tcsetpgrp.
@@ -434,7 +431,7 @@ impl TtyTransfer {
                     }
                 }
             }
-            if getpgrp_res == pgid {
+            if getpgrp_res == pgid.get() {
                 FLOGF!(
                     proc_termowner,
                     "Process group %d already has control of terminal",
@@ -452,7 +449,7 @@ impl TtyTransfer {
             } else if errno::errno().0 == EPERM {
                 // Retry so long as this isn't because the process group is dead.
                 let mut result: libc::c_int = 0;
-                let wait_result = unsafe { libc::waitpid(-pgid, &mut result, WNOHANG) };
+                let wait_result = unsafe { libc::waitpid(-pgid.as_pid_t(), &mut result, WNOHANG) };
                 if wait_result == -1 {
                     // Note that -1 is technically an "error" for waitpid in the sense that an
                     // invalid argument was specified because no such process group exists any
@@ -513,6 +510,65 @@ impl Drop for TtyTransfer {
     }
 }
 
+/// A type-safe equivalent to [`libc::pid_t`].
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct Pid(NonZeroU32);
+
+impl Pid {
+    #[inline(always)]
+    pub fn new(pid: i32) -> Option<Pid> {
+        // Construct a pid from an i32, which must be at least zero.
+        assert!(pid >= 0, "Pid must be at least zero");
+        NonZeroU32::new(pid as u32).map(Pid)
+    }
+    #[inline(always)]
+    pub fn get(&self) -> i32 {
+        self.0.get() as i32
+    }
+    #[inline(always)]
+    pub fn as_pid_t(&self) -> libc::pid_t {
+        #[allow(clippy::useless_conversion)]
+        self.get().into()
+    }
+}
+
+impl std::fmt::Display for Pid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.get(), f)
+    }
+}
+
+impl ToWString for Pid {
+    fn to_wstring(&self) -> WString {
+        self.get().to_wstring()
+    }
+}
+
+impl fish_printf::ToArg<'static> for Pid {
+    fn to_arg(self) -> fish_printf::Arg<'static> {
+        self.get().to_arg()
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct AtomicPid(AtomicU32);
+
+impl AtomicPid {
+    #[inline(always)]
+    pub fn load(&self) -> Option<Pid> {
+        Pid::new(self.0.load(Ordering::Relaxed) as i32)
+    }
+    #[inline(always)]
+    pub fn store(&self, pid: Pid) {
+        self.0.store(pid.get() as u32, Ordering::Relaxed);
+    }
+    #[inline(always)]
+    pub fn swap(&self, pid: Pid) -> Option<Pid> {
+        Pid::new(self.0.swap(pid.get() as u32, Ordering::Relaxed) as i32)
+    }
+}
+
 /// A structure representing a single fish process. Contains variables for tracking process state
 /// and the process argument list. Actually, a fish process can be either a regular external
 /// process, an internal builtin which may or may not spawn a fake IO process during execution, a
@@ -557,9 +613,8 @@ pub struct Process {
     /// Generation counts for reaping.
     pub gens: GenerationsList,
 
-    /// Process ID, represented as an AtomicI32. This is actually an Option<AtomicNonZeroI32> with a
-    /// value of zero representing `None`.
-    pub pid: AtomicI32,
+    /// Process ID or `None` where not available.
+    pub pid: AtomicPid,
 
     /// If we are an "internal process," that process.
     pub internal_proc: RefCell<Option<Arc<InternalProc>>>,
@@ -620,26 +675,22 @@ impl Process {
         Default::default()
     }
 
-    /// Retrieves the associated [`libc::pid_t`], 0 if unset.
-    ///
-    /// See [`Process::has_pid()]` to safely check if the process has a pid.
-    pub fn pid(&self) -> libc::pid_t {
-        let value = self.pid.load(Ordering::Relaxed);
-        #[allow(clippy::useless_conversion)]
-        value.into()
+    /// Retrieves the associated [`libc::pid_t`], `None` if unset.
+    #[inline(always)]
+    pub fn pid(&self) -> Option<Pid> {
+        self.pid.load()
     }
 
+    #[inline(always)]
     pub fn has_pid(&self) -> bool {
-        let value = self.pid.load(Ordering::Relaxed);
-        value != 0
+        self.pid().is_some()
     }
 
     /// Sets the process' pid. Panics if a pid has already been set.
     pub fn set_pid(&self, pid: libc::pid_t) {
-        assert!(pid != 0, "Invalid pid of 0 passed to Process::set_pid()");
-        assert!(pid >= 0);
-        let old = self.pid.swap(pid, Ordering::Relaxed);
-        assert!(old == 0, "Process::set_pid() called more than once!");
+        let pid = Pid::new(pid).expect("Invalid pid passed to Process::set_pid()");
+        let old = self.pid.swap(pid);
+        assert!(old.is_none(), "Process::set_pid() called more than once!");
     }
 
     /// Sets argv.
@@ -713,13 +764,13 @@ impl Process {
     /// As a process does not know its job id, we pass it in.
     /// Note this will return null if the process is not waitable (has no pid).
     pub fn make_wait_handle(&self, jid: InternalJobId) -> Option<WaitHandleRef> {
-        if self.typ != ProcessType::external || self.pid.load(Ordering::Relaxed) <= 0 {
+        if self.typ != ProcessType::external || self.pid().is_none() {
             // Not waitable.
             None
         } else {
             if self.wait_handle.borrow().is_none() {
                 self.wait_handle.replace(Some(WaitHandle::new(
-                    self.pid(),
+                    self.pid().unwrap(),
                     jid,
                     wbasename(&self.actual_cmd.clone()).to_owned(),
                 )));
@@ -826,6 +877,14 @@ impl Job {
         &mut self.processes
     }
 
+    /// A read-only view of external processes running in the job's process list.
+    ///
+    /// Equivalent to `processes().iter().filter(|p| p.pid.is_some())`.
+    #[inline(always)]
+    pub fn external_procs(&self) -> impl Iterator<Item = &ProcessPtr> {
+        self.processes.iter().filter(|p| p.pid.load().is_some())
+    }
+
     /// Return whether it is OK to reap a given process. Sometimes we want to defer reaping a
     /// process if it is the group leader and the job is not yet constructed, because then we might
     /// also reap the process group and then we cannot add new processes to the group.
@@ -834,7 +893,7 @@ impl Job {
             // Can't reap twice.
             p.is_completed() ||
             // Can't reap the group leader in an under-construction job.
-            (p.has_pid() && !self.is_constructed() && self.get_pgid() == Some(p.pid()))
+            (!self.is_constructed() && self.get_pgid() == p.pid())
         )
     }
 
@@ -855,19 +914,17 @@ impl Job {
 
     /// Return our pgid, or none if we don't have one, or are internal to fish
     /// This never returns fish's own pgroup.
-    pub fn get_pgid(&self) -> Option<libc::pid_t> {
+    pub fn get_pgid(&self) -> Option<Pid> {
         self.group().get_pgid()
     }
 
     /// Return the pid of the last external process in the job.
     /// This may be none if the job consists of just internal fish functions or builtins.
     /// This will never be fish's own pid.
-    pub fn get_last_pid(&self) -> Option<libc::pid_t> {
-        self.processes()
-            .iter()
-            .rev()
-            .find(|proc| proc.has_pid())
-            .map(|proc| proc.pid())
+    pub fn get_last_pid(&self) -> Option<Pid> {
+        self.external_procs()
+            .last()
+            .and_then(|proc| proc.pid.load())
     }
 
     /// The id of this job.
@@ -1036,7 +1093,7 @@ impl Job {
     /// Return true on success, false on failure.
     pub fn signal(&self, signal: i32) -> bool {
         if let Some(pgid) = self.group().get_pgid() {
-            if unsafe { libc::killpg(pgid, signal) } == -1 {
+            if unsafe { libc::killpg(pgid.as_pid_t(), signal) } == -1 {
                 let strsignal = unsafe { libc::strsignal(signal) };
                 let strsignal = if strsignal.is_null() {
                     L!("(nil)").to_owned()
@@ -1048,8 +1105,9 @@ impl Job {
             }
         } else {
             // This job lives in fish's pgroup and we need to signal procs individually.
-            for p in self.processes().iter() {
-                if !p.is_completed() && p.has_pid() && unsafe { libc::kill(p.pid(), signal) } == -1
+            for p in self.external_procs() {
+                if !p.is_completed()
+                    && unsafe { libc::kill(p.pid().unwrap().as_pid_t(), signal) } == -1
                 {
                     return false;
                 }
@@ -1186,7 +1244,13 @@ pub fn print_exit_warning_for_jobs(jobs: &JobList) {
     printf!("%s", wgettext!("There are still jobs active:\n"));
     printf!("%s", wgettext!("\n   PID  Command\n"));
     for j in jobs {
-        printf!("%6d  %ls\n", j.processes()[0].pid(), j.command());
+        // Unwrap safety: we can't have a background job that doesn't have an external process and
+        // external processes always have a pid set.
+        printf!(
+            "%6d  %ls\n",
+            j.external_procs().next().and_then(|p| p.pid()).unwrap(),
+            j.command()
+        );
     }
     printf!("\n");
     printf!(
@@ -1202,8 +1266,8 @@ pub fn print_exit_warning_for_jobs(jobs: &JobList) {
 
 /// Use the procfs filesystem to look up how many jiffies of cpu time was used by a given pid. This
 /// function is only available on systems with the procfs file entry 'stat', i.e. Linux.
-pub fn proc_get_jiffies(inpid: libc::pid_t) -> ClockTicks {
-    if inpid <= 0 || !have_proc_stat() {
+pub fn proc_get_jiffies(inpid: Pid) -> ClockTicks {
+    if !have_proc_stat() {
         return 0;
     }
 
@@ -1238,10 +1302,10 @@ pub fn proc_get_jiffies(inpid: libc::pid_t) -> ClockTicks {
 /// process of every job.
 pub fn proc_update_jiffies(parser: &Parser) {
     for job in parser.jobs().iter() {
-        for p in job.processes.iter() {
+        for p in job.external_procs() {
             p.last_times.replace(ProcTimes {
                 time: timef(),
-                jiffies: proc_get_jiffies(p.pid.load(Ordering::Relaxed)),
+                jiffies: proc_get_jiffies(p.pid.load().unwrap()),
             });
         }
     }
@@ -1299,11 +1363,11 @@ pub fn proc_wait_any(parser: &Parser) {
 
 /// Send SIGHUP to the list `jobs`, excepting those which are in fish's pgroup.
 pub fn hup_jobs(jobs: &JobList) {
-    let fish_pgrp = unsafe { libc::getpgrp() };
+    let fish_pgrp = crate::nix::getpgrp();
     let mut kill_list = Vec::new();
     for j in jobs {
         let Some(pgid) = j.get_pgid() else { continue };
-        if pgid != fish_pgrp && !j.is_completed() {
+        if pgid.as_pid_t() != fish_pgrp && !j.is_completed() {
             j.signal(SIGHUP);
             if j.is_stopped() {
                 j.signal(SIGCONT);
@@ -1339,10 +1403,8 @@ pub fn hup_jobs(jobs: &JobList) {
 /// jobs. Used to avoid zombie processes after disown.
 pub fn add_disowned_job(j: &Job) {
     let mut disowned_pids = DISOWNED_PIDS.get().borrow_mut();
-    for process in j.processes().iter() {
-        if process.has_pid() {
-            disowned_pids.push(process.pid());
-        }
+    for process in j.external_procs() {
+        disowned_pids.push(process.pid().unwrap());
     }
 }
 
@@ -1353,7 +1415,7 @@ fn reap_disowned_pids() {
     // if it has changed or an error occurs (presumably ECHILD because the child does not exist)
     disowned_pids.retain(|pid| {
         let mut status: libc::c_int = 0;
-        let ret = unsafe { libc::waitpid(*pid, &mut status, WNOHANG) };
+        let ret = unsafe { libc::waitpid(pid.as_pid_t(), &mut status, WNOHANG) };
         if ret > 0 {
             FLOGF!(proc_reap_external, "Reaped disowned PID or PGID %d", pid);
         }
@@ -1363,8 +1425,7 @@ fn reap_disowned_pids() {
 
 /// A list of pids that have been disowned. They are kept around until either they exit or
 /// we exit. Poll these from time-to-time to prevent zombie processes from happening (#5342).
-static DISOWNED_PIDS: MainThread<RefCell<Vec<libc::pid_t>>> =
-    MainThread::new(RefCell::new(Vec::new()));
+static DISOWNED_PIDS: MainThread<RefCell<Vec<Pid>>> = MainThread::new(RefCell::new(Vec::new()));
 
 /// See if any reapable processes have exited, and mark them accordingly.
 /// \param block_ok if no reapable processes have exited, block until one is (or until we receive a
@@ -1407,9 +1468,9 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool) {
     // We structure this as two loops for some simplicity.
     // First reap all pids.
     for j in parser.jobs().iter() {
-        for proc in j.processes.iter() {
-            // Does this proc have a pid that is reapable?
-            if proc.pid.load(Ordering::Relaxed) <= 0 || !j.can_reap(proc) {
+        for proc in j.external_procs() {
+            // It's an external proc so it has a pid, but is it reapable?
+            if !j.can_reap(proc) {
                 continue;
             }
 
@@ -1425,12 +1486,16 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool) {
             // Ok, we are reapable. Run waitpid()!
             let mut statusv: libc::c_int = -1;
             let pid = unsafe {
-                libc::waitpid(proc.pid(), &mut statusv, WNOHANG | WUNTRACED | WCONTINUED)
+                libc::waitpid(
+                    proc.pid().unwrap().as_pid_t(),
+                    &mut statusv,
+                    WNOHANG | WUNTRACED | WCONTINUED,
+                )
             };
-            assert!(pid <= 0 || pid == proc.pid(), "Unexpected waitpid() return");
-            if pid <= 0 {
+            let Some(pid) = Pid::new(pid) else {
                 continue;
-            }
+            };
+            assert!(pid == proc.pid().unwrap(), "Unexpected waitpid() return");
 
             // The process has stopped or exited! Update its status.
             let status = ProcStatus::from_waitpid(statusv);
@@ -1455,7 +1520,7 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool) {
                     proc_reap_external,
                     "External process '%ls' (pid %d, %s)",
                     proc.argv0().unwrap(),
-                    proc.pid(),
+                    proc.pid().unwrap(),
                     if proc.status.stopped() {
                         "stopped"
                     } else {
@@ -1515,10 +1580,13 @@ fn generate_process_exit_events(j: &Job, out_evts: &mut Vec<Event>) {
     // Historically we have avoided generating events for foreground jobs from event handlers, as an
     // event handler may itself produce a new event.
     if !j.from_event_handler() || !j.is_foreground() {
-        for p in j.processes().iter() {
-            if p.has_pid() && p.is_completed() && !p.posted_proc_exit.load() {
+        for p in j.external_procs() {
+            if p.is_completed() && !p.posted_proc_exit.load() {
                 p.posted_proc_exit.store(true);
-                out_evts.push(Event::process_exit(p.pid(), p.status.status_value()));
+                out_evts.push(Event::process_exit(
+                    p.pid().unwrap(),
+                    p.status.status_value(),
+                ));
             }
         }
     }
@@ -1635,8 +1703,11 @@ fn summary_command(j: &Job, p: Option<&Process>) -> WString {
             buffer += &escape(sig.desc())[..];
 
             // If we have multiple processes, we also append the pid and argv.
-            if j.processes().len() > 1 {
-                buffer += &sprintf!(" %d", p.pid())[..];
+            if j.external_procs().count() > 1 {
+                // I don't think it's safe to blindly unwrap here because even though we exited with
+                // a signal, the job could have contained a fish function?
+                let pid = p.pid().map(|p| p.to_string()).unwrap_or("-".to_string());
+                buffer += &sprintf!(" %s", pid)[..];
 
                 buffer.push(' ');
                 buffer += &escape(p.argv0().unwrap())[..];

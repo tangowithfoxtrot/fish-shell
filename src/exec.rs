@@ -36,8 +36,8 @@ use crate::null_terminated_array::{
 use crate::parser::{Block, BlockId, BlockType, EvalRes, Parser};
 use crate::proc::{
     hup_jobs, is_interactive_session, jobs_requiring_warning_on_exit, no_exec,
-    print_exit_warning_for_jobs, InternalProc, Job, JobGroupRef, ProcStatus, Process, ProcessType,
-    TtyTransfer, INVALID_PID,
+    print_exit_warning_for_jobs, InternalProc, Job, JobGroupRef, Pid, ProcStatus, Process,
+    ProcessType, TtyTransfer,
 };
 use crate::reader::{reader_run_count, restore_term_mode};
 use crate::redirection::{dup2_list_resolve_chain, Dup2List};
@@ -56,6 +56,7 @@ use nix::fcntl::OFlag;
 use nix::sys::stat;
 use std::ffi::CStr;
 use std::io::{Read, Write};
+use std::num::NonZeroU32;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::slice;
 use std::sync::atomic::Ordering;
@@ -69,10 +70,6 @@ pub fn exec_job(parser: &Parser, job: &Job, block_io: IoChain) -> bool {
     // If fish was invoked with -n or --no-execute, then no_exec will be set and we do nothing.
     if no_exec() {
         return true;
-    }
-
-    if job.entitled_to_terminal() {
-        crate::input_common::terminal_protocols_disable_ifn();
     }
 
     // Handle an exec call.
@@ -491,7 +488,7 @@ fn internal_exec(vars: &EnvStack, j: &Job, block_io: IoChain) {
     // child_setup_process makes sure signals are properly set up.
     let redirs = dup2_list_resolve_chain(&all_ios);
     if child_setup_process(
-        0, /* not claim_tty */
+        None, /* not claim_tty */
         blocked_signals,
         false, /* not is_forked */
         &redirs,
@@ -607,7 +604,7 @@ fn run_internal_process(p: &Process, outdata: Vec<u8>, errdata: Vec<u8>, ios: &I
         let mut status = f.success_status.clone();
         if !f.skip_out() {
             if let Err(err) = write_loop(&f.src_outfd, &f.outdata) {
-                if err.raw_os_error().unwrap() != EPIPE {
+                if err.raw_os_error() != Some(EPIPE) {
                     perror("write");
                 }
                 if status.is_success() {
@@ -617,7 +614,7 @@ fn run_internal_process(p: &Process, outdata: Vec<u8>, errdata: Vec<u8>, ios: &I
         }
         if !f.skip_err() {
             if let Err(err) = write_loop(&f.src_errfd, &f.errdata) {
-                if err.raw_os_error().unwrap() != EPIPE {
+                if err.raw_os_error() != Some(EPIPE) {
                     perror("write");
                 }
                 if status.is_success() {
@@ -677,9 +674,10 @@ fn fork_child_for_process(
 ) -> LaunchResult {
     // Claim the tty from fish, if the job wants it and we are the pgroup leader.
     let claim_tty_from = if p.leads_pgrp && job.group().wants_terminal() {
-        unsafe { libc::getpgrp() }
+        // getpgrp(2) cannot fail and always returns the (positive) caller's pgid
+        Some(NonZeroU32::new(crate::nix::getpgrp() as u32).unwrap())
     } else {
-        INVALID_PID
+        None
     };
 
     // Decide if the job wants to set a custom sigmask.
@@ -704,22 +702,20 @@ fn fork_child_for_process(
 
     // Record the pgroup if this is the leader.
     // Both parent and child attempt to send the process to its new group, to resolve the race.
-    p.set_pid(if is_parent {
-        pid
-    } else {
-        unsafe { libc::getpid() }
-    });
+    let pid = if is_parent { pid } else { crate::nix::getpid() };
+    p.set_pid(pid);
     if p.leads_pgrp {
         job.group().set_pgid(pid);
     }
     {
+        let pid = p.pid().unwrap();
         if let Some(pgid) = job.group().get_pgid() {
-            let err = execute_setpgid(p.pid(), pgid, is_parent);
+            let err = execute_setpgid(pid, pgid, is_parent);
             if err != 0 {
                 report_setpgid_error(
                     err,
                     is_parent,
-                    p.pid(),
+                    pid,
                     pgid,
                     job.job_id().as_num(),
                     &narrow_cmd,
@@ -766,7 +762,7 @@ fn create_output_stream_for_builtin(
         IoMode::bufferfill => {
             // Our IO redirection is to an internal buffer, e.g. a command substitution.
             // We will write directly to it.
-            let buffer = io.as_bufferfill().unwrap().buffer_ref();
+            let buffer = io.as_bufferfill().unwrap().buffer();
             OutputStream::Buffered(BufferedOutputStream::new(buffer.clone()))
         }
         IoMode::close => {
@@ -795,7 +791,6 @@ fn create_output_stream_for_builtin(
 
 /// Handle output from a builtin, by printing the contents of builtin_io_streams to the redirections
 /// given in io_chain.
-
 fn handle_builtin_output(
     parser: &Parser,
     j: &Job,
@@ -867,7 +862,7 @@ fn exec_external_command(
                 return Err(());
             }
         };
-        assert!(pid > 0, "Should have either a valid pid, or an error");
+        let pid = Pid::new(pid).expect("Should have either a valid pid, or an error");
 
         // This usleep can be used to test for various race conditions
         // (https://github.com/fish-shell/fish-shell/issues/360).
@@ -885,9 +880,9 @@ fn exec_external_command(
         );
 
         // these are all things do_fork() takes care of normally (for forked processes):
-        p.pid.store(pid, Ordering::Relaxed);
+        p.pid.store(pid);
         if p.leads_pgrp {
-            j.group().set_pgid(pid);
+            j.group().set_pgid(pid.as_pid_t());
             // posix_spawn should in principle set the pgid before returning.
             // In glibc, posix_spawn uses fork() and the pgid group is set on the child side;
             // therefore the parent may not have seen it be set yet.
@@ -1107,7 +1102,6 @@ fn get_performer_for_builtin(p: &Process, j: &Job, io_chain: &IoChain) -> Box<Pr
 
     // Pull out some fields which we want to copy. We don't want to store the process or job in the
     // returned closure.
-    let argv = p.argv().clone();
     let job_group = j.group.clone();
     let io_chain = io_chain.clone();
 
@@ -1115,7 +1109,7 @@ fn get_performer_for_builtin(p: &Process, j: &Job, io_chain: &IoChain) -> Box<Pr
     // thread.
     Box::new(
         move |parser: &Parser,
-              _p: &Process,
+              p: &Process,
               output_stream: Option<&mut OutputStream>,
               errput_stream: Option<&mut OutputStream>| {
             let output_stream = output_stream.unwrap();
@@ -1152,8 +1146,11 @@ fn get_performer_for_builtin(p: &Process, j: &Job, io_chain: &IoChain) -> Box<Pr
                 .unwrap_or(false);
 
             // Execute the builtin.
-            let mut shim_argv: Vec<&wstr> =
-                argv.iter().map(|s| truncate_at_nul(s.as_ref())).collect();
+            let mut shim_argv: Vec<&wstr> = p
+                .argv()
+                .iter()
+                .map(|s| truncate_at_nul(s.as_ref()))
+                .collect();
             builtin_run(parser, &mut shim_argv, &mut streams)
         },
     )
@@ -1324,7 +1321,7 @@ fn exec_process_in_job(
             exec_external_command(parser, j, p, &process_net_io_chain)?;
             // It's possible (though unlikely) that this is a background process which recycled a
             // pid from another, previous background process. Forget any such old process.
-            parser.mut_wait_handles().remove_by_pid(p.pid());
+            parser.mut_wait_handles().remove_by_pid(p.pid().unwrap());
             Ok(())
         }
         ProcessType::exec => {
@@ -1352,7 +1349,7 @@ fn get_deferred_process(j: &Job) -> Option<usize> {
         return None;
     }
 
-    // Find the last non-external process, and return it if it pipes into an extenal process.
+    // Find the last non-external process, and return it if it pipes into an external process.
     for (i, p) in j.processes().iter().enumerate().rev() {
         if p.typ != ProcessType::external {
             return if p.is_last_in_job { None } else { Some(i) };

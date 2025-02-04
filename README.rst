@@ -66,8 +66,7 @@ Windows
    for Linux with the instructions for the appropriate distribution
    listed above under “Packages for Linux”, or from source with the
    instructions below.
--  Fish can also be installed on all versions of Windows using
-   `Cygwin <https://cygwin.com/>`__ (from the **Shells** category).
+-  fish (4.0 on and onwards) cannot be installed in Cygwin, due to a lack of Rust support.
 
 Building from source
 ~~~~~~~~~~~~~~~~~~~~
@@ -121,33 +120,27 @@ Building
 Dependencies
 ~~~~~~~~~~~~
 
-Compiling fish from a tarball requires:
-
--  a C++11 compiler (g++ 4.8 or later, or clang 3.3 or later)
--  CMake (version 3.5 or later)
--  PCRE2 (headers and libraries) - optional, this will be downloaded if missing
--  gettext (headers and libraries) - optional, for translation support
-
-Sphinx is also optionally required to build the documentation from a
-cloned git repository.
-
-Additionally, running the test suite requires Python 3.5+ and the pexpect package.
-
-Dependencies, git master
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-Building from git master currently requires:
+Compiling fish requires:
 
 -  Rust (version 1.70 or later)
--  CMake (version 3.19 or later)
+-  CMake (version 3.15 or later)
 -  a C compiler (for system feature detection and the test helper binary)
 -  PCRE2 (headers and libraries) - optional, this will be downloaded if missing
 -  gettext (headers and libraries) - optional, for translation support
 -  an Internet connection, as other dependencies will be downloaded automatically
 
+Sphinx is also optionally required to build the documentation from a
+cloned git repository.
 
-Building from source (all platforms) - Makefile generator
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Additionally, running the full test suite requires Python 3, tmux, and the pexpect package.
+
+Building from source with CMake
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Rather than building from source, consider using a packaged build for your platform. Using the
+steps below makes fish difficult to uninstall or upgrade. Release packages are available from the
+links above, and up-to-date `development builds of fish are available for many platforms
+<https://github.com/fish-shell/fish-shell/wiki/Development-builds>`__
 
 To install into ``/usr/local``, run:
 
@@ -155,35 +148,50 @@ To install into ``/usr/local``, run:
 
    mkdir build; cd build
    cmake ..
-   make
-   sudo make install
+   cmake --build .
+   sudo cmake --install .
 
 The install directory can be changed using the
 ``-DCMAKE_INSTALL_PREFIX`` parameter for ``cmake``.
 
-Build options
-~~~~~~~~~~~~~
+CMake Build options
+~~~~~~~~~~~~~~~~~~~
 
-In addition to the normal CMake build options (like ``CMAKE_INSTALL_PREFIX``), fish has some other options available to customize it.
+In addition to the normal CMake build options (like ``CMAKE_INSTALL_PREFIX``), fish's CMake build has some other options available to customize it.
 
 - BUILD_DOCS=ON|OFF - whether to build the documentation. This is automatically set to OFF when Sphinx isn't installed.
 - INSTALL_DOCS=ON|OFF - whether to install the docs. This is automatically set to on when BUILD_DOCS is or prebuilt documentation is available (like when building in-tree from a tarball).
 - FISH_USE_SYSTEM_PCRE2=ON|OFF - whether to use an installed pcre2. This is normally autodetected.
 - MAC_CODESIGN_ID=String|OFF - the codesign ID to use on Mac, or "OFF" to disable codesigning.
 - WITH_GETTEXT=ON|OFF - whether to build with gettext support for translations.
+- extra_functionsdir, extra_completionsdir and extra_confdir - to compile in an additional directory to be searched for functions, completions and configuration snippets
 
-Note that fish does *not* support static linking and will attempt to error out if it detects it.
+Building fish as self-installable (experimental)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Help, it didn’t build!
-~~~~~~~~~~~~~~~~~~~~~~
+You can also build fish as a self-installing binary.
 
-On Debian or Ubuntu you want these packages:
+This will include all the datafiles like the included functions or web configuration tool in the main ``fish`` binary.
 
-::
+On the first interactive run, and whenever it notices they are out of date, it will extract the datafiles to ~/.local/share/fish/install/ (currently, subject to change). You can do this manually by running ``fish --install``.
 
-   sudo apt install build-essential cmake libpcre2-dev gettext
+To install fish as self-installable, just use ``cargo``, like::
 
-On RedHat, CentOS, or Amazon EC2 everything should be preinstalled.
+   cargo install --path /path/to/fish # if you have a git clone
+   cargo install --git https://github.com/fish-shell/fish-shell --tag 4.0 # to build from git once 4.0 is released
+   cargo install --git https://github.com/fish-shell/fish-shell # to build the current development snapshot without cloning
+
+This will place the binaries in ``~/.cargo/bin/``, but you can place them wherever you want.
+
+This build won't have the HTML docs (``help`` will open the online version) or translations.
+
+It will try to build the man pages with sphinx-build. If that is not available and you would like to include man pages, you need to install it and retrigger the build script, e.g. by setting FISH_BUILD_DOCS=1::
+
+  FISH_BUILD_DOCS=1 cargo install --path .
+
+Setting it to "0" disables the inclusion of man pages.
+
+You can also link this build statically (but not against glibc) and move it to other computers.
 
 Contributing Changes to the Code
 --------------------------------

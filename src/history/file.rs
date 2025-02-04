@@ -1,4 +1,4 @@
-//! Implemention of history files.
+//! Implementation of history files.
 
 use std::{
     borrow::Cow,
@@ -130,7 +130,15 @@ impl HistoryFileContents {
         let region = if should_mmap() {
             match MmapRegion::map_file(file.as_raw_fd(), len) {
                 Ok(region) => region,
-                Err(err) if err.raw_os_error() == Some(ENODEV) => map_anon(file, len)?,
+                Err(err) if err.raw_os_error() == Some(ENODEV) => {
+                    // Our mmap failed with ENODEV, which means the underlying
+                    // filesystem does not support mapping. Treat this as a hint
+                    // that the filesystem is remote, and so disable locks for
+                    // the history file.
+                    super::ABANDONED_LOCKING.store(true);
+                    // Create an anonymous mapping and read() the file into it.
+                    map_anon(file, len)?
+                }
                 Err(_err) => return None,
             }
         } else {
@@ -265,9 +273,9 @@ fn maybe_unescape_yaml_fish_2_0(s: &[u8]) -> Cow<[u8]> {
     unescape_yaml_fish_2_0(s).into()
 }
 
-/// Unescapes the fish-specific yaml variant. Use [`maybe_unescape_yaml_fish_2_0()`] if you're not
-/// positive the input contains an escape.
-
+// Unescapes the fish-specific yaml variant. Use [`maybe_unescape_yaml_fish_2_0()`] if you're not
+// positive the input contains an escape.
+//
 // This function is called on every input event and shows up heavily in all flamegraphs.
 // Various approaches were benchmarked against real-world fish-history files on lines with escapes,
 // and this implementation (chunk_loop_box) won out. Make changes with care!

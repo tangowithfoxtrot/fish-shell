@@ -16,7 +16,7 @@ use crate::future_feature_flags::feature_test;
 use crate::future_feature_flags::FeatureFlag;
 use crate::wchar::prelude::*;
 use crate::wcstringutil::{
-    string_fuzzy_match_string, string_suffixes_string_case_insensitive, CaseFold,
+    string_fuzzy_match_string, string_suffixes_string_case_insensitive, CaseSensitivity,
 };
 use crate::wutil::dir_iter::DirEntryType;
 use crate::wutil::{dir_iter::DirEntry, lwstat, waccess};
@@ -84,9 +84,9 @@ struct WcCompletePack<'orig, 'f> {
 
 // Weirdly specific and non-reusable helper function that makes its one call site much clearer.
 fn has_prefix_match(comps: &CompletionReceiver, first: usize) -> bool {
-    comps[first..]
-        .iter()
-        .any(|c| c.r#match.is_exact_or_prefix() && c.r#match.case_fold == CaseFold::samecase)
+    comps[first..].iter().any(|c| {
+        c.r#match.is_exact_or_prefix() && c.r#match.case_fold == CaseSensitivity::Sensitive
+    })
 }
 
 /// Matches the string against the wildcard, and if the wildcard is a possible completion of the
@@ -439,7 +439,6 @@ mod expander {
     use crate::{
         common::scoped_push,
         path::append_path_component,
-        threads::is_main_thread,
         wutil::{dir_iter::DirIter, normalize_path, DevInode},
     };
 
@@ -581,10 +580,6 @@ mod expander {
                     if self.interrupted_or_overflowed() {
                         return;
                     }
-                }
-
-                if is_main_thread() {
-                    crate::input_common::terminal_protocols_disable_ifn();
                 }
 
                 // return "." and ".." entries if we're doing completions

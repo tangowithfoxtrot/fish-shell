@@ -2,7 +2,6 @@
 from pexpect_helper import SpawnedProc
 import re
 import os
-import platform
 import sys
 
 # Disable under SAN - keeps failing because the timing is too tight
@@ -32,7 +31,7 @@ expect_re(
     + "\r\nin command substitution"
     + "\r\nfish: Unable to evaluate string substitution"
     + re.escape("\r\neval (string replace dog tiger -- $history[1])")
-    + "\r\n *\^~+\^\w*"
+    + "\r\n *\\^~+\\^\\w*"
 )
 expect_prompt()
 
