@@ -2,4 +2,4 @@ version: "1"
 rules:
   - base: main
     upstream: fish-shell:master
-    mergeMethod: squash
+    mergeMethod: merge
