@@ -33,20 +33,19 @@ jobs:
     - name: Build
       run: |
            CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=2" CMAKE_WITH_GETTEXT=0 CC=aarch64-linux-gnu-gcc RUSTFLAGS="-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc -C link-arg=-D_FORTIFY_SOURCE=0" cargo build --release --target aarch64-unknown-linux-musl --bin fish
-           cargo build --release --target x86_64-unknown-linux-musl --bin fish
+           cargo build --release --target x86_64-unknown-linux-musl
     - name: Test
       run: |
            test -e tests/test_driver.py && tests/test_driver.py -f /tmp target/x86_64-unknown-linux-musl/release/
     - name: Compress
       run: |
-           tar -cazf fish-amd64.tar.xz -C target/x86_64-unknown-linux-musl/release/ fish
-           tar -cazf fish-aarch64.tar.xz -C target/aarch64-unknown-linux-musl/release/ fish
+           tar -cazf fish-static-x86_64-$(git describe).tar.xz -C target/x86_64-unknown-linux-musl/release/ fish
+           tar -cazf fish-static-aarch64-$(git describe).tar.xz -C target/aarch64-unknown-linux-musl/release/ fish
     - uses: actions/upload-artifact@v4
       with:
         name: fish-static-linux
         path: |
-              fish-amd64.tar.xz
-              fish-aarch64.tar.xz
+              fish-*.tar.xz
         retention-days: 14
   staticbuilds-macos:
 
@@ -72,11 +71,10 @@ jobs:
     - name: Compress
       run: |
            tar -cazf fish-macos-aarch64.tar.xz -C target/aarch64-apple-darwin/release/ fish
-           tar -cazf fish-macos-amd64.tar.xz -C target/x86_64-apple-darwin/release/ fish
+           tar -cazf fish-macos-x86_64.tar.xz -C target/x86_64-apple-darwin/release/ fish
     - uses: actions/upload-artifact@v4
       with:
         name: fish-static-macos
         path: |
-              fish-macos-amd64.tar.xz
-              fish-macos-aarch64.tar.xz
+              fish-macos-*.tar.xz
         retention-days: 14
