@@ -21,6 +21,7 @@ use bitflags::bitflags;
 use core::slice;
 use libc::{EIO, O_WRONLY, SIGTTOU, SIG_IGN, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use once_cell::sync::OnceCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -1676,6 +1677,147 @@ pub fn get_executable_path(argv0: impl AsRef<Path>) -> PathBuf {
     argv0.as_ref().to_owned()
 }
 
+/// A wrapper around Cell which supports modifying the contents, scoped to a region of code.
+/// This provides a somewhat nicer API than ScopedRefCell because you can directly modify the value,
+/// instead of requiring an accessor function which returns a mutable reference to a field.
+pub struct ScopedCell<T>(Cell<T>);
+
+impl<T> Deref for ScopedCell<T> {
+    type Target = Cell<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for ScopedCell<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T: Copy> ScopedCell<T> {
+    pub fn new(value: T) -> Self {
+        Self(Cell::new(value))
+    }
+
+    /// Temporarily modify a value in the ScopedCell, restoring it when the returned object is dropped.
+    ///
+    /// This is useful when you want to apply a change for the duration of a scope
+    /// without having to manually restore the previous value.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use fish::common::ScopedCell;
+    ///
+    /// let cell = ScopedCell::new(5);
+    /// assert_eq!(cell.get(), 5);
+    ///
+    /// {
+    ///     let _guard = cell.scoped_mod(|v| *v += 10);
+    ///     assert_eq!(cell.get(), 15);
+    /// }
+    ///
+    /// // Restored after scope
+    /// assert_eq!(cell.get(), 5);
+    /// ```
+    pub fn scoped_mod<'a, Modifier: FnOnce(&mut T)>(
+        &'a self,
+        modifier: Modifier,
+    ) -> impl ScopeGuarding + 'a {
+        let mut val = self.get();
+        modifier(&mut val);
+        let saved = self.replace(val);
+        ScopeGuard::new(self, move |cell| cell.set(saved))
+    }
+}
+
+/// A wrapper around RefCell which supports modifying the contents, scoped to a region of code.
+pub struct ScopedRefCell<T>(RefCell<T>);
+
+impl<T> Deref for ScopedRefCell<T> {
+    type Target = RefCell<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for ScopedRefCell<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> ScopedRefCell<T> {
+    pub fn new(value: T) -> Self {
+        Self(RefCell::new(value))
+    }
+
+    /// Temporarily modify a field in the ScopedRefCell, restoring it when the returned guard is dropped.
+    ///
+    /// This is useful when you want to change part of a data structure for the duration of a scope,
+    /// and automatically restore the original value afterward.
+    ///
+    /// The `accessor` function selects the field to modify by returning a mutable reference to it.
+    ///
+    /// # Example
+    /// ```
+    /// use fish::common::ScopedRefCell;
+    ///
+    /// struct State { flag: bool }
+    ///
+    /// let cell = ScopedRefCell::new(State { flag: false });
+    /// assert_eq!(cell.borrow().flag, false);
+    ///
+    /// {
+    ///     let _guard = cell.scoped_set(true, |s| &mut s.flag);
+    ///     assert_eq!(cell.borrow().flag, true);
+    /// }
+    ///
+    /// // Restored after scope
+    /// assert_eq!(cell.borrow().flag, false);
+    /// ```
+    pub fn scoped_set<'a, Accessor, Value: 'a>(
+        &'a self,
+        value: Value,
+        accessor: Accessor,
+    ) -> impl ScopeGuarding + 'a
+    where
+        Accessor: Fn(&mut T) -> &mut Value + 'a,
+    {
+        let mut data = self.borrow_mut();
+        let mut saved = std::mem::replace(accessor(&mut data), value);
+        ScopeGuard::new(self, move |cell| {
+            let mut data = cell.borrow_mut();
+            std::mem::swap((accessor)(&mut data), &mut saved);
+        })
+    }
+
+    /// Convenience method for replacing the entire contents of the ScopedRefCell, restoring it when dropped.
+    ///
+    /// Equivalent to `scoped_set(value, |s| s)`.
+    ///
+    /// # Example
+    /// ```
+    /// use fish::common::ScopedRefCell;
+    ///
+    /// let cell = ScopedRefCell::new(10);
+    /// assert_eq!(*cell.borrow(), 10);
+    ///
+    /// {
+    ///     let _guard = cell.scoped_replace(99);
+    ///     assert_eq!(*cell.borrow(), 99);
+    /// }
+    ///
+    /// assert_eq!(*cell.borrow(), 10);
+    /// ```
+    pub fn scoped_replace<'a>(&'a self, value: T) -> impl ScopeGuarding + 'a {
+        self.scoped_set(value, |s| s)
+    }
+}
+
 /// A RAII cleanup object. Unlike in C++ where there is no borrow checker, we can't just provide a
 /// callback that modifies live objects willy-nilly because then there would be two &mut references
 /// to the same object - the original variables we keep around to use and their captured references
@@ -1696,26 +1838,24 @@ pub fn get_executable_path(argv0: impl AsRef<Path>) -> PathBuf {
 /// let file = std::fs::File::create("/dev/null").unwrap();
 /// // Create a scope guard to write to the file when the scope expires.
 /// // To be able to still use the file, shadow `file` with the ScopeGuard itself.
-/// let mut file = ScopeGuard::new(file, |file| file.write_all(b"goodbye\n").unwrap());
+/// let mut file = ScopeGuard::new(file, |mut file| file.write_all(b"goodbye\n").unwrap());
 /// // Now write to the file normally "through" the capturing ScopeGuard instance.
 /// file.write_all(b"hello\n").unwrap();
 ///
 /// // hello will be written first, then goodbye.
 /// ```
-pub struct ScopeGuard<T, F: FnOnce(&mut T)>(Option<(T, F)>);
+pub struct ScopeGuard<T, F: FnOnce(T)>(Option<(T, F)>);
 
-impl<T, F: FnOnce(&mut T)> ScopeGuard<T, F> {
+impl<T, F: FnOnce(T)> ScopeGuard<T, F> {
     /// Creates a new `ScopeGuard` wrapping `value`. The `on_drop` callback is executed when the
     /// ScopeGuard's lifetime expires or when it is manually dropped.
     pub fn new(value: T, on_drop: F) -> Self {
         Self(Some((value, on_drop)))
     }
 
-    /// Invokes the callback and returns the wrapped value, consuming the ScopeGuard.
-    pub fn commit(mut guard: Self) -> T {
-        let (mut value, on_drop) = guard.0.take().expect("Should always have Some value");
-        on_drop(&mut value);
-        value
+    /// Invokes the callback, consuming the ScopeGuard.
+    pub fn commit(guard: Self) {
+        std::mem::drop(guard)
     }
 
     /// Cancels the invocation of the callback, returning the original wrapped value.
@@ -1725,7 +1865,7 @@ impl<T, F: FnOnce(&mut T)> ScopeGuard<T, F> {
     }
 }
 
-impl<T, F: FnOnce(&mut T)> Deref for ScopeGuard<T, F> {
+impl<T, F: FnOnce(T)> Deref for ScopeGuard<T, F> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -1733,81 +1873,31 @@ impl<T, F: FnOnce(&mut T)> Deref for ScopeGuard<T, F> {
     }
 }
 
-impl<T, F: FnOnce(&mut T)> DerefMut for ScopeGuard<T, F> {
+impl<T, F: FnOnce(T)> DerefMut for ScopeGuard<T, F> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0.as_mut().unwrap().0
     }
 }
 
-impl<T, F: FnOnce(&mut T)> Drop for ScopeGuard<T, F> {
+impl<T, F: FnOnce(T)> Drop for ScopeGuard<T, F> {
     fn drop(&mut self) {
-        if let Some((mut value, on_drop)) = self.0.take() {
-            on_drop(&mut value);
+        if let Some((value, on_drop)) = self.0.take() {
+            on_drop(value);
         }
     }
 }
 
-/// A trait expressing what ScopeGuard can do. This is necessary because scoped_push returns an
+/// A trait expressing what ScopeGuard can do. This is necessary because our scoped cells return an
 /// `impl Trait` object and therefore methods on ScopeGuard which take a self parameter cannot be
 /// used.
-pub trait ScopeGuarding: DerefMut {
-    /// Invokes the callback and returns the wrapped value, consuming the ScopeGuard.
-    fn commit(guard: Self) -> Self::Target;
-}
-
-impl<T, F: FnOnce(&mut T)> ScopeGuarding for ScopeGuard<T, F> {
-    fn commit(guard: Self) -> T {
-        ScopeGuard::commit(guard)
+pub trait ScopeGuarding: DerefMut + Sized {
+    /// Invokes the callback, consuming the guard.
+    fn commit(guard: Self) {
+        std::mem::drop(guard);
     }
 }
 
-/// A scoped manager to save the current value of some variable, and set it to a new value. When
-/// dropped, it restores the variable to its old value.
-pub fn scoped_push<Context, Accessor, T>(
-    mut ctx: Context,
-    accessor: Accessor,
-    new_value: T,
-) -> impl ScopeGuarding<Target = Context>
-where
-    Accessor: Fn(&mut Context) -> &mut T,
-{
-    let saved = mem::replace(accessor(&mut ctx), new_value);
-    let restore_saved = move |ctx: &mut Context| {
-        *accessor(ctx) = saved;
-    };
-    ScopeGuard::new(ctx, restore_saved)
-}
-
-/// Similar to scoped_push but takes a function like "std::mem::replace" instead of a function
-/// that returns a mutable reference.
-pub fn scoped_push_replacer<Replacer, T>(
-    replacer: Replacer,
-    new_value: T,
-) -> impl ScopeGuarding<Target = ()>
-where
-    Replacer: Fn(T) -> T,
-{
-    let saved = replacer(new_value);
-    let restore_saved = move |_ctx: &mut ()| {
-        replacer(saved);
-    };
-    ScopeGuard::new((), restore_saved)
-}
-
-pub fn scoped_push_replacer_ctx<Context, Replacer, T>(
-    mut ctx: Context,
-    replacer: Replacer,
-    new_value: T,
-) -> impl ScopeGuarding<Target = Context>
-where
-    Replacer: Fn(&mut Context, T) -> T,
-{
-    let saved = replacer(&mut ctx, new_value);
-    let restore_saved = move |ctx: &mut Context| {
-        replacer(ctx, saved);
-    };
-    ScopeGuard::new(ctx, restore_saved)
-}
+impl<T, F: FnOnce(T)> ScopeGuarding for ScopeGuard<T, F> {}
 
 pub const fn assert_send<T: Send>() {}
 pub const fn assert_sync<T: Sync>() {}

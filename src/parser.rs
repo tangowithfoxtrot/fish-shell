@@ -3,8 +3,8 @@
 use crate::ast::{self, Ast, List, Node};
 use crate::builtins::shared::STATUS_ILLEGAL_CMD;
 use crate::common::{
-    escape_string, scoped_push_replacer, CancelChecker, EscapeFlags, EscapeStringStyle,
-    FilenameRef, ScopeGuarding, PROFILING_ACTIVE,
+    escape_string, CancelChecker, EscapeFlags, EscapeStringStyle, FilenameRef, ScopeGuarding,
+    ScopedCell, ScopedRefCell, PROFILING_ACTIVE,
 };
 use crate::complete::CompletionList;
 use crate::env::{EnvMode, EnvStack, EnvStackSetResult, Environment, Statuses};
@@ -42,10 +42,7 @@ use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::rc::Rc;
 #[cfg(target_has_atomic = "64")]
 use std::sync::atomic::AtomicU64;
-use std::sync::{
-    atomic::{AtomicIsize, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 pub enum BlockData {
     Function {
@@ -217,21 +214,70 @@ impl ProfileItem {
     }
 }
 
+/// Data which is managed in a scoped fashion: is generally set for the duration of a block
+/// of code. Note this is stored in a Cell and so must be Copy.
+#[derive(Copy, Clone)]
+pub struct ScopedData {
+    /// The 'depth' of the fish call stack.
+    /// -1 means nothing is executing. 0 means we are running a top-level command.
+    /// Larger values indicate deeper nesting.
+    pub eval_level: isize,
+
+    /// Whether we are running a subshell command.
+    pub is_subshell: bool,
+
+    /// Whether we are running an event handler.
+    pub is_event: bool,
+
+    /// Whether we are currently interactive.
+    pub is_interactive: bool,
+
+    /// Whether to suppress fish_trace output. This occurs in the prompt, event handlers, and key
+    /// bindings.
+    pub suppress_fish_trace: bool,
+
+    /// The read limit to apply to captured subshell output, or 0 for none.
+    pub read_limit: usize,
+
+    /// Whether we are currently cleaning processes.
+    pub is_cleaning_procs: bool,
+
+    /// The internal job id of the job being populated, or 0 if none.
+    /// This supports the '--on-job-exit caller' feature.
+    pub caller_id: u64, // TODO should be InternalJobId
+}
+
+impl Default for ScopedData {
+    fn default() -> Self {
+        Self {
+            eval_level: -1,
+            is_subshell: false,
+            is_event: false,
+            is_interactive: false,
+            suppress_fish_trace: false,
+            read_limit: 0,
+            is_cleaning_procs: false,
+            caller_id: 0,
+        }
+    }
+}
+
 /// Miscellaneous data used to avoid recursion and others.
 #[derive(Default)]
 pub struct LibraryData {
     /// The current filename we are evaluating, either from builtin source or on the command line.
     pub current_filename: Option<FilenameRef>,
 
-    /// A stack of fake values to be returned by builtin_commandline. This is used by the completion
+    /// A fake value to be returned by builtin_commandline. This is used by the completion
     /// machinery when wrapping: e.g. if `tig` wraps `git` then git completions need to see git on
     /// the command line.
-    pub transient_commandlines: Vec<WString>,
+    pub transient_commandline: Option<WString>,
 
     /// A file descriptor holding the current working directory, for use in openat().
     /// This is never null and never invalid.
     pub cwd_fd: Option<Arc<OwnedFd>>,
 
+    /// Variables supporting the "status" builtin.
     pub status_vars: StatusVars,
 
     /// A counter incremented every time a command executes.
@@ -259,27 +305,6 @@ pub struct LibraryData {
     /// Whether we called builtin_complete -C without parameter.
     pub builtin_complete_current_commandline: bool,
 
-    /// Whether we are currently cleaning processes.
-    pub is_cleaning_procs: bool,
-
-    /// The internal job id of the job being populated, or 0 if none.
-    /// This supports the '--on-job-exit caller' feature.
-    pub caller_id: u64, // TODO should be InternalJobId
-
-    /// Whether we are running a subshell command.
-    pub is_subshell: bool,
-
-    /// Whether we are running an event handler. This is not a bool because we keep count of the
-    /// event nesting level.
-    pub is_event: i32,
-
-    /// Whether we are currently interactive.
-    pub is_interactive: bool,
-
-    /// Whether to suppress fish_trace output. This occurs in the prompt, event handlers, and key
-    /// bindings.
-    pub suppress_fish_trace: bool,
-
     /// Whether we should break or continue the current loop.
     /// This is set by the 'break' and 'continue' commands.
     pub loop_status: LoopStatus,
@@ -293,9 +318,6 @@ pub struct LibraryData {
     /// Note this only exits up to the "current script boundary." That is, a call to exit within a
     /// 'source' or 'read' command will only exit up to that command.
     pub exit_current_script: bool,
-
-    /// The read limit to apply to captured subshell output, or 0 for none.
-    pub read_limit: usize,
 }
 
 impl LibraryData {
@@ -376,7 +398,7 @@ pub enum CancelBehavior {
 pub struct Parser {
     /// A shared line counter. This is handed out to each execution context
     /// so they can communicate the line number back to this Parser.
-    line_counter: Rc<RefCell<LineCounter<ast::JobPipeline>>>,
+    line_counter: ScopedRefCell<LineCounter<ast::JobPipeline>>,
 
     /// The jobs associated with this parser.
     job_list: RefCell<JobList>,
@@ -390,14 +412,14 @@ pub struct Parser {
     /// indexes during recursive evaluation.
     block_list: RefCell<Vec<Block>>,
 
-    /// The 'depth' of the fish call stack.
-    pub eval_level: AtomicIsize,
-
     /// Set of variables for the parser.
     pub variables: Rc<EnvStack>,
 
+    /// Data managed in a scoped fashion.
+    scoped_data: ScopedCell<ScopedData>,
+
     /// Miscellaneous library data.
-    library_data: RefCell<LibraryData>,
+    pub library_data: ScopedRefCell<LibraryData>,
 
     /// If set, we synchronize universal variables after external commands,
     /// including sending on-variable change events.
@@ -417,13 +439,13 @@ impl Parser {
     /// Create a parser.
     pub fn new(variables: Rc<EnvStack>, cancel_behavior: CancelBehavior) -> Parser {
         let result = Self {
-            line_counter: Rc::new(RefCell::new(LineCounter::empty())),
+            line_counter: ScopedRefCell::new(LineCounter::empty()),
             job_list: RefCell::default(),
             wait_handles: RefCell::new(WaitHandleStore::new()),
             block_list: RefCell::default(),
-            eval_level: AtomicIsize::new(-1),
             variables,
-            library_data: RefCell::new(LibraryData::new()),
+            scoped_data: ScopedCell::new(ScopedData::default()),
+            library_data: ScopedRefCell::new(LibraryData::new()),
             syncs_uvars: RelaxedAtomicBool::new(false),
             cancel_behavior,
             profile_items: RefCell::default(),
@@ -602,13 +624,13 @@ impl Parser {
         op_ctx.cancel_checker = cancel_checker;
 
         // Restore the line counter.
-        let line_counter = Rc::clone(&self.line_counter);
-        let scoped_line_counter =
-            scoped_push_replacer(|v| line_counter.replace(v), ps.line_counter());
+        let restore_line_counter = self
+            .line_counter
+            .scoped_replace(ps.line_counter::<ast::JobPipeline>());
 
         // Create a new execution context.
         let mut execution_context =
-            ExecutionContext::new(ps.clone(), block_io.clone(), Rc::clone(&line_counter));
+            ExecutionContext::new(ps.clone(), block_io.clone(), &self.line_counter);
 
         terminal_protocols_disable_ifn();
 
@@ -619,7 +641,7 @@ impl Parser {
         let new_exec_count = self.libdata().exec_count;
         let new_status_count = self.libdata().status_count;
 
-        ScopeGuarding::commit(scoped_line_counter);
+        ScopeGuarding::commit(restore_line_counter);
         self.pop_block(scope_block);
 
         job_reap(self, false); // reap again
@@ -815,10 +837,28 @@ impl Parser {
         Rc::clone(&self.variables)
     }
 
+    /// Get a copy of the scoped data.
+    #[inline(always)]
+    pub fn scope(&self) -> ScopedData {
+        self.scoped_data.get()
+    }
+
+    /// Modify the scoped values for the duration of the caller's scope (or whenever the ParserScope is dropped).
+    /// This accepts a closure which modifies the ScopedData, and returns a ParserScope which restores the
+    /// data when dropped.
+    pub fn push_scope<'a, F: FnOnce(&mut ScopedData)>(
+        &'a self,
+        modifier: F,
+    ) -> impl ScopeGuarding + 'a {
+        self.scoped_data.scoped_mod(modifier)
+    }
+
     /// Get the library data.
     pub fn libdata(&self) -> Ref<'_, LibraryData> {
         self.library_data.borrow()
     }
+
+    /// Get the library data, mutably.
     pub fn libdata_mut(&self) -> RefMut<'_, LibraryData> {
         self.library_data.borrow_mut()
     }
@@ -1075,7 +1115,7 @@ impl Parser {
     /// Return if we are interactive, which means we are executing a command that the user typed in
     /// (and not, say, a prompt).
     pub fn is_interactive(&self) -> bool {
-        self.libdata().is_interactive
+        self.scope().is_interactive
     }
 
     /// Return a string representing the current stack trace.
@@ -1097,8 +1137,7 @@ impl Parser {
         // We are interested in whether the count of functions on the stack exceeds
         // FISH_MAX_STACK_DEPTH. We don't separately track the number of functions, but we can have a
         // fast path through the eval_level. If the eval_level is in bounds, so must be the stack depth.
-        if self.eval_level.load(Ordering::Relaxed) <= isize::try_from(FISH_MAX_STACK_DEPTH).unwrap()
-        {
+        if self.scope().eval_level <= FISH_MAX_STACK_DEPTH {
             return false;
         }
         // Count the functions.
@@ -1106,7 +1145,7 @@ impl Parser {
             .blocks_iter_rev()
             .filter(|b| b.is_function_call())
             .count();
-        depth > FISH_MAX_STACK_DEPTH
+        depth > (FISH_MAX_STACK_DEPTH as usize)
     }
 
     /// Mark whether we should sync universal variables.
@@ -1125,7 +1164,7 @@ impl Parser {
 
     /// Checks if the max eval depth has been exceeded
     pub fn is_eval_depth_exceeded(&self) -> bool {
-        self.eval_level.load(Ordering::Relaxed) >= isize::try_from(FISH_MAX_EVAL_DEPTH).unwrap()
+        self.scope().eval_level >= FISH_MAX_EVAL_DEPTH
     }
 }
 

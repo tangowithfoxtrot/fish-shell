@@ -11,8 +11,8 @@ use crate::builtins::shared::{
     STATUS_UNMATCHED_WILDCARD,
 };
 use crate::common::{
-    escape, scoped_push_replacer, should_suppress_stderr_for_tests, truncate_at_nul,
-    valid_var_name, ScopeGuard, ScopeGuarding,
+    escape, should_suppress_stderr_for_tests, truncate_at_nul, valid_var_name, ScopeGuard,
+    ScopeGuarding, ScopedRefCell,
 };
 use crate::complete::CompletionList;
 use crate::env::{EnvMode, EnvStackSetResult, EnvVar, EnvVarFlags, Environment, Statuses};
@@ -52,10 +52,9 @@ use crate::wchar_ext::WExt;
 use crate::wildcard::wildcard_match;
 use crate::wutil::{wgettext, wgettext_maybe_fmt};
 use libc::{c_int, ENOTDIR, EXIT_SUCCESS, STDERR_FILENO, STDOUT_FILENO};
-use std::cell::RefCell;
 use std::io::ErrorKind;
 use std::rc::Rc;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 
 /// An eval_result represents evaluation errors including wildcards which failed to match, syntax
 /// errors, or other expansion errors. It also tracks when evaluation was skipped due to signal
@@ -75,7 +74,7 @@ pub enum EndExecutionReason {
     error,
 }
 
-pub struct ExecutionContext {
+pub struct ExecutionContext<'a> {
     // The parsed source and its AST.
     pstree: ParsedSourceRef,
 
@@ -85,7 +84,7 @@ pub struct ExecutionContext {
 
     // Helper to count lines.
     // This is shared with the Parser so that the Parser can access the current line.
-    line_counter: Rc<RefCell<LineCounter<ast::JobPipeline>>>,
+    line_counter: &'a ScopedRefCell<LineCounter<ast::JobPipeline>>,
 
     /// The block IO chain.
     /// For example, in `begin; foo ; end < file.txt` this would have the 'file.txt' IO.
@@ -112,13 +111,13 @@ macro_rules! report_error_formatted {
     }};
 }
 
-impl<'a> ExecutionContext {
+impl<'a> ExecutionContext<'a> {
     /// Construct a context in preparation for evaluating a node in a tree, with the given block_io.
     /// The execution context may access the parser and parent job group (if any) through ctx.
     pub fn new(
         pstree: ParsedSourceRef,
         block_io: IoChain,
-        line_counter: Rc<RefCell<LineCounter<ast::JobPipeline>>>,
+        line_counter: &'a ScopedRefCell<LineCounter<ast::JobPipeline>>,
     ) -> Self {
         Self {
             pstree,
@@ -135,7 +134,7 @@ impl<'a> ExecutionContext {
     pub fn eval_node(
         &mut self,
         ctx: &OperationContext<'_>,
-        node: &dyn Node,
+        node: &'a dyn Node,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         match node.typ() {
@@ -1529,17 +1528,12 @@ impl<'a> ExecutionContext {
         }
 
         // Increment the eval_level for the duration of this command.
-        let _saved_eval_level = scoped_push_replacer(
-            |new_value| ctx.parser().eval_level.swap(new_value, Ordering::Relaxed),
-            ctx.parser().eval_level.load(Ordering::Relaxed) + 1,
-        );
+        let _saved_eval_level = ctx.parser().push_scope(|s| s.eval_level += 1);
 
         // Save the executing node.
-        let line_counter = Rc::clone(&self.line_counter);
-        let _saved_node = scoped_push_replacer(
-            |node| line_counter.borrow_mut().set_node(node),
-            Some(job_node),
-        );
+        let _saved_node = self
+            .line_counter
+            .scoped_set(job_node as *const _, |s| &mut s.node);
 
         // Profiling support.
         let profile_item_id = ctx.parser().create_profile_item();
@@ -1610,7 +1604,7 @@ impl<'a> ExecutionContext {
                 let mut profile_items = parser.profile_items_mut();
                 let profile_item = &mut profile_items[profile_item_id];
                 profile_item.duration = ProfileItem::now() - start_time;
-                profile_item.level = ctx.parser().eval_level.load(Ordering::Relaxed);
+                profile_item.level = ctx.parser().scope().eval_level;
                 profile_item.cmd =
                     profiling_cmd_name_for_redirectable_block(specific_statement, self.pstree());
                 profile_item.skipped = false;
@@ -1623,10 +1617,10 @@ impl<'a> ExecutionContext {
         props.initial_background = job_is_background;
         {
             let parser = ctx.parser();
-            let ld = &parser.libdata();
+            let sc = parser.scope();
             props.skip_notification =
-                ld.is_subshell || parser.is_block() || ld.is_event != 0 || !parser.is_interactive();
-            props.from_event_handler = ld.is_event != 0;
+                sc.is_subshell || parser.is_block() || sc.is_event || !parser.is_interactive();
+            props.from_event_handler = sc.is_event;
         }
 
         let mut job = Job::new(props, self.node_source_owned(job_node));
@@ -1634,10 +1628,9 @@ impl<'a> ExecutionContext {
         // We are about to populate a job. One possible argument to the job is a command substitution
         // which may be interested in the job that's populating it, via '--on-job-exit caller'. Record
         // the job ID here.
-        let _caller_id = scoped_push_replacer(
-            |new_value| std::mem::replace(&mut ctx.parser().libdata_mut().caller_id, new_value),
-            job.internal_job_id,
-        );
+        let _caller_id = ctx
+            .parser()
+            .push_scope(move |s| s.caller_id = job.internal_job_id);
 
         // Populate the job. This may fail for reasons like command_not_found. If this fails, an error
         // will have been printed.
@@ -1686,7 +1679,7 @@ impl<'a> ExecutionContext {
             let mut profile_items = parser.profile_items_mut();
             let profile_item = &mut profile_items[profile_item_id];
             profile_item.duration = ProfileItem::now() - start_time;
-            profile_item.level = ctx.parser().eval_level.load(Ordering::Relaxed);
+            profile_item.level = ctx.parser().scope().eval_level;
             profile_item.cmd = job.command().to_owned();
             profile_item.skipped = pop_result != EndExecutionReason::ok;
         }
@@ -1887,7 +1880,7 @@ impl<'a> ExecutionContext {
         } else {
             // This is a "real job" that gets its own pgroup.
             j.processes_mut()[0].leads_pgrp = true;
-            let wants_terminal = ctx.parser().libdata().is_event == 0;
+            let wants_terminal = !ctx.parser().scope().is_event;
             j.group = Some(JobGroup::create_with_job_control(
                 j.command().to_owned(),
                 wants_terminal,

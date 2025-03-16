@@ -1200,14 +1200,12 @@ impl<'ctx> Completer<'ctx> {
     fn complete_from_args(&mut self, s: &wstr, args: &wstr, desc: &wstr, flags: CompleteFlags) {
         let is_autosuggest = self.flags.autosuggestion;
 
-        let saved_state = if let Some(parser) = self.ctx.maybe_parser() {
-            let saved_interactive = parser.libdata().is_interactive;
-            parser.libdata_mut().is_interactive = false;
-
-            Some((saved_interactive, parser.get_last_statuses()))
-        } else {
-            None
-        };
+        let mut saved_statuses = None;
+        let mut scope = None;
+        if let Some(parser) = self.ctx.maybe_parser() {
+            saved_statuses = Some(parser.get_last_statuses());
+            scope = Some(parser.push_scope(|s| s.is_interactive = false));
+        }
 
         let eflags = if is_autosuggest {
             ExpandFlags::FAIL_ON_CMDSUBST
@@ -1218,10 +1216,9 @@ impl<'ctx> Completer<'ctx> {
         let possible_comp = Parser::expand_argument_list(args, eflags, self.ctx);
 
         if let Some(parser) = self.ctx.maybe_parser() {
-            let (saved_interactive, status) = saved_state.unwrap();
-            parser.libdata_mut().is_interactive = saved_interactive;
-            parser.set_last_statuses(status);
+            parser.set_last_statuses(saved_statuses.unwrap());
         }
+        std::mem::drop(scope);
 
         // Allow leading dots - see #3707.
         self.complete_strings(
@@ -1889,7 +1886,7 @@ impl<'ctx> Completer<'ctx> {
     fn apply_var_assignments<T: AsRef<wstr>>(
         &mut self,
         var_assignments: &[T],
-    ) -> Option<ScopeGuard<(), impl FnOnce(&mut ()) + 'ctx>> {
+    ) -> Option<ScopeGuard<(), impl FnOnce(()) + 'ctx>> {
         if !self.ctx.has_parser() || var_assignments.is_empty() {
             return None;
         }
@@ -1961,12 +1958,12 @@ impl<'ctx> Completer<'ctx> {
             (ad.wrap_depth > 0 || !ad.var_assignments.is_empty()) && !is_autosuggest;
         if wants_transient {
             let parser = self.ctx.parser();
-            parser
+            let saved_transient = parser
                 .libdata_mut()
-                .transient_commandlines
-                .push(cmdline.to_owned());
+                .transient_commandline
+                .replace(cmdline.to_owned());
             _remove_transient = Some(ScopeGuard::new((), move |_| {
-                parser.libdata_mut().transient_commandlines.pop();
+                parser.libdata_mut().transient_commandline = saved_transient;
             }));
         }
 
