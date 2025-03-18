@@ -22,7 +22,7 @@ pub static FISH_AMBIGUOUS_WIDTH: AtomicIsize = AtomicIsize::new(1);
 /// This must be configurable because the value changed between Unicode 8 and Unicode 9, `wcwidth()`
 /// is emoji-unaware, and terminal emulators do different things.
 ///
-/// See issues like #4539 and https://github.com/neovim/issues/4976 for how painful this is.
+/// See issues like [#4539](https://github.com/fish-shell/fish-shell/issues/4539) and <https://github.com/neovim/neovim/issues/4976> for how painful this is.
 ///
 /// Valid values are 1, and 2. 1 is the typical emoji width used in Unicode 8 while some newer
 /// terminals use a width of 2 since Unicode 9.
@@ -110,12 +110,12 @@ pub fn fish_wcswidth(s: &wstr) -> isize {
 // otherwise it uses mkstemp followed by fcntl
 pub fn fish_mkstemp_cloexec(name_template: CString) -> Result<(File, CString), Errno> {
     let name = name_template.into_raw();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(apple))]
     let fd = {
         use libc::O_CLOEXEC;
         unsafe { libc::mkostemp(name, O_CLOEXEC) }
     };
-    #[cfg(target_os = "macos")]
+    #[cfg(apple)]
     let fd = {
         use libc::{FD_CLOEXEC, F_SETFD};
         let fd = unsafe { libc::mkstemp(name) };
