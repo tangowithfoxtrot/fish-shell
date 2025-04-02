@@ -72,9 +72,20 @@ impl Modifiers {
             sup: false,
         }
     }
+    #[cfg(test)]
+    pub(crate) const CTRL: Self = {
+        let mut m = Self::new();
+        m.ctrl = true;
+        m
+    };
     pub(crate) const ALT: Self = {
         let mut m = Self::new();
         m.alt = true;
+        m
+    };
+    pub(crate) const SHIFT: Self = {
+        let mut m = Self::new();
+        m.shift = true;
         m
     };
     pub(crate) fn is_some(&self) -> bool {
@@ -100,39 +111,33 @@ pub struct Key {
 }
 
 impl Key {
-    pub(crate) fn from_raw(codepoint: char) -> Self {
+    pub(crate) const fn new(modifiers: Modifiers, codepoint: char) -> Self {
         Self {
-            modifiers: Modifiers::default(),
+            modifiers,
             codepoint,
         }
+    }
+    pub(crate) fn from_raw(codepoint: char) -> Self {
+        Self::new(Modifiers::default(), codepoint)
     }
 }
 
 pub(crate) const fn ctrl(codepoint: char) -> Key {
     let mut modifiers = Modifiers::new();
     modifiers.ctrl = true;
-    Key {
-        modifiers,
-        codepoint,
-    }
+    Key::new(modifiers, codepoint)
 }
 
 pub(crate) const fn alt(codepoint: char) -> Key {
     let mut modifiers = Modifiers::new();
     modifiers.alt = true;
-    Key {
-        modifiers,
-        codepoint,
-    }
+    Key::new(modifiers, codepoint)
 }
 
 pub(crate) const fn shift(codepoint: char) -> Key {
     let mut modifiers = Modifiers::new();
     modifiers.shift = true;
-    Key {
-        modifiers,
-        codepoint,
-    }
+    Key::new(modifiers, codepoint)
 }
 
 impl Key {
@@ -149,10 +154,7 @@ impl Key {
 pub fn canonicalize_control_char(c: u8) -> Option<Key> {
     let codepoint = canonicalize_keyed_control_char(char::from(c));
     if u32::from(codepoint) > 255 {
-        return Some(Key {
-            modifiers: Modifiers::default(),
-            codepoint,
-        });
+        return Some(Key::from_raw(codepoint));
     }
 
     if c < 32 {
@@ -219,19 +221,6 @@ pub(crate) fn canonicalize_key(mut key: Key) -> Result<Key, WString> {
                 ));
             }
             key.modifiers.ctrl = true;
-        }
-    }
-    if key.modifiers.shift {
-        if key.codepoint.is_ascii_alphabetic() {
-            // Shift + ASCII letters is just the uppercase letter.
-            key.modifiers.shift = false;
-            key.codepoint = key.codepoint.to_ascii_uppercase();
-        } else if !fish_is_pua(key.codepoint) {
-            // Shift + any other printable character is not allowed.
-            return Err(wgettext_fmt!(
-                "Shift modifier is only supported on special keys and lowercase ASCII, not '%s'",
-                key,
-            ));
         }
     }
     Ok(key)
@@ -303,10 +292,7 @@ pub(crate) fn parse_keys(value: &wstr) -> Result<Vec<Key>, WString> {
                 .find_map(|(codepoint, name)| (name == key_name).then_some(*codepoint))
                 .or_else(|| (key_name.len() == 1).then(|| key_name.as_char_slice()[0]));
             let key = if let Some(codepoint) = codepoint {
-                canonicalize_key(Key {
-                    modifiers,
-                    codepoint,
-                })?
+                canonicalize_key(Key::new(modifiers, codepoint))?
             } else if codepoint.is_none() && key_name.starts_with('f') && key_name.len() <= 3 {
                 let num = key_name.strip_prefix('f').unwrap();
                 let codepoint = match fish_wcstoul(num) {
@@ -321,10 +307,7 @@ pub(crate) fn parse_keys(value: &wstr) -> Result<Vec<Key>, WString> {
                         ));
                     }
                 };
-                Key {
-                    modifiers,
-                    codepoint,
-                }
+                Key::new(modifiers, codepoint)
             } else {
                 return Err(wgettext_fmt!(
                     "cannot parse key '%s'",

@@ -142,11 +142,144 @@ pub enum ReadlineCmd {
     ReverseRepeatJump,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct KeyEvent {
+    pub key: Key,
+    pub shifted_codepoint: char,
+}
+
+impl KeyEvent {
+    pub(crate) fn new(modifiers: Modifiers, codepoint: char) -> Self {
+        Self::from(Key::new(modifiers, codepoint))
+    }
+    pub(crate) fn with_shifted_codepoint(
+        modifiers: Modifiers,
+        codepoint: char,
+        shifted_codepoint: Option<char>,
+    ) -> Self {
+        Self {
+            key: Key::new(modifiers, codepoint),
+            shifted_codepoint: shifted_codepoint.unwrap_or_default(),
+        }
+    }
+    pub(crate) fn from_raw(codepoint: char) -> Self {
+        Self::from(Key::from_raw(codepoint))
+    }
+    pub fn from_single_byte(c: u8) -> Self {
+        Self::from(Key::from_single_byte(c))
+    }
+}
+
+impl From<Key> for KeyEvent {
+    fn from(key: Key) -> Self {
+        Self {
+            key,
+            shifted_codepoint: '\0',
+        }
+    }
+}
+
+impl std::ops::Deref for KeyEvent {
+    type Target = Key;
+    fn deref(&self) -> &Self::Target {
+        &self.key
+    }
+}
+
+impl std::ops::DerefMut for KeyEvent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.key
+    }
+}
+
+fn apply_shift(mut key: Key, do_ascii: bool, shifted_codepoint: char) -> Option<Key> {
+    if !key.modifiers.shift {
+        return Some(key);
+    }
+    if shifted_codepoint != '\0' {
+        key.codepoint = shifted_codepoint;
+    } else if do_ascii && key.codepoint.is_ascii_lowercase() {
+        // For backwards compatibility, we convert the "bind shift-a" notation to "bind A".
+        // This enables us to match "A" events which are the legacy encoding for keys that
+        // generate text -- until we request kitty's "Report all keys as escape codes".
+        // We do not currently convert non-ASCII key notation such as "bind shift-ä".
+        key.codepoint = key.codepoint.to_ascii_uppercase();
+    } else {
+        return None;
+    };
+    key.modifiers.shift = false;
+    Some(key)
+}
+
+impl PartialEq<Key> for KeyEvent {
+    fn eq(&self, key: &Key) -> bool {
+        if &self.key == key {
+            return true;
+        }
+
+        let Some(shifted_evt) = apply_shift(self.key, false, self.shifted_codepoint) else {
+            return false;
+        };
+        let Some(shifted_key) = apply_shift(*key, true, '\0') else {
+            return false;
+        };
+        shifted_evt == shifted_key
+    }
+}
+
+#[test]
+fn test_key_event_eq() {
+    let none = Modifiers::default();
+    let shift = Modifiers::SHIFT;
+    let ctrl = Modifiers::CTRL;
+    let ctrl_shift = Modifiers {
+        ctrl: true,
+        shift: true,
+        ..Default::default()
+    };
+
+    assert_eq!(KeyEvent::new(none, 'a'), Key::new(none, 'a'));
+    assert_ne!(KeyEvent::new(none, 'a'), Key::new(none, 'A'));
+    assert_eq!(KeyEvent::new(shift, 'a'), Key::new(shift, 'a'));
+    assert_ne!(KeyEvent::new(shift, 'a'), Key::new(none, 'A'));
+    assert_ne!(KeyEvent::new(shift, 'ä'), Key::new(none, 'Ä'));
+    // For historical reasons we canonicalize notation for ASCII keys like "shift-a" to "A",
+    // but not "shift-a" events - those should send a shifted key.
+    assert_eq!(KeyEvent::new(none, 'A'), Key::new(shift, 'a'));
+    assert_ne!(KeyEvent::new(none, 'A'), Key::new(shift, 'A'));
+    assert_eq!(KeyEvent::new(none, 'Ä'), Key::new(none, 'Ä'));
+    assert_ne!(KeyEvent::new(none, 'Ä'), Key::new(shift, 'ä'));
+
+    // FYI: for codepoints that are not letters with uppercase/lowercase versions, we use
+    // the shifted key in the canonical notation, because the unshifted one may depend on the
+    // keyboard layout.
+    let ctrl_shift_equals = KeyEvent::with_shifted_codepoint(ctrl_shift, '=', Some('+'));
+    assert_eq!(ctrl_shift_equals, Key::new(ctrl_shift, '='));
+    assert_eq!(ctrl_shift_equals, Key::new(ctrl, '+')); // canonical notation
+    assert_ne!(ctrl_shift_equals, Key::new(ctrl_shift, '+'));
+    assert_ne!(ctrl_shift_equals, Key::new(ctrl, '='));
+
+    // A event like capslock-shift-ä may or may not include a shifted codepoint.
+    //
+    // Without a shifted codepoint, we cannot easily match ctrl-Ä.
+    let caps_ctrl_shift_ä = KeyEvent::new(ctrl_shift, 'ä');
+    assert_eq!(caps_ctrl_shift_ä, Key::new(ctrl_shift, 'ä')); // canonical notation
+    assert_ne!(caps_ctrl_shift_ä, Key::new(ctrl, 'ä'));
+    assert_ne!(caps_ctrl_shift_ä, Key::new(ctrl, 'Ä')); // can't match without shifted key
+    assert_ne!(caps_ctrl_shift_ä, Key::new(ctrl_shift, 'Ä'));
+    // With a shifted codepoint, we can match the alternative notation too.
+    let caps_ctrl_shift_ä = KeyEvent::with_shifted_codepoint(ctrl_shift, 'ä', Some('Ä'));
+    assert_eq!(caps_ctrl_shift_ä, Key::new(ctrl_shift, 'ä')); // canonical notation
+    assert_ne!(caps_ctrl_shift_ä, Key::new(ctrl, 'ä'));
+    assert_eq!(caps_ctrl_shift_ä, Key::new(ctrl, 'Ä')); // matched via shifted key
+    assert_ne!(caps_ctrl_shift_ä, Key::new(ctrl_shift, 'Ä'));
+}
+
 /// Represents an event on the character input stream.
 #[derive(Debug, Clone)]
 pub enum CharEventType {
     /// A character was entered.
-    Char(Key),
+    Char(KeyInputEvent),
 
     /// A readline event.
     Readline(ReadlineCmd),
@@ -172,9 +305,9 @@ pub struct ReadlineCmdEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct KeyEvent {
+pub struct KeyInputEvent {
     // The key.
-    pub key: Key,
+    pub key: KeyEvent,
     // The style to use when inserting characters into the command line.
     pub input_style: CharInputStyle,
     /// The sequence of characters in the input mapping which generated this event.
@@ -207,7 +340,7 @@ pub enum ImplicitEvent {
 #[derive(Debug, Clone)]
 pub enum CharEvent {
     /// A character was entered.
-    Key(KeyEvent),
+    Key(KeyInputEvent),
 
     /// A readline event.
     Readline(ReadlineCmdEvent),
@@ -240,7 +373,7 @@ impl CharEvent {
         kevt.key.codepoint
     }
 
-    pub fn get_key(&self) -> Option<&KeyEvent> {
+    pub fn get_key(&self) -> Option<&KeyInputEvent> {
         match self {
             CharEvent::Key(kevt) => Some(kevt),
             _ => None,
@@ -262,15 +395,15 @@ impl CharEvent {
     }
 
     pub fn from_char(c: char) -> CharEvent {
-        Self::from_key(Key::from_raw(c))
+        Self::from_key(KeyEvent::from_raw(c))
     }
 
-    pub fn from_key(key: Key) -> CharEvent {
+    pub fn from_key(key: KeyEvent) -> CharEvent {
         Self::from_key_seq(key, WString::new())
     }
 
-    pub fn from_key_seq(key: Key, seq: WString) -> CharEvent {
-        CharEvent::Key(KeyEvent {
+    pub fn from_key_seq(key: KeyEvent, seq: WString) -> CharEvent {
+        CharEvent::Key(KeyInputEvent {
             key,
             input_style: CharInputStyle::Normal,
             seq,
@@ -578,13 +711,15 @@ pub(crate) fn terminal_protocols_disable_ifn() {
     did_write.store(true);
 }
 
-fn parse_mask(mask: u32) -> Modifiers {
-    Modifiers {
+fn parse_mask(mask: u32) -> (Modifiers, bool) {
+    let modifiers = Modifiers {
         ctrl: (mask & 4) != 0,
         alt: (mask & 2) != 0,
         shift: (mask & 1) != 0,
         sup: (mask & 8) != 0,
-    }
+    };
+    let caps_lock = (mask & 64) != 0;
+    (modifiers, caps_lock)
 }
 
 // A data type used by the input machinery.
@@ -726,7 +861,7 @@ pub trait InputEventQueuer {
                     let key_with_escape = if read_byte == 0x1b {
                         self.parse_escape_sequence(&mut buffer, &mut have_escape_prefix)
                     } else {
-                        canonicalize_control_char(read_byte)
+                        canonicalize_control_char(read_byte).map(KeyEvent::from)
                     };
                     if self.paste_is_buffering() {
                         if read_byte != 0x1b {
@@ -736,7 +871,7 @@ pub trait InputEventQueuer {
                     }
                     let mut seq = WString::new();
                     let mut key = key_with_escape;
-                    if key == Some(Key::from_raw(key::Invalid)) {
+                    if key.is_some_and(|key| key == Key::from_raw(key::Invalid)) {
                         continue;
                     }
                     assert!(key.map_or(true, |key| key.codepoint != key::Invalid));
@@ -780,7 +915,7 @@ pub trait InputEventQueuer {
                             continue;
                         };
                         (
-                            CharEvent::from_key_seq(Key::from_raw(c), seq.clone()),
+                            CharEvent::from_key_seq(KeyEvent::from_raw(c), seq.clone()),
                             Some(seq.chars().skip(1).map(CharEvent::from_char)),
                         )
                     };
@@ -797,7 +932,8 @@ pub trait InputEventQueuer {
                             }
                         });
                         let vintr = shell_modes().c_cc[libc::VINTR];
-                        if vintr != 0 && key == Some(Key::from_single_byte(vintr)) {
+                        if vintr != 0 && key.is_some_and(|key| key == Key::from_single_byte(vintr))
+                        {
                             FLOG!(
                                 reader,
                                 "Received interrupt key, giving up waiting for response from terminal"
@@ -827,22 +963,22 @@ pub trait InputEventQueuer {
         &mut self,
         buffer: &mut Vec<u8>,
         have_escape_prefix: &mut bool,
-    ) -> Option<Key> {
+    ) -> Option<KeyEvent> {
         assert!(buffer.len() <= 2);
         let recursive_invocation = buffer.len() == 2;
         let Some(next) = self.try_readb(buffer) else {
             if !self.paste_is_buffering() {
-                return Some(Key::from_raw(key::Escape));
+                return Some(KeyEvent::from_raw(key::Escape));
             }
             return None;
         };
-        let invalid = Key::from_raw(key::Invalid);
+        let invalid = KeyEvent::from_raw(key::Invalid);
         if recursive_invocation && next == b'\x1b' {
             return Some(
                 match self.parse_escape_sequence(buffer, have_escape_prefix) {
                     Some(mut nested_sequence) => {
-                        if nested_sequence == invalid {
-                            return Some(Key::from_raw(key::Escape));
+                        if nested_sequence == invalid.key {
+                            return Some(KeyEvent::from_raw(key::Escape));
                         }
                         nested_sequence.modifiers.alt = true;
                         nested_sequence
@@ -866,7 +1002,7 @@ pub trait InputEventQueuer {
         match canonicalize_control_char(next) {
             Some(mut key) => {
                 key.modifiers.alt = true;
-                Some(key)
+                Some(KeyEvent::from(key))
             }
             None => {
                 *have_escape_prefix = true;
@@ -878,7 +1014,7 @@ pub trait InputEventQueuer {
     fn parse_codepoint(
         &mut self,
         state: &mut mbstate_t,
-        out_key: &mut Option<Key>,
+        out_key: &mut Option<KeyEvent>,
         out_seq: &mut WString,
         buffer: &[u8],
         i: usize,
@@ -928,7 +1064,7 @@ pub trait InputEventQueuer {
             if !fish_reserved_codepoint(res) {
                 if *have_escape_prefix && i != 0 {
                     *have_escape_prefix = false;
-                    *out_key = Some(alt(res));
+                    *out_key = Some(KeyEvent::from(alt(res)));
                 }
                 *consumed += 1;
                 out_seq.push(res);
@@ -942,11 +1078,11 @@ pub trait InputEventQueuer {
         ControlFlow::Continue(true)
     }
 
-    fn parse_csi(&mut self, buffer: &mut Vec<u8>) -> Option<Key> {
+    fn parse_csi(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
         // The maximum number of CSI parameters is defined by NPAR, nominally 16.
         let mut params = [[0_u32; 4]; 16];
         let Some(mut c) = self.try_readb(buffer) else {
-            return Some(ctrl('['));
+            return Some(KeyEvent::from(ctrl('[')));
         };
         let mut next_char = |zelf: &mut Self| zelf.try_readb(buffer).unwrap_or(0xff);
         let private_mode;
@@ -984,19 +1120,35 @@ pub trait InputEventQueuer {
             return None;
         }
 
-        let masked_key = |mut codepoint, shifted_codepoint| {
+        let masked_key = |codepoint: char, shifted_codepoint: Option<char>| {
             let mask = params[1][0].saturating_sub(1);
-            let mut modifiers = parse_mask(mask);
-            if let Some(shifted_codepoint) = shifted_codepoint {
-                if shifted_codepoint != '\0' && modifiers.shift {
-                    modifiers.shift = false;
-                    codepoint = shifted_codepoint;
-                }
+            let (mut modifiers, caps_lock) = parse_mask(mask);
+
+            // An event like "capslock-shift-=" should have a shifted codepoint ("+") to enable
+            // fish to match "bind +".
+            //
+            // With letters that are affected by capslock, capslock and shift cancel each
+            // other out ("capslock-shift-ä"), unless there is another modifier to imply that
+            // capslock should be ignored.
+            //
+            // So if shift is the only modifier, we should consume it, but not if the event is
+            // something like "capslock-shift-delete" because delete is not affected by capslock.
+            //
+            // Normally, we could consume shift by translating to the shifted key.
+            // While capslock is on however, we don't get a shifted key, see
+            // https://github.com/kovidgoyal/kitty/issues/8493.
+            //
+            // Do it by trying to find out ourselves whether the key is affected by capslock.
+            //
+            // Alternatively, we could relax our exact matching semantics, and make "bind ä"
+            // match the "shift-ä" event, as suggested in the kitty issue.
+            if caps_lock
+                && modifiers == Modifiers::SHIFT
+                && !codepoint.to_uppercase().eq(Some(codepoint).into_iter())
+            {
+                modifiers.shift = false;
             }
-            Key {
-                modifiers,
-                codepoint,
-            }
+            KeyEvent::with_shifted_codepoint(modifiers, codepoint, shifted_codepoint)
         };
 
         let key = match c {
@@ -1013,9 +1165,9 @@ pub trait InputEventQueuer {
                     return None;
                 }
                 match params[0][0] {
-                    23 | 24 => shift(
+                    23 | 24 => KeyEvent::from(shift(
                         char::from_u32(u32::from(function_key(11)) + params[0][0] - 23).unwrap(), // rxvt style
-                    ),
+                    )),
                     _ => return None,
                 }
             }
@@ -1058,7 +1210,7 @@ pub trait InputEventQueuer {
                     return invalid_sequence(buffer);
                 };
                 let position = ViewportPosition { x, y };
-                let modifiers = parse_mask((button >> 2) & 0x07);
+                let (modifiers, _caps_lock) = parse_mask((button >> 2) & 0x07);
                 let code = button & 0x43;
                 if code != 0 || c != b'M' || modifiers.is_some() {
                     return None;
@@ -1154,23 +1306,23 @@ pub trait InputEventQueuer {
                     char::from_u32(u32::from(function_key(11)) + params[0][0] - 23).unwrap(),
                     None,
                 ),
-                25 | 26 => {
-                    shift(char::from_u32(u32::from(function_key(3)) + params[0][0] - 25).unwrap())
-                } // rxvt style
+                25 | 26 => KeyEvent::from(shift(
+                    char::from_u32(u32::from(function_key(3)) + params[0][0] - 25).unwrap(),
+                )), // rxvt style
                 27 => {
                     let key =
                         canonicalize_keyed_control_char(char::from_u32(params[2][0]).unwrap());
                     masked_key(key, None)
                 }
-                28 | 29 => {
-                    shift(char::from_u32(u32::from(function_key(5)) + params[0][0] - 28).unwrap())
-                } // rxvt style
-                31 | 32 => {
-                    shift(char::from_u32(u32::from(function_key(7)) + params[0][0] - 31).unwrap())
-                } // rxvt style
-                33 | 34 => {
-                    shift(char::from_u32(u32::from(function_key(9)) + params[0][0] - 33).unwrap())
-                } // rxvt style
+                28 | 29 => KeyEvent::from(shift(
+                    char::from_u32(u32::from(function_key(5)) + params[0][0] - 28).unwrap(),
+                )), // rxvt style
+                31 | 32 => KeyEvent::from(shift(
+                    char::from_u32(u32::from(function_key(7)) + params[0][0] - 31).unwrap(),
+                )), // rxvt style
+                33 | 34 => KeyEvent::from(shift(
+                    char::from_u32(u32::from(function_key(9)) + params[0][0] - 33).unwrap(),
+                )), // rxvt style
                 200 => {
                     self.paste_start_buffering();
                     return None;
@@ -1235,7 +1387,7 @@ pub trait InputEventQueuer {
                     )),
                 )
             }
-            b'Z' => shift(key::Tab),
+            b'Z' => KeyEvent::from(shift(key::Tab)),
             b'I' => {
                 self.push_front(CharEvent::Implicit(ImplicitEvent::FocusIn));
                 return None;
@@ -1263,48 +1415,48 @@ pub trait InputEventQueuer {
         self.push_front(CharEvent::Implicit(ImplicitEvent::DisableMouseTracking));
     }
 
-    fn parse_ss3(&mut self, buffer: &mut Vec<u8>) -> Option<Key> {
+    fn parse_ss3(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
         let mut raw_mask = 0;
         let Some(mut code) = self.try_readb(buffer) else {
-            return Some(alt('O'));
+            return Some(KeyEvent::from(alt('O')));
         };
         while (b'0'..=b'9').contains(&code) {
             raw_mask = raw_mask * 10 + u32::from(code - b'0');
             code = self.try_readb(buffer).unwrap_or(0xff);
         }
-        let modifiers = parse_mask(raw_mask.saturating_sub(1));
+        let (modifiers, _caps_lock) = parse_mask(raw_mask.saturating_sub(1));
         #[rustfmt::skip]
         let key = match code {
-            b' ' => Key{modifiers, codepoint: key::Space},
-            b'A' => Key{modifiers, codepoint: key::Up},
-            b'B' => Key{modifiers, codepoint: key::Down},
-            b'C' => Key{modifiers, codepoint: key::Right},
-            b'D' => Key{modifiers, codepoint: key::Left},
-            b'F' => Key{modifiers, codepoint: key::End},
-            b'H' => Key{modifiers, codepoint: key::Home},
-            b'I' => Key{modifiers, codepoint: key::Tab},
-            b'M' => Key{modifiers, codepoint: key::Enter},
-            b'P' => Key{modifiers, codepoint: function_key(1)},
-            b'Q' => Key{modifiers, codepoint: function_key(2)},
-            b'R' => Key{modifiers, codepoint: function_key(3)},
-            b'S' => Key{modifiers, codepoint: function_key(4)},
-            b'X' => Key{modifiers, codepoint: '='},
-            b'j' => Key{modifiers, codepoint: '*'},
-            b'k' => Key{modifiers, codepoint: '+'},
-            b'l' => Key{modifiers, codepoint: ','},
-            b'm' => Key{modifiers, codepoint: '-'},
-            b'n' => Key{modifiers, codepoint: '.'},
-            b'o' => Key{modifiers, codepoint: '/'},
-            b'p' => Key{modifiers, codepoint: '0'},
-            b'q' => Key{modifiers, codepoint: '1'},
-            b'r' => Key{modifiers, codepoint: '2'},
-            b's' => Key{modifiers, codepoint: '3'},
-            b't' => Key{modifiers, codepoint: '4'},
-            b'u' => Key{modifiers, codepoint: '5'},
-            b'v' => Key{modifiers, codepoint: '6'},
-            b'w' => Key{modifiers, codepoint: '7'},
-            b'x' => Key{modifiers, codepoint: '8'},
-            b'y' => Key{modifiers, codepoint: '9'},
+            b' ' => KeyEvent::new(modifiers, key::Space),
+            b'A' => KeyEvent::new(modifiers, key::Up),
+            b'B' => KeyEvent::new(modifiers, key::Down),
+            b'C' => KeyEvent::new(modifiers, key::Right),
+            b'D' => KeyEvent::new(modifiers, key::Left),
+            b'F' => KeyEvent::new(modifiers, key::End),
+            b'H' => KeyEvent::new(modifiers, key::Home),
+            b'I' => KeyEvent::new(modifiers, key::Tab),
+            b'M' => KeyEvent::new(modifiers, key::Enter),
+            b'P' => KeyEvent::new(modifiers, function_key(1)),
+            b'Q' => KeyEvent::new(modifiers, function_key(2)),
+            b'R' => KeyEvent::new(modifiers, function_key(3)),
+            b'S' => KeyEvent::new(modifiers, function_key(4)),
+            b'X' => KeyEvent::new(modifiers, '='),
+            b'j' => KeyEvent::new(modifiers, '*'),
+            b'k' => KeyEvent::new(modifiers, '+'),
+            b'l' => KeyEvent::new(modifiers, ','),
+            b'm' => KeyEvent::new(modifiers, '-'),
+            b'n' => KeyEvent::new(modifiers, '.'),
+            b'o' => KeyEvent::new(modifiers, '/'),
+            b'p' => KeyEvent::new(modifiers, '0'),
+            b'q' => KeyEvent::new(modifiers, '1'),
+            b'r' => KeyEvent::new(modifiers, '2'),
+            b's' => KeyEvent::new(modifiers, '3'),
+            b't' => KeyEvent::new(modifiers, '4'),
+            b'u' => KeyEvent::new(modifiers, '5'),
+            b'v' => KeyEvent::new(modifiers, '6'),
+            b'w' => KeyEvent::new(modifiers, '7'),
+            b'x' => KeyEvent::new(modifiers, '8'),
+            b'y' => KeyEvent::new(modifiers, '9'),
             _ => return None,
         };
         Some(key)
@@ -1334,10 +1486,10 @@ pub trait InputEventQueuer {
         );
     }
 
-    fn parse_dcs(&mut self, buffer: &mut Vec<u8>) -> Option<Key> {
+    fn parse_dcs(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
         assert!(buffer.len() == 2);
         let Some(success) = self.try_readb(buffer) else {
-            return Some(alt('P'));
+            return Some(KeyEvent::from(alt('P')));
         };
         let success = match success {
             b'0' => false,
@@ -1589,7 +1741,7 @@ pub trait InputEventQueuer {
     fn enqueue_interrupt_key(&mut self) {
         let vintr = shell_modes().c_cc[libc::VINTR];
         if vintr != 0 {
-            let interrupt_evt = CharEvent::from_key(Key::from_single_byte(vintr));
+            let interrupt_evt = CharEvent::from_key(KeyEvent::from_single_byte(vintr));
             if unblock_input(self.blocking_wait()) {
                 FLOG!(
                     reader,
@@ -1629,7 +1781,7 @@ pub(crate) fn unblock_input(mut wait_guard: MutexGuard<Option<BlockingWait>>) ->
     true
 }
 
-fn invalid_sequence(buffer: &[u8]) -> Option<Key> {
+fn invalid_sequence(buffer: &[u8]) -> Option<KeyEvent> {
     FLOG!(
         reader,
         "Error: invalid escape sequence: ",
