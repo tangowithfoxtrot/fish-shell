@@ -6,7 +6,7 @@ use crate::{
     flog::FloggableDebug,
     reader::TERMINAL_MODE_ON_STARTUP,
     wchar::{decode_byte_from_char, prelude::*},
-    wutil::{fish_is_pua, fish_wcstoi},
+    wutil::{fish_is_pua, fish_wcstoul},
 };
 
 pub(crate) const Backspace: char = '\u{F500}'; // below ENCODE_DIRECT_BASE
@@ -26,13 +26,14 @@ pub(crate) const Tab: char = '\u{F50D}';
 pub(crate) const Space: char = '\u{F50E}';
 pub(crate) const Menu: char = '\u{F50F}';
 pub(crate) const PrintScreen: char = '\u{F510}';
+pub(crate) const MAX_FUNCTION_KEY: u32 = 12;
 pub(crate) fn function_key(n: u32) -> char {
-    assert!((1..=12).contains(&n));
-    char::from_u32(u32::from('\u{F5FF}') - 12 + (n - 1)).unwrap()
+    assert!((1..=MAX_FUNCTION_KEY).contains(&n));
+    char::from_u32(u32::from('\u{F5FF}') - MAX_FUNCTION_KEY + (n - 1)).unwrap()
 }
 pub(crate) const Invalid: char = '\u{F5FF}';
 
-const KEY_NAMES: &[(char, &wstr)] = &[
+pub(crate) const KEY_NAMES: &[(char, &wstr)] = &[
     ('-', L!("minus")),
     (',', L!("comma")),
     (Backspace, L!("backspace")),
@@ -308,11 +309,14 @@ pub(crate) fn parse_keys(value: &wstr) -> Result<Vec<Key>, WString> {
                 })?
             } else if codepoint.is_none() && key_name.starts_with('f') && key_name.len() <= 3 {
                 let num = key_name.strip_prefix('f').unwrap();
-                let codepoint = match fish_wcstoi(num) {
-                    Ok(n) if (1..=12).contains(&n) => function_key(u32::try_from(n).unwrap()),
+                let codepoint = match fish_wcstoul(num) {
+                    Ok(n) if (1..=u64::from(MAX_FUNCTION_KEY)).contains(&n) => {
+                        function_key(u32::try_from(n).unwrap())
+                    }
                     _ => {
                         return Err(wgettext_fmt!(
-                            "only f1 through f12 are supported, not 'f%s'",
+                            "only f1 through f%d are supported, not 'f%s'",
+                            MAX_FUNCTION_KEY,
                             num,
                         ));
                     }
@@ -403,7 +407,7 @@ impl From<Key> for WString {
             .iter()
             .find_map(|&(codepoint, name)| (codepoint == key.codepoint).then(|| name.to_owned()))
             .or_else(|| {
-                (function_key(1)..=function_key(12))
+                (function_key(1)..=function_key(MAX_FUNCTION_KEY))
                     .contains(&key.codepoint)
                     .then(|| {
                         sprintf!(
@@ -412,7 +416,8 @@ impl From<Key> for WString {
                         )
                     })
             });
-        let mut res = name.unwrap_or_else(|| char_to_symbol(key.codepoint));
+        let mut res =
+            name.unwrap_or_else(|| char_to_symbol(key.codepoint, key.modifiers.is_none()));
 
         if key.modifiers.shift {
             res.insert_utfstr(0, L!("shift-"));
@@ -449,12 +454,12 @@ fn ctrl_to_symbol(buf: &mut WString, c: char) {
 
 /// Return true if the character must be escaped when used in the sequence of chars to be bound in
 /// a `bind` command.
-fn must_escape(c: char) -> bool {
-    "~[]()<>{}*\\?$#;&|'\"".contains(c)
+fn must_escape(is_first_in_token: bool, c: char) -> bool {
+    "[]()<>{}*\\$;&|'\"".contains(c) || (is_first_in_token && "~#".contains(c))
 }
 
-fn ascii_printable_to_symbol(buf: &mut WString, c: char) {
-    if must_escape(c) {
+fn ascii_printable_to_symbol(buf: &mut WString, is_first_in_token: bool, c: char) {
+    if must_escape(is_first_in_token, c) {
         sprintf!(=> buf, "\\%c", c);
     } else {
         sprintf!(=> buf, "%c", c);
@@ -462,14 +467,14 @@ fn ascii_printable_to_symbol(buf: &mut WString, c: char) {
 }
 
 /// Convert a wide-char to a symbol that can be used in our output.
-pub fn char_to_symbol(c: char) -> WString {
+pub fn char_to_symbol(c: char, is_first_in_token: bool) -> WString {
     let mut buff = WString::new();
     let buf = &mut buff;
     if c <= ' ' || c == '\x7F' {
         ctrl_to_symbol(buf, c);
     } else if c < '\u{80}' {
         // ASCII characters that are not control characters
-        ascii_printable_to_symbol(buf, c);
+        ascii_printable_to_symbol(buf, is_first_in_token, c);
     } else if let Some(byte) = decode_byte_from_char(c) {
         sprintf!(=> buf, "\\x%02x", byte);
     } else if ('\u{e000}'..='\u{f8ff}').contains(&c) {

@@ -120,6 +120,15 @@ bind | string match -v '*\e\\[*'
 # CHECK: bind -M bind_mode ctrl-x true
 # CHECK: bind tab 'echo banana'
 
+bind ctrl-#
+bind alt-\#
+bind super-ctrl-~
+bind super-alt-\~
+# CHECKERR: bind: No binding found for key 'ctrl-#'
+# CHECKERR: bind: No binding found for key 'alt-#'
+# CHECKERR: bind: No binding found for key 'super-ctrl-~'
+# CHECKERR: bind: No binding found for key 'super-alt-~'
+
 # Legacy
 bind \cx\cax 'echo foo'
 bind \cx\cax
@@ -140,6 +149,9 @@ bind tab
 
 bind ctrl-\b
 # CHECKERR: bind: Cannot add control modifier to control character 'ctrl-h'
+
+bind -k nul 'echo foo'
+# CHECKERR: bind: the -k/--key syntax is no longer supported. See `bind --help` and `bind --key-names`
 
 # Either Return or ctrl-m.
 bind \r
