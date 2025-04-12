@@ -650,7 +650,9 @@ This prompt would look like:
     :red:`/home/tutorial >` _
 
 
-You can choose among some sample prompts by running ``fish_config`` for a web UI or ``fish_config prompt`` for a simpler version inside your terminal.
+See also :doc:`Writing your own prompt <prompt>`.
+
+You can choose among sample prompts by running ``fish_config`` for a web UI or ``fish_config prompt`` for a simpler version inside your terminal.
 
 $PATH
 -----
