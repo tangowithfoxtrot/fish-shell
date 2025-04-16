@@ -457,28 +457,22 @@ pub fn path_as_implicit_cd(path: &wstr, wd: &wstr, vars: &dyn Environment) -> Op
 pub fn path_make_canonical(path: &mut WString) {
     let chars: &mut [char] = path.as_char_slice_mut();
 
-    // Ignore trailing slashes, unless it's the first character.
-    let mut len = chars.len();
-    while len > 1 && chars[len - 1] == '/' {
-        len -= 1;
-    }
-
     // Turn runs of slashes into a single slash.
-    let mut trailing = 0;
+    let mut written = 0;
     let mut prev_was_slash = false;
-    for leading in 0..len {
-        let c = chars[leading];
+    for read in 0..chars.len() {
+        let c = chars[read];
         let is_slash = c == '/';
-        if !prev_was_slash || !is_slash {
-            // This is either the first slash in a run, or not a slash at all.
-            chars[trailing] = c;
-            trailing += 1;
+        if prev_was_slash && is_slash {
+            continue;
         }
+        // This is either the first slash in a run, or not a slash at all.
+        chars[written] = c;
+        written += 1;
         prev_was_slash = is_slash;
     }
-    assert!(trailing <= len);
-    if trailing < len {
-        path.truncate(trailing);
+    if written > 1 {
+        path.truncate(written - usize::from(prev_was_slash));
     }
 }
 
@@ -824,6 +818,10 @@ fn test_path() {
     path = L!("/").to_owned();
     path_make_canonical(&mut path);
     assert_eq!(&path, L!("/"));
+
+    path = L!("/home/fishuser/").to_owned();
+    path_make_canonical(&mut path);
+    assert_eq!(&path, L!("/home/fishuser"));
 
     assert!(!paths_are_equivalent(L!("/foo/bar/baz"), L!("foo/bar/baz")));
     assert!(paths_are_equivalent(
