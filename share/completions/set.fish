@@ -127,11 +127,13 @@ complete -c set -n '__fish_seen_argument -s e -l erase; and __fish_seen_argument
 # Color completions
 complete -c set -n '__fish_set_is_color true false' -x -a '(set_color --print-colors)' -d 'text color'
 complete -c set -n '__fish_set_is_color false true' -a '--background=(set_color --print-colors)'
+complete -c set -n '__fish_set_is_color false true' -a '--underline-color=(set_color --print-colors)'
 complete -c set -n '__fish_set_is_color true false' -a --bold -x
 complete -c set -n '__fish_set_is_color true false' -a --dim -x
 complete -c set -n '__fish_set_is_color true false' -a --italics -x
 complete -c set -n '__fish_set_is_color true true' -a --reverse -x
 complete -c set -n '__fish_set_is_color true false' -a --underline -x
+complete -c set -n '__fish_set_is_color true false' -a --underline=curly -x
 
 # Locale completions
 complete -c set -n '__fish_set_is_locale; and not __fish_seen_argument -s e -l erase' -x -a '(command -sq locale; and locale -a)' -d Locale

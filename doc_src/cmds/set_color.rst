@@ -37,6 +37,9 @@ The following options are available:
 **-b** or **--background** *COLOR*
     Sets the background color.
 
+**--underline-color** *COLOR*
+    Set the underline color.
+
 **-c** or **--print-colors**
     Prints the given colors or a colored list of the 16 named colors.
 
@@ -52,8 +55,8 @@ The following options are available:
 **-r** or **--reverse**
     Sets reverse mode.
 
-**-u** or **--underline**
-    Sets underlined mode.
+**-u** or **--underline**, or **-uSTYLE** or **--underline=STYLE**
+    Set the underline mode; supported styles are **single** (default) and **curly**.
 
 **-h** or **--help**
     Displays help about using this command.

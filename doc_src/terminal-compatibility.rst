@@ -102,7 +102,7 @@ Optional Commands
 
    * - ``\e[m``
      - sgr0
-     - Turn off bold/dim/italic/underline/reverse attribute modes.
+     - Turn off bold/dim/italic/underline/reverse attribute modes and select default colors.
      -
    * - ``\e[1m``
      - bold
@@ -120,6 +120,10 @@ Optional Commands
      - smul
      - Enter underline mode.
      -
+   * - ``\e[4:3m``
+     - Su
+     - Enter curly underline mode.
+     - kitty
    * - ``\e[7m``
      - rev
      - Enter reverse video mode (swap foreground and background colors).
@@ -140,6 +144,10 @@ Optional Commands
      - setab
      - Select background color Ps from the 256-color-palette.
      -
+   * - ``\e[58:5: Ps m`` (note: colons not semicolons)
+     - Su
+     - Select underline color Ps from the 256-color-palette.
+     - kitty
    * - ``\e[ Ps m``
      - setaf
        setab
@@ -157,6 +165,14 @@ Optional Commands
      -
      - Select background color from 24-bit RGB colors.
      -
+   * - ``\e[58:2:: Ps : Ps : Ps m`` (note: colons not semicolons)
+     - Su
+     - Select underline color from 24-bit RGB colors.
+     - kitty
+   * - ``\e[59m``
+     - Su
+     - Reset underline color (follow foreground color).
+     - kitty
    * - ``\e[ Ps S``
      - indn
      - Scroll forward Ps lines.
