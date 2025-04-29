@@ -20,19 +20,19 @@ use crate::terminal::TerminalCommand::{
 };
 use crate::terminal::{
     Capability, Output, Outputter, KITTY_KEYBOARD_SUPPORTED, SCROLL_FORWARD_SUPPORTED,
-    SCROLL_FORWARD_TERMINFO_CODE, SYNCHRONIZED_OUTPUT_SUPPORTED,
+    SCROLL_FORWARD_TERMINFO_CODE,
 };
 use crate::threads::{iothread_port, is_main_thread};
 use crate::universal_notifier::default_notifier;
 use crate::wchar::{encode_byte_to_char, prelude::*};
 use crate::wutil::encoding::{mbrtowc, mbstate_t, zero_mbstate};
 use crate::wutil::fish_wcstol;
+use std::cell::{RefCell, RefMut};
 use std::collections::VecDeque;
 use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 // The range of key codes for inputrc-style keyboard functions.
@@ -336,12 +336,14 @@ pub enum ImplicitEvent {
     FocusOut,
     /// Request to disable mouse tracking.
     DisableMouseTracking,
-    /// Primary DA response.
+    /// Mouse left click.
+    MouseLeft(ViewportPosition),
+}
+
+#[derive(Debug, Clone)]
+pub enum QueryResponseEvent {
     PrimaryDeviceAttribute,
-    /// Handle mouse left click.
-    MouseLeftClickContinuation(ViewportPosition, ViewportPosition),
-    /// Push prompt to top.
-    ScrollbackPushContinuation(usize),
+    CursorPositionReport(ViewportPosition),
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +359,8 @@ pub enum CharEvent {
 
     /// Any event that has no user-visible representation.
     Implicit(ImplicitEvent),
+
+    QueryResponse(QueryResponseEvent),
 }
 impl FloggableDebug for CharEvent {}
 
@@ -754,23 +758,16 @@ impl InputData {
     }
 }
 
-#[derive(Eq, PartialEq)]
-pub enum CursorPositionWait {
+#[derive(Clone, Eq, PartialEq)]
+pub enum CursorPositionQuery {
     MouseLeft(ViewportPosition),
     ScrollbackPush,
 }
 
 #[derive(Eq, PartialEq)]
-pub enum Queried {
-    NotYet,
-    Once,
-    Twice,
-}
-
-#[derive(Eq, PartialEq)]
-pub enum BlockingWait {
-    Startup(Queried),
-    CursorPosition(CursorPositionWait),
+pub enum TerminalQuery {
+    PrimaryDeviceAttribute,
+    CursorPositionReport(CursorPositionQuery),
 }
 
 /// A trait which knows how to produce a stream of input events.
@@ -778,12 +775,16 @@ pub enum BlockingWait {
 pub trait InputEventQueuer {
     /// Return the next event in the queue, or none if the queue is empty.
     fn try_pop(&mut self) -> Option<CharEvent> {
-        if self.is_blocked() {
+        if self.is_blocked_querying() {
+            use ImplicitEvent::*;
             match self.get_input_data().queue.front()? {
-                CharEvent::Key(_) | CharEvent::Readline(_) | CharEvent::Command(_) => {
+                CharEvent::QueryResponse(_) | CharEvent::Implicit(CheckExit | Eof) => {}
+                CharEvent::Key(_)
+                | CharEvent::Readline(_)
+                | CharEvent::Command(_)
+                | CharEvent::Implicit(_) => {
                     return None; // No code execution while blocked.
                 }
-                CharEvent::Implicit(_) => (),
             }
         }
         self.get_input_data_mut().queue.pop_front()
@@ -910,7 +911,7 @@ pub trait InputEventQueuer {
                             Some(seq.chars().skip(1).map(CharEvent::from_char)),
                         )
                     };
-                    if self.is_blocked() {
+                    if self.is_blocked_querying() {
                         FLOG!(
                             reader,
                             "Still blocked on response from terminal, deferring key event",
@@ -929,7 +930,7 @@ pub trait InputEventQueuer {
                                 reader,
                                 "Received interrupt key, giving up waiting for response from terminal"
                             );
-                            let ok = unblock_input(self.blocking_wait());
+                            let ok = stop_query(self.blocking_query());
                             assert!(ok);
                         }
                         continue;
@@ -1078,14 +1079,7 @@ pub trait InputEventQueuer {
         let key = match c {
             b'$' => {
                 if next_char(self) == b'y' {
-                    if private_mode == Some(b'?') {
-                        // DECRPM
-                        if params[0][0] == 2026 && matches!(params[1][0], 1 | 2) {
-                            FLOG!(reader, "Synchronized output is supported");
-                            SYNCHRONIZED_OUTPUT_SUPPORTED.store(true);
-                        }
-                    }
-                    // DECRQM
+                    // DECRPM/DECRQM
                     return None;
                 }
                 match params[0][0] {
@@ -1139,22 +1133,7 @@ pub trait InputEventQueuer {
                 if code != 0 || c != b'M' || modifiers.is_some() {
                     return None;
                 }
-                let wait_guard = self.blocking_wait();
-                let Some(wait) = &*wait_guard else {
-                    drop(wait_guard);
-                    self.on_mouse_left_click(position);
-                    return None;
-                };
-                match wait {
-                    BlockingWait::Startup(_) => {}
-                    BlockingWait::CursorPosition(_) => {
-                        // TODO: re-queue it I guess.
-                        FLOG!(
-                                reader,
-                                "Ignoring mouse left click received while still waiting for Cursor Position Report"
-                            );
-                    }
-                }
+                self.push_front(CharEvent::Implicit(ImplicitEvent::MouseLeft(position)));
                 return None;
             }
             b't' => {
@@ -1188,23 +1167,10 @@ pub trait InputEventQueuer {
                     return invalid_sequence(buffer);
                 };
                 FLOG!(reader, "Received cursor position report y:", y, "x:", x);
-                let wait_guard = self.blocking_wait();
-                let Some(BlockingWait::CursorPosition(wait)) = &*wait_guard else {
-                    return None;
-                };
-                let continuation = match wait {
-                    CursorPositionWait::MouseLeft(click_position) => {
-                        ImplicitEvent::MouseLeftClickContinuation(
-                            ViewportPosition { x, y },
-                            *click_position,
-                        )
-                    }
-                    CursorPositionWait::ScrollbackPush => {
-                        ImplicitEvent::ScrollbackPushContinuation(y)
-                    }
-                };
-                drop(wait_guard);
-                self.push_front(CharEvent::Implicit(continuation));
+                let cursor_pos = ViewportPosition { x, y };
+                self.push_front(CharEvent::QueryResponse(
+                    QueryResponseEvent::CursorPositionReport(cursor_pos),
+                ));
                 return None;
             }
             b'S' => masked_key(function_key(4), None),
@@ -1257,7 +1223,9 @@ pub trait InputEventQueuer {
                 _ => return None,
             },
             b'c' if private_mode == Some(b'?') => {
-                self.push_front(CharEvent::Implicit(ImplicitEvent::PrimaryDeviceAttribute));
+                self.push_front(CharEvent::QueryResponse(
+                    QueryResponseEvent::PrimaryDeviceAttribute,
+                ));
                 return None;
             }
             b'u' => {
@@ -1381,28 +1349,34 @@ pub trait InputEventQueuer {
         Some(key)
     }
 
-    fn parse_xtversion(&mut self, buffer: &mut Vec<u8>) {
-        assert!(buffer.len() == 3);
+    fn read_until_sequence_terminator(&mut self, buffer: &mut Vec<u8>) -> Option<()> {
+        let mut escape = false;
         loop {
-            match self.try_readb(buffer) {
-                None => return,
-                Some(b'\x1b') => break,
-                Some(_) => continue,
+            let b = self.try_readb(buffer)?;
+            if escape && b == b'\\' {
+                break;
             }
+            escape = b == b'\x1b';
         }
-        if self.try_readb(buffer) != Some(b'\\') {
-            return;
-        }
-        if buffer[3] != b'|' {
-            return;
+        buffer.pop();
+        buffer.pop();
+        Some(())
+    }
+
+    fn parse_xtversion(&mut self, buffer: &mut Vec<u8>) -> Option<()> {
+        assert_eq!(buffer, b"\x1bP>");
+        self.read_until_sequence_terminator(buffer)?;
+        if buffer.get(3)? != &b'|' {
+            return None;
         }
         FLOG!(
             reader,
             format!(
                 "Received XTVERSION response: {}",
-                str2wcstring(&buffer[4..buffer.len() - 2]),
+                str2wcstring(&buffer[4..buffer.len()])
             )
         );
+        None
     }
 
     fn parse_dcs(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
@@ -1425,12 +1399,7 @@ pub trait InputEventQueuer {
         if self.try_readb(buffer)? != b'r' {
             return None;
         }
-        while self.try_readb(buffer)? != b'\x1b' {}
-        if self.try_readb(buffer)? != b'\\' {
-            return None;
-        }
-        buffer.pop();
-        buffer.pop();
+        self.read_until_sequence_terminator(buffer)?;
         // \e P 1 r + Pn ST
         // \e P 0 r + msg ST
         let buffer = &buffer[5..];
@@ -1446,17 +1415,23 @@ pub trait InputEventQueuer {
         }
         let mut buffer = buffer.splitn(2, |&c| c == b'=');
         let key = buffer.next().unwrap();
-        let value = buffer.next()?;
         let key = parse_hex(key)?;
-        let value = parse_hex(value)?;
-        FLOG!(
-            reader,
-            format!(
-                "Received XTGETTCAP response: {}={:?}",
-                str2wcstring(&key),
-                str2wcstring(&value)
-            )
-        );
+        if let Some(value) = buffer.next() {
+            let value = parse_hex(value)?;
+            FLOG!(
+                reader,
+                format!(
+                    "Received XTGETTCAP response: {}={:?}",
+                    str2wcstring(&key),
+                    str2wcstring(&value)
+                )
+            );
+        } else {
+            FLOG!(
+                reader,
+                format!("Received XTGETTCAP response: {}", str2wcstring(&key))
+            );
+        }
         if key == SCROLL_FORWARD_TERMINFO_CODE.as_bytes() {
             SCROLL_FORWARD_SUPPORTED.store(true);
             FLOG!(reader, "Scroll forward is supported");
@@ -1636,15 +1611,10 @@ pub trait InputEventQueuer {
         }
     }
 
-    fn blocking_wait(&self) -> MutexGuard<Option<BlockingWait>> {
-        static NO_WAIT: Mutex<Option<BlockingWait>> = Mutex::new(None);
-        NO_WAIT.lock().unwrap()
+    fn blocking_query(&self) -> RefMut<'_, Option<TerminalQuery>>;
+    fn is_blocked_querying(&self) -> bool {
+        self.blocking_query().is_some()
     }
-    fn is_blocked(&self) -> bool {
-        false
-    }
-
-    fn on_mouse_left_click(&mut self, _position: ViewportPosition) {}
 
     /// Override point for when we are about to (potentially) block in select(). The default does
     /// nothing.
@@ -1657,7 +1627,7 @@ pub trait InputEventQueuer {
         let vintr = shell_modes().c_cc[libc::VINTR];
         if vintr != 0 {
             let interrupt_evt = CharEvent::from_key(KeyEvent::from_single_byte(vintr));
-            if unblock_input(self.blocking_wait()) {
+            if stop_query(self.blocking_query()) {
                 FLOG!(
                     reader,
                     "Received interrupt, giving up on waiting for terminal response"
@@ -1761,12 +1731,8 @@ pub(crate) fn decode_input_byte(
     invalid(out_seq, || FLOG!(reader, "Illegal codepoint"))
 }
 
-pub(crate) fn unblock_input(mut wait_guard: MutexGuard<Option<BlockingWait>>) -> bool {
-    if wait_guard.is_none() {
-        return false;
-    }
-    *wait_guard = None;
-    true
+pub(crate) fn stop_query(mut query: RefMut<'_, Option<TerminalQuery>>) -> bool {
+    query.take().is_some()
 }
 
 fn invalid_sequence(buffer: &[u8]) -> Option<KeyEvent> {
@@ -1795,12 +1761,14 @@ impl<'a> std::fmt::Display for DisplayBytes<'a> {
 /// A simple, concrete implementation of InputEventQueuer.
 pub struct InputEventQueue {
     data: InputData,
+    blocking_query: RefCell<Option<TerminalQuery>>,
 }
 
 impl InputEventQueue {
     pub fn new(in_fd: RawFd) -> Self {
         Self {
             data: InputData::new(in_fd),
+            blocking_query: RefCell::new(None),
         }
     }
 }
@@ -1818,6 +1786,9 @@ impl InputEventQueuer for InputEventQueue {
         if reader_test_and_clear_interrupted() != 0 {
             self.enqueue_interrupt_key();
         }
+    }
+    fn blocking_query(&self) -> RefMut<'_, Option<TerminalQuery>> {
+        self.blocking_query.borrow_mut()
     }
 }
 
