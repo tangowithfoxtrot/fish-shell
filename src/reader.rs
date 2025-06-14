@@ -690,7 +690,6 @@ pub fn reader_read(parser: &Parser, fd: RawFd, io: &IoChain) -> Result<(), Error
 /// Read interactively. Read input from stdin while providing editing facilities.
 fn read_i(parser: &Parser) {
     assert_is_main_thread();
-    parser.assert_can_execute();
     let mut conf = ReaderConfig::default();
     conf.event = L!("fish_prompt");
     conf.complete_ok = true;
@@ -5902,7 +5901,7 @@ fn try_expand_wildcard(
     const TAB_COMPLETE_WILDCARD_MAX_EXPANSION: usize = 256;
 
     let ctx = OperationContext::background_with_cancel_checker(
-        &*parser.variables,
+        &parser.variables,
         Box::new(|| signal_check_cancel() != 0),
         TAB_COMPLETE_WILDCARD_MAX_EXPANSION,
     );
