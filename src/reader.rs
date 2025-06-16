@@ -34,13 +34,12 @@ use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use std::ops::Range;
 use std::os::fd::BorrowedFd;
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::rc::Rc;
 #[cfg(target_has_atomic = "64")]
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU8};
+use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -51,11 +50,10 @@ use crate::ast::{self, is_same_node, Kind};
 use crate::builtins::shared::ErrorCode;
 use crate::builtins::shared::STATUS_CMD_ERROR;
 use crate::builtins::shared::STATUS_CMD_OK;
-use crate::common::restore_term_foreground_process_group_for_exit;
 use crate::common::{
     escape, escape_string, exit_without_destructors, get_ellipsis_char, get_obfuscation_read_char,
-    redirect_tty_output, shell_modes, str2wcstring, write_loop, EscapeFlags, EscapeStringStyle,
-    ScopeGuard, PROGRAM_NAME, UTF8_BOM_WCHAR,
+    restore_term_foreground_process_group_for_exit, shell_modes, str2wcstring, write_loop,
+    EscapeFlags, EscapeStringStyle, ScopeGuard, PROGRAM_NAME, UTF8_BOM_WCHAR,
 };
 use crate::complete::{
     complete, complete_load, sort_and_prioritize, CompleteFlags, Completion, CompletionList,
@@ -178,9 +176,9 @@ static EXIT_STATE: AtomicU8 = AtomicU8::new(ExitState::None as u8);
 pub static SHELL_MODES: Lazy<Mutex<libc::termios>> =
     Lazy::new(|| Mutex::new(unsafe { std::mem::zeroed() }));
 
-/// Mode on startup, which we restore on exit.
-pub static TERMINAL_MODE_ON_STARTUP: Lazy<Mutex<libc::termios>> =
-    Lazy::new(|| Mutex::new(unsafe { std::mem::zeroed() }));
+/// The valid terminal modes on startup. This is set once and not modified after.
+/// Warning: this is read from the SIGTERM handler! Hence the raw global.
+static TERMINAL_MODE_ON_STARTUP: AtomicPtr<libc::termios> = AtomicPtr::new(std::ptr::null_mut());
 
 /// Mode we use to execute programs.
 static TTY_MODES_FOR_EXTERNAL_CMDS: Lazy<Mutex<libc::termios>> =
@@ -196,6 +194,12 @@ static INTERRUPTED: AtomicI32 = AtomicI32::new(0);
 /// If set, SIGHUP has been received. This latches to true.
 /// This is set from a signal handler.
 static SIGHUP_RECEIVED: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
+
+// Get the terminal mode on startup. This is "safe" because it's async-signal safe.
+pub fn safe_get_terminal_mode_on_startup() -> Option<&'static libc::termios> {
+    // Safety: set atomically and not modified after.
+    unsafe { TERMINAL_MODE_ON_STARTUP.load(Ordering::Acquire).as_ref() }
+}
 
 /// A singleton snapshot of the reader state. This is factored out for thread-safety reasons:
 /// it may be fetched on a background thread.
@@ -228,12 +232,30 @@ fn debounce_history_pager() -> &'static Debounce {
 }
 
 fn redirect_tty_after_sighup() {
+    use libc::{EIO, ENOTTY, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+    use std::fs::OpenOptions;
+
     // If we have received SIGHUP, redirect the tty to avoid a user script triggering SIGTTIN or
     // SIGTTOU.
     assert!(reader_received_sighup(), "SIGHUP not received");
     static TTY_REDIRECTED: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
-    if !TTY_REDIRECTED.swap(true) {
-        redirect_tty_output(false);
+    if TTY_REDIRECTED.swap(true) {
+        return;
+    }
+    // dup2 all ENOTTY / EIOs to /dev/null.
+    let Ok(devnull) = OpenOptions::new().read(true).write(true).open("/dev/null") else {
+        return;
+    };
+    let fd = devnull.as_raw_fd();
+    for stdfd in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
+        let mut t = std::mem::MaybeUninit::uninit();
+        unsafe {
+            if libc::tcgetattr(stdfd, t.as_mut_ptr()) != 0
+                && matches!(errno::errno().0, EIO | ENOTTY)
+            {
+                libc::dup2(fd, stdfd);
+            }
+        }
     }
 }
 
@@ -656,20 +678,7 @@ pub fn reader_read(parser: &Parser, fd: RawFd, io: &IoChain) -> Result<(), Error
     // If reader_read is called recursively through the '.' builtin, we need to preserve
     // is_interactive. This, and signal handler setup is handled by
     // proc_push_interactive/proc_pop_interactive.
-    let mut interactive = false;
-    // This block is a hack to work around https://sourceware.org/bugzilla/show_bug.cgi?id=20632.
-    // See also, commit 396bf12. Without the need for this workaround we would just write:
-    // int inter = ((fd == STDIN_FILENO) && isatty(STDIN_FILENO));
-    if fd == STDIN_FILENO {
-        let mut t = MaybeUninit::uninit();
-        if isatty(STDIN_FILENO) {
-            interactive = true;
-        } else if unsafe { libc::tcgetattr(STDIN_FILENO, t.as_mut_ptr()) } == -1 && errno().0 == EIO
-        {
-            redirect_tty_output(false);
-            interactive = true;
-        }
-    }
+    let interactive = (fd == STDIN_FILENO) && isatty(STDIN_FILENO);
 
     let _interactive_push = parser.push_scope(|s| s.is_interactive = interactive);
     signal_set_handlers_once(interactive);
@@ -853,20 +862,23 @@ fn read_ni(parser: &Parser, fd: RawFd, io: &IoChain) -> Result<(), ErrorCode> {
 /// Initialize the reader.
 pub fn reader_init(will_restore_foreground_pgroup: bool) {
     // Save the initial terminal mode.
-    let mut terminal_mode_on_startup = TERMINAL_MODE_ON_STARTUP.lock().unwrap();
-    unsafe { libc::tcgetattr(STDIN_FILENO, &mut *terminal_mode_on_startup) };
+    // Note this field is read by a signal handler, so do it atomically, with a leaked mode.
+    let mut terminal_mode_on_startup = unsafe { std::mem::zeroed::<libc::termios>() };
+    let ret = unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut terminal_mode_on_startup) };
+    // TODO: rationalize behavior if initial tcgetattr() fails.
+    if ret == 0 {
+        // Must be mut because AtomicPtr doesn't have const variant.
+        let leaked: *mut libc::termios = Box::leak(Box::new(terminal_mode_on_startup));
+        TERMINAL_MODE_ON_STARTUP.store(leaked, Ordering::Release);
+    }
 
     #[cfg(not(test))]
     assert!(AT_EXIT.get().is_none());
-    AT_EXIT.get_or_init(|| {
-        Box::new(move |in_signal_handler| {
-            reader_deinit(in_signal_handler, will_restore_foreground_pgroup)
-        })
-    });
+    AT_EXIT.get_or_init(|| Box::new(move || reader_deinit(will_restore_foreground_pgroup)));
 
     // Set the mode used for program execution, initialized to the current mode.
     let mut tty_modes_for_external_cmds = TTY_MODES_FOR_EXTERNAL_CMDS.lock().unwrap();
-    *tty_modes_for_external_cmds = *terminal_mode_on_startup;
+    *tty_modes_for_external_cmds = terminal_mode_on_startup;
     term_fix_external_modes(&mut tty_modes_for_external_cmds);
 
     // Disable flow control by default.
@@ -878,7 +890,6 @@ pub fn reader_init(will_restore_foreground_pgroup: bool) {
 
     term_fix_modes(&mut shell_modes());
 
-    drop(terminal_mode_on_startup);
     drop(tty_modes_for_external_cmds);
 
     // Set up our fixed terminal modes once,
@@ -890,8 +901,10 @@ pub fn reader_init(will_restore_foreground_pgroup: bool) {
     }
 }
 
-pub fn reader_deinit(in_signal_handler: bool, restore_foreground_pgroup: bool) {
-    restore_term_mode(in_signal_handler);
+// TODO(pca): this is run in our "AT_EXIT" handler from a SIGTERM handler.
+// It must be made async-signal-safe (or not invoked).
+pub fn reader_deinit(restore_foreground_pgroup: bool) {
+    safe_restore_term_mode();
     crate::input_common::terminal_protocols_disable_ifn();
     if restore_foreground_pgroup {
         restore_term_foreground_process_group_for_exit();
@@ -901,20 +914,13 @@ pub fn reader_deinit(in_signal_handler: bool, restore_foreground_pgroup: bool) {
 /// Restore the term mode if we own the terminal and are interactive (#8705).
 /// It's important we do this before restore_foreground_process_group,
 /// otherwise we won't think we own the terminal.
-pub fn restore_term_mode(in_signal_handler: bool) {
+/// THIS FUNCTION IS CALLED FROM A SIGNAL HANDLER. IT MUST BE ASYNC-SIGNAL-SAFE.
+pub fn safe_restore_term_mode() {
     if !is_interactive_session() || getpgrp() != unsafe { libc::tcgetpgrp(STDIN_FILENO) } {
         return;
     }
-
-    if unsafe {
-        libc::tcsetattr(
-            STDIN_FILENO,
-            TCSANOW,
-            &*TERMINAL_MODE_ON_STARTUP.lock().unwrap(),
-        ) == -1
-    } && errno().0 == EIO
-    {
-        redirect_tty_output(in_signal_handler);
+    if let Some(modes) = safe_get_terminal_mode_on_startup() {
+        unsafe { libc::tcsetattr(STDIN_FILENO, TCSANOW, modes) };
     }
 }
 
@@ -2197,19 +2203,12 @@ impl<'a> Reader<'a> {
 
         // Get the current terminal modes. These will be restored when the function returns.
         let mut old_modes = MaybeUninit::uninit();
-        if unsafe { libc::tcgetattr(self.conf.inputfd, old_modes.as_mut_ptr()) } == -1
-            && errno().0 == EIO
-        {
-            redirect_tty_output(false);
-        }
+        let restore_modes =
+            unsafe { libc::tcgetattr(self.conf.inputfd, old_modes.as_mut_ptr()) } == 0;
 
         // Set the new modes.
         if unsafe { libc::tcsetattr(self.conf.inputfd, TCSANOW, &*shell_modes()) } == -1 {
             let err = errno().0;
-            if err == EIO {
-                redirect_tty_output(false);
-            }
-
             // This check is required to work around certain issues with fish's approach to
             // terminal control when launching interactive processes while in non-interactive
             // mode. See #4178 for one such example.
@@ -2293,13 +2292,11 @@ impl<'a> Reader<'a> {
         if EXIT_STATE.load(Ordering::Relaxed) != ExitState::FinishedHandlers as _ {
             // The order of the two conditions below is important. Try to restore the mode
             // in all cases, but only complain if interactive.
-            if unsafe { libc::tcsetattr(self.conf.inputfd, TCSANOW, old_modes.as_ptr()) } == -1
+            if restore_modes
+                && unsafe { libc::tcsetattr(self.conf.inputfd, TCSANOW, old_modes.as_ptr()) } == -1
                 && is_interactive_session()
             {
-                if errno().0 == EIO {
-                    redirect_tty_output(false);
-                }
-                perror("tcsetattr"); // return to previous mode
+                perror("tcsetattr");
             }
             Outputter::stdoutput().borrow_mut().reset_text_face();
         }
@@ -4273,9 +4270,6 @@ fn term_donate(quiet: bool /* = false */) {
         )
     } == -1
     {
-        if errno().0 == EIO {
-            redirect_tty_output(false);
-        }
         if errno().0 != EINTR {
             if !quiet {
                 FLOG!(
@@ -4319,9 +4313,6 @@ fn term_steal(copy_modes: bool) {
         term_copy_modes();
     }
     while unsafe { libc::tcsetattr(STDIN_FILENO, TCSANOW, &*shell_modes()) } == -1 {
-        if errno().0 == EIO {
-            redirect_tty_output(false);
-        }
         if errno().0 != EINTR {
             FLOG!(warning, wgettext!("Could not set terminal mode for shell"));
             perror("tcsetattr");
@@ -4391,7 +4382,6 @@ fn acquire_tty_or_exit(shell_pgid: libc::pid_t) {
                 break;
             }
             // No TTY, cannot be interactive?
-            redirect_tty_output(false);
             FLOG!(
                 warning,
                 wgettext!("No TTY for interactive shell (tcgetpgrp failed)")
@@ -4456,9 +4446,6 @@ fn reader_interactive_init(parser: &Parser) {
 
         // Take control of the terminal
         if unsafe { libc::tcsetpgrp(STDIN_FILENO, shell_pgid) } == -1 {
-            if errno().0 == ENOTTY {
-                redirect_tty_output(false);
-            }
             FLOG!(error, wgettext!("Failed to take control of the terminal"));
             perror("tcsetpgrp");
             exit_without_destructors(1);
@@ -4466,9 +4453,6 @@ fn reader_interactive_init(parser: &Parser) {
 
         // Configure terminal attributes
         if unsafe { libc::tcsetattr(STDIN_FILENO, TCSANOW, &*shell_modes()) } == -1 {
-            if errno().0 == EIO {
-                redirect_tty_output(false);
-            }
             FLOG!(warning, wgettext!("Failed to set startup terminal mode!"));
             perror("tcsetattr");
         }
