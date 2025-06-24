@@ -36,28 +36,15 @@
 set -gx LC_ALL C.UTF-8
 
 set -l build_tools (status dirname)
-set -l template_file $build_tools/../po/template.po
+set -g tmpdir
 set -l po_dir $build_tools/../po
 
 set -l extract
 set -l po
 set -l mo
 
-function cleanup_exit
-    set -l exit_status $status
-
-    if set -g --query tmpdir
-        rm -r $tmpdir
-    end
-
-    exit $exit_status
-end
-
 argparse --exclusive 'no-mo,only-mo,dry-run' no-mo only-mo dry-run use-existing-template= -- $argv
 or exit $status
-
-# Make sure that the template file is not included in $po_files.
-rm $template_file 2>/dev/null
 
 if test -z $argv[1]
     # Update everything if not specified otherwise.
@@ -92,17 +79,31 @@ if set -l --query _flag_only_mo
     set -l --erase po
 end
 
+set -g template_file (mktemp)
+# Protect from externally set $tmpdir leaking into this script.
+set -g tmpdir
+
+function cleanup_exit
+    set -l exit_status $status
+
+    rm $template_file
+
+    if set -g --query tmpdir[1]
+        rm -r $tmpdir
+    end
+
+    exit $exit_status
+end
+
 if set -l --query extract
     set -l xgettext_args
     if set -l --query _flag_use_existing_template
         set xgettext_args --use-existing-template=$_flag_use_existing_template
     end
     $build_tools/fish_xgettext.fish $xgettext_args >$template_file
-    or exit 1
+    or cleanup_exit
 end
 
-# Protect from externally set $tmpdir leaking into this script.
-set -g --erase tmpdir
 if set -l --query _flag_dry_run
     # On a dry run, we do not modify po/ but write to a temporary directory instead and check if
     # there is a difference between po/ and the tmpdir after re-generating the PO files.
@@ -116,12 +117,13 @@ if set -l --query _flag_dry_run
 end
 
 for po_file in $po_files
-    if set -g --query tmpdir
+    if set --query tmpdir[1]
         set po_file $tmpdir/(basename $po_file)
     end
     if set -l --query po
         if test -e $po_file
-            msgmerge --update --no-fuzzy-matching --no-wrap --backup=none --quiet $po_file $template_file
+            msgmerge --no-wrap --update --no-fuzzy-matching --backup=none --quiet $po_file $template_file
+            and msgattrib --no-wrap --no-obsolete -o $po_file $po_file
             or cleanup_exit
         else
             cp $template_file $po_file
@@ -135,10 +137,7 @@ for po_file in $po_files
     end
 end
 
-rm $template_file
-
-if set -g --query tmpdir
-    rm $tmpdir/template.po
+if set -g --query tmpdir[1]
     diff -ur $po_dir $tmpdir
     or cleanup_exit
 end

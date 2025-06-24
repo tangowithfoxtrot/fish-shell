@@ -1,21 +1,19 @@
 FROM arm64v8/ubuntu:focal
 LABEL org.opencontainers.image.source=https://github.com/fish-shell/fish-shell
 
-ENV LANG C.UTF-8
-ENV LC_ALL C.UTF-8
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
   && apt-get -y install \
     build-essential \
     cargo \
-    cmake \
     clang \
     gettext \
     git \
     libpcre2-dev \
     locales \
-    ninja-build \
     python3 \
     python3-pexpect \
     rustc \
@@ -35,5 +33,7 @@ USER fishuser
 WORKDIR /home/fishuser
 
 COPY fish_run_tests.sh /
+
+ENV FISH_CHECK_LINT=false
 
 CMD /fish_run_tests.sh

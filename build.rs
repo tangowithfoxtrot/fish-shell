@@ -3,7 +3,16 @@
 use rsconf::{LinkType, Target};
 use std::env;
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+fn canonicalize<P: AsRef<Path>>(path: P) -> PathBuf {
+    std::fs::canonicalize(path).unwrap()
+}
+fn canonicalize_str<P: AsRef<Path>>(path: P) -> String {
+    canonicalize(path).to_str().unwrap().to_owned()
+}
+
+const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 fn main() {
     setup_paths();
@@ -11,23 +20,19 @@ fn main() {
     // Add our default to enable tools that don't go through CMake, like "cargo test" and the
     // language server.
 
+    let cargo_target_dir: PathBuf = option_env!("CARGO_TARGET_DIR")
+        .map(canonicalize)
+        .unwrap_or(canonicalize(MANIFEST_DIR).join("target"));
+
     // FISH_BUILD_DIR is set by CMake, if we are using it.
-    // OUT_DIR is set by Cargo when the build script is running (not compiling)
-    let default_build_dir = env::var("OUT_DIR").unwrap();
-    let build_dir = option_env!("FISH_BUILD_DIR").unwrap_or(&default_build_dir);
-    let build_dir = std::fs::canonicalize(build_dir).unwrap();
-    let build_dir = build_dir.to_str().unwrap();
-    rsconf::set_env_value("FISH_BUILD_DIR", build_dir);
+    rsconf::set_env_value(
+        "FISH_BUILD_DIR",
+        option_env!("FISH_BUILD_DIR").unwrap_or(cargo_target_dir.to_str().unwrap()),
+    );
+
     // We need to canonicalize (i.e. realpath) the manifest dir because we want to be able to
     // compare it directly as a string at runtime.
-    rsconf::set_env_value(
-        "CARGO_MANIFEST_DIR",
-        std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
-            .unwrap()
-            .as_path()
-            .to_str()
-            .unwrap(),
-    );
+    rsconf::set_env_value("CARGO_MANIFEST_DIR", &canonicalize_str(MANIFEST_DIR));
 
     // Some build info
     rsconf::set_env_value("BUILD_TARGET_TRIPLE", &env::var("TARGET").unwrap());
@@ -41,8 +46,7 @@ fn main() {
 
     std::env::set_var("FISH_BUILD_VERSION", version);
 
-    let cman = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let targetman = cman.as_path().join("target").join("man");
+    let targetman = cargo_target_dir.join("fish-man");
 
     #[cfg(feature = "embed-data")]
     #[cfg(not(clippy))]
@@ -65,10 +69,7 @@ fn main() {
 
     rsconf::rebuild_if_env_changed("FISH_GETTEXT_EXTRACTION_FILE");
 
-    cc::Build::new()
-        .file("src/libc.c")
-        .include(build_dir)
-        .compile("flibc.a");
+    cc::Build::new().file("src/libc.c").compile("flibc.a");
 
     let mut build = cc::Build::new();
     // Add to the default library search path
@@ -254,8 +255,6 @@ fn has_small_stack(_: &Target) -> Result<bool, Box<dyn Error>> {
 }
 
 fn setup_paths() {
-    #[cfg(unix)]
-    use std::path::PathBuf;
     #[cfg(windows)]
     use unix_path::{Path, PathBuf};
 
@@ -353,8 +352,8 @@ fn get_version(src_dir: &Path) -> String {
     // or because it refused (safe.directory applies to `git describe`!)
     // So we read the SHA ourselves.
     fn get_git_hash() -> Result<String, Box<dyn std::error::Error>> {
-        let gitdir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".git");
-        let jjdir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".jj");
+        let gitdir = Path::new(MANIFEST_DIR).join(".git");
+        let jjdir = Path::new(MANIFEST_DIR).join(".jj");
         let commit_id = if gitdir.exists() {
             // .git/HEAD contains ref: refs/heads/branch
             let headpath = gitdir.join("HEAD");
@@ -399,10 +398,7 @@ fn build_man(build_dir: &Path) {
     use std::process::Command;
     let mandir = build_dir;
     let sec1dir = mandir.join("man1");
-    let docsrc_path = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
-        .unwrap()
-        .as_path()
-        .join("doc_src");
+    let docsrc_path = canonicalize(MANIFEST_DIR).join("doc_src");
     let docsrc = docsrc_path.to_str().unwrap();
     let args = &[
         "-j",

@@ -6226,6 +6226,9 @@ msgstr ""
 msgid "Apply packagefiles to the subproject"
 msgstr ""
 
+msgid "Apply partial clone filter to submodules"
+msgstr ""
+
 msgid "Apply patch as another user using sudo"
 msgstr ""
 
@@ -7636,9 +7639,6 @@ msgstr ""
 msgid "Brief  Output only whether files differ."
 msgstr ""
 
-msgid "Brightness (default)"
-msgstr ""
-
 msgid "Bring changes from the repository into the working copy"
 msgstr ""
 
@@ -8021,6 +8021,9 @@ msgid "Bypass the normal routing tables"
 msgstr ""
 
 msgid "Bypass the system configuration file"
+msgstr ""
+
+msgid "Bypass transport mechanism for local repositories"
 msgstr ""
 
 msgid "Byte swapped output"
@@ -9739,7 +9742,13 @@ msgstr ""
 msgid "Clone an image [indexes]"
 msgstr ""
 
+msgid "Clone histories near the tips of all branches"
+msgstr ""
+
 msgid "Clone install dependencies and link a package for development"
+msgstr ""
+
+msgid "Clone only the history leading to the tip of a single branch"
 msgstr ""
 
 msgid "Clone private branches"
@@ -9752,6 +9761,12 @@ msgid "Clone remote repository for tracking dotfiles"
 msgstr ""
 
 msgid "Clone repository"
+msgstr ""
+
+msgid "Clone submodules with a depth of 1"
+msgstr ""
+
+msgid "Clone tags"
 msgstr ""
 
 msgid "Clone to promote"
@@ -12011,6 +12026,12 @@ msgid "Create a service instance"
 msgstr ""
 
 msgid "Create a set identified with SETNAME"
+msgstr ""
+
+msgid "Create a shallow clone excluding commits from a specified ref"
+msgstr ""
+
+msgid "Create a shallow clone with a history after the specified time"
 msgstr ""
 
 msgid "Create a short table not showing the deleted files"
@@ -17602,6 +17623,12 @@ msgstr ""
 msgid "Do not clear finder interface on exit"
 msgstr ""
 
+msgid "Do not clone submodules shallowly"
+msgstr ""
+
+msgid "Do not clone tags"
+msgstr ""
+
 msgid "Do not close when command exists"
 msgstr ""
 
@@ -17903,6 +17930,9 @@ msgid "Do not extract source files"
 msgstr ""
 
 msgid "Do not fail if signature is older than key"
+msgstr ""
+
+msgid "Do not fail if the source repository is a shallow repository"
 msgstr ""
 
 msgid "Do not fail on MDC integrity protection failure"
@@ -19019,6 +19049,9 @@ msgid "Do not use script cache"
 msgstr ""
 
 msgid "Do not use sound server"
+msgstr ""
+
+msgid "Do not use submodule remote-tracking branch to update"
 msgstr ""
 
 msgid "Do not use synchronized snapshots in parallel jobs"
@@ -21718,6 +21751,9 @@ msgstr ""
 msgid "Emphasize pixel differences with this color [color]"
 msgstr ""
 
+msgid "Employ a sparse-checkout"
+msgstr ""
+
 msgid "Empty goal, provided only to set loose the lifecycle"
 msgstr ""
 
@@ -24397,6 +24433,9 @@ msgstr ""
 msgid "Fail if inserting already loaded module"
 msgstr ""
 
+msgid "Fail if the source repository is a shallow repository"
+msgstr ""
+
 msgid "Fail if there are patches that would create conflicts"
 msgstr ""
 
@@ -24466,6 +24505,9 @@ msgstr ""
 msgid "Features suggested by this package"
 msgstr ""
 
+msgid "Fetch a bundle from the given URI"
+msgstr ""
+
 msgid "Fetch a partition image from the device"
 msgstr ""
 
@@ -24500,6 +24542,9 @@ msgid "Fetch from and merge with another repository or a local branch"
 msgstr ""
 
 msgid "Fetch from multiple remotes"
+msgstr ""
+
+msgid "Fetch history leading to the given revision"
 msgstr ""
 
 msgid "Fetch logs from instance(s)"
@@ -27868,6 +27913,9 @@ msgstr ""
 msgid "Get metadata given in range"
 msgstr ""
 
+msgid "Get minimum brightness"
+msgstr ""
+
 msgid "Get network connectivity state"
 msgstr ""
 
@@ -30544,6 +30592,9 @@ msgstr ""
 msgid "Initialize all submodules within the cloned repository"
 msgstr ""
 
+msgid "Initialize and clone submodules"
+msgstr ""
+
 msgid "Initialize database"
 msgstr ""
 
@@ -31277,9 +31328,6 @@ msgid "Internal function for gpg completion code deduplication"
 msgstr ""
 
 msgid "Interpolates variables into a manifest"
-msgstr ""
-
-msgid "Interpret & output values in percent"
 msgstr ""
 
 msgid "Interpret & output values in raw mode"
@@ -36190,9 +36238,6 @@ msgstr ""
 msgid "Maximum backward scroll"
 msgstr ""
 
-msgid "Maximum brightness"
-msgstr ""
-
 msgid "Maximum bytes in POSIX message queues"
 msgstr ""
 
@@ -36518,9 +36563,6 @@ msgid "Minimize context of patch bundle [DEFAULT]"
 msgstr ""
 
 msgid "Minimize the specified window"
-msgstr ""
-
-msgid "Minimum cap"
 msgstr ""
 
 msgid "Minimum confidence of a problem to print it"
@@ -37835,6 +37877,9 @@ msgid "Number of spaces for indentation"
 msgstr ""
 
 msgid "Number of spaces used for indentation in the visualized data. [default: 2]"
+msgstr ""
+
+msgid "Number of submodules fetched at the same time"
 msgstr ""
 
 msgid "Number of suggestions visible in the list. [default: 3]"
@@ -41438,6 +41483,9 @@ msgid "Place output in file"
 msgstr ""
 
 msgid "Place project in root of the solution"
+msgstr ""
+
+msgid "Place the cloned repository in a specified directory"
 msgstr ""
 
 msgid "Places each function in a separate section"
@@ -49654,7 +49702,7 @@ msgstr ""
 msgid "Restore as a single transaction"
 msgstr ""
 
-msgid "Restore brightness"
+msgid "Restore brightness after saving"
 msgstr ""
 
 msgid "Restore dependencies"
@@ -52870,9 +52918,6 @@ msgstr ""
 msgid "Selects an output to reconfigure"
 msgstr ""
 
-msgid "Selects controller automatically (default)"
-msgstr ""
-
 msgid "Selects how passphrases are mangled"
 msgstr ""
 
@@ -53459,6 +53504,9 @@ msgid "Set a configuration file option directly"
 msgstr ""
 
 msgid "Set a configuration option"
+msgstr ""
+
+msgid "Set a configuration variable in the new repository"
 msgstr ""
 
 msgid "Set a custom prompt prefix for this environment"
@@ -54290,6 +54338,9 @@ msgid "Set min quantizer for alpha"
 msgstr ""
 
 msgid "Set min quantizer for color"
+msgstr ""
+
+msgid "Set minimum brightness"
 msgstr ""
 
 msgid "Set minimum brightness when using delta values"
@@ -56060,6 +56111,9 @@ msgid "Settings file to use"
 msgstr ""
 
 msgid "Settings remain in effect until parenthesis boundary"
+msgstr ""
+
+msgid "Setup .git/objects/info/alternates to share objects"
 msgstr ""
 
 msgid "Setup StackDriver logs"
@@ -59683,6 +59737,9 @@ msgstr ""
 msgid "Skip things requiring root access"
 msgstr ""
 
+msgid "Skip to the end of the journal"
+msgstr ""
+
 msgid "Skip to the next movie or chapter in the playlist"
 msgstr ""
 
@@ -60746,6 +60803,9 @@ msgid "Specify a name of skin"
 msgstr ""
 
 msgid "Specify a new name for the package"
+msgstr ""
+
+msgid "Specify a non-default path for the command on the other end"
 msgstr ""
 
 msgid "Specify a non-mountpoint dir"
@@ -61828,6 +61888,9 @@ msgstr ""
 msgid "Specify the desktop name"
 msgstr ""
 
+msgid "Specify the directory from which templates will be used"
+msgstr ""
+
 msgid "Specify the display width for the output from the search command"
 msgstr ""
 
@@ -62039,6 +62102,9 @@ msgid "Specify the proxy username"
 msgstr ""
 
 msgid "Specify the realm of authentication ID for SASL bind"
+msgstr ""
+
+msgid "Specify the ref storage format"
 msgstr ""
 
 msgid "Specify the register to be used for PIC addressing"
@@ -62954,6 +63020,9 @@ msgid "Stop at the given sample for each input file {#|[+|-]mm:ss.ss}"
 msgstr ""
 
 msgid "Stop automatic profile selection on interface"
+msgstr ""
+
+msgid "Stop borrowing objects from reference repositories after clone"
 msgstr ""
 
 msgid "Stop colorizing output"
@@ -65782,6 +65851,9 @@ msgstr ""
 msgid "Translates SQLJ source code using the SQLJ Translator"
 msgstr ""
 
+msgid "Transmit string to the server when using protocol version 2"
+msgstr ""
+
 msgid "Transparency-compression method"
 msgstr ""
 
@@ -67705,6 +67777,9 @@ msgstr ""
 msgid "Use GSS-API authentication"
 msgstr ""
 
+msgid "Use Git transport for local paths"
+msgstr ""
+
 msgid "Use HP ld specific options"
 msgstr ""
 
@@ -69263,6 +69338,9 @@ msgid "Use strong filter"
 msgstr ""
 
 msgid "Use style as background for transparent image parts"
+msgstr ""
+
+msgid "Use submodule remote-tracking branch to update"
 msgstr ""
 
 msgid "Use swap files for recovery"
@@ -79167,363 +79245,3 @@ msgstr ""
 
 msgid "~ expansion"
 msgstr ""
-
-#~ msgid "empty"
-#~ msgstr "pusto"
-
-#~ msgid "%ls: Key with name '%ls' does not have any mapping\n"
-#~ msgstr "%ls: Klawisz '%ls' nie ma żadnego przypisania\n"
-
-#~ msgid "%ls: '%ls' is not a file\n"
-#~ msgstr "%ls: '%ls' nie jest plikiem\n"
-
-#~ msgid "%ls: No key with name '%ls' found\n"
-#~ msgstr "%ls: Nie znaleziono klaiwsza '%ls'\n"
-
-#~ msgid "%ls, version %s\n"
-#~ msgstr "%ls, wersja %s\n"
-
-#~ msgid "Opening \"%s\" failed: %s\n"
-#~ msgstr "Otwieranie '%s' nie powiodło się: %s\n"
-
-#~ msgid "%ls: "
-#~ msgstr "%ls: "
-
-#, c-format
-#~ msgid "signal handler for %ls (%ls)"
-#~ msgstr "obsługa sygnału dla %ls (%ls)"
-
-#, c-format
-#~ msgid "handler for variable '%ls'"
-#~ msgstr "obsługa zmiennej '%ls'"
-
-#, c-format
-#~ msgid "exit handler for process %d"
-#~ msgstr "zakończ obsługę procesu %d"
-
-#, c-format
-#~ msgid "exit handler for job %d, '%ls'"
-#~ msgstr "zakończ obsługę zadania %d, '%ls'"
-
-#~ msgid "Time\tSum\tCommand\n"
-#~ msgstr "Czas\tSuma\tKomenda\n"
-
-#~ msgid "\tcalled during startup\n"
-#~ msgstr "\tprzywołano podczas rozruchu\n"
-
-#~ msgid "Startup"
-#~ msgstr "Uruchamianie"
-
-#~ msgid "Could not return shell to foreground"
-#~ msgstr "Nie można przywrócić powłoki na pierwszy plan"
-
-#, c-format
-#~ msgid "Send job %d '%ls' to background\n"
-#~ msgstr "Wyślij zadanie %d '%ls' w tło\n"
-
-#, c-format
-#~ msgid "%ls: Unknown error trying to bind to key named '%ls'\n"
-#~ msgstr "%ls: Nieznany błąd podczas próby przypisania do klawisza '%ls'\n"
-
-#, c-format
-#~ msgid "%ls: Could not set PWD variable\n"
-#~ msgstr "%ls: Nie można ustawić zmiennej PWD\n"
-
-#, c-format
-#~ msgid ""
-#~ "%ls: Type 'help %ls' for related documentation\n"
-#~ "\n"
-#~ msgstr ""
-#~ "%ls: Wpisz 'help %ls' aby uzyskać informacje z tym związane\n"
-#~ "\n"
-
-#~ msgid "Execute command if previous command suceeded"
-#~ msgstr "Wykonaj komendę jeżeli poprzednia komenda zakończy się powodzeniem"
-
-#~ msgid "Convert path to absolute path without symlinks"
-#~ msgstr "Zamień ścieżkę na ścieżkę bezwzględną bez nawiązań symbolicznych"
-
-#, c-format
-#~ msgid "%ls: Unknown job '%ls'\n"
-#~ msgstr "%ls: Nieznane zadanie '%ls'\n"
-
-#, c-format
-#~ msgid "%ls: Argument '%ls' must be an integer\n"
-#~ msgstr "%ls: Argument '%ls' musi być liczbą całkowitą\n"
-
-#, c-format
-#~ msgid "%ls: Expected function name"
-#~ msgstr "%ls: Oczekiwano nazwy funkcji"
-
-#, c-format
-#~ msgid "%ls: Illegal function name '%ls'"
-#~ msgstr "%ls: Niedozwolona nazwa funkcji '%ls'"
-
-#, c-format
-#~ msgid ""
-#~ "%ls: The name '%ls' is reserved,\n"
-#~ "and can not be used as a function name"
-#~ msgstr ""
-#~ "%ls: Nazwa '%ls' jest zastrzeżona\n"
-#~ "i nie może być wykorzystywana jako nazwa funkcji"
-
-#, c-format
-#~ msgid "%ls: Invalid combination of options\n"
-#~ msgstr "%ls: Nieprawidłowe połączenie opcji\n"
-
-#, c-format
-#~ msgid "%ls: you cannot use any options with the %ls command\n"
-#~ msgstr "%ls: nie możesz używać opcji z komendą %ls\n"
-
-#, c-format
-#~ msgid "%ls: max value '%ls' is not a valid number\n"
-#~ msgstr "%ls: maksymalna wartość '%ls' nie jest prawidłową liczbą\n"
-
-#, c-format
-#~ msgid "%ls: Invalid path: %ls\n"
-#~ msgstr "%ls: Nieprawidłowa ścieżka: %ls\n"
-
-#, c-format
-#~ msgid "%ls: Expected an argument\n"
-#~ msgstr "%ls: Oczekiwano argumentu\n"
-
-#, c-format
-#~ msgid "%ls: Tried to set the special variable '%ls' to an invalid value\n"
-#~ msgstr "%ls: Próbowano nadać nieprawidłową wartość specjalnej zmiennej '%ls'\n"
-
-#, c-format
-#~ msgid "%ls: Expected argument\n"
-#~ msgstr "%ls: Oczekiwano argumentu\n"
-
-#, c-format
-#~ msgid "Unknown event type '0x%x'"
-#~ msgstr "Nieznany typ zdarzenia '0x%x'"
-
-#, c-format
-#~ msgid "An error occurred while redirecting file '%s'"
-#~ msgstr "Wystąpił błąd podczas przekierowywania pliku '%s'"
-
-#, c-format
-#~ msgid "Unknown input redirection type %d"
-#~ msgstr "Nieznany typ przekierowania %d"
-
-#~ msgid "Child process"
-#~ msgstr "Proces potomny"
-
-#~ msgid "Process"
-#~ msgstr "Proces"
-
-#~ msgid "Job"
-#~ msgstr "Zadanie"
-
-#, c-format
-#~ msgid "Job: %ls"
-#~ msgstr "Zadanie: %ls"
-
-#~ msgid "Shell process"
-#~ msgstr "Proces powłoki"
-
-#~ msgid "Last background job"
-#~ msgstr "Ostatnie zadanie działające w tle"
-
-#~ msgid "Too many arguments\n"
-#~ msgstr "Zbyt dużo argumentów\n"
-
-#, c-format
-#~ msgid "switch: Expected exactly one argument, got %lu\n"
-#~ msgstr "switch: Oczekiwano dokładnie jednego argumentu, otrzymano %lu\n"
-
-#, c-format
-#~ msgid "Variables may not be used as commands. In fish, please define a function or use 'eval %ls'."
-#~ msgstr "Zmienne nie mogą być używane jako komendy. W fish należy zdefiniować funkcję lub użyć 'eval %ls'."
-
-#, c-format
-#~ msgid "The file '%ls' is not executable by this user"
-#~ msgstr "Plik '%ls' nie jest wykonywalny dla tego użytkownika"
-
-#~ msgid "'while' block"
-#~ msgstr "blok 'while'"
-
-#~ msgid "'for' block"
-#~ msgstr "blok 'for'"
-
-#~ msgid "'if' conditional block"
-#~ msgstr "blok warunkowy 'if'"
-
-#~ msgid "'switch' block"
-#~ msgstr "blok 'switch'"
-
-#~ msgid "event handler block"
-#~ msgstr "blok obsługi zdarzenia"
-
-#~ msgid "unknown/invalid block"
-#~ msgstr "nieznany/nieprawidłowy blok"
-
-#, c-format
-#~ msgid "in function '%ls'\n"
-#~ msgstr "w funkcji '%ls'\n"
-
-#, c-format
-#~ msgid "\twith parameter list '%ls'\n"
-#~ msgstr "\tz listą parametrów '%ls'\n"
-
-#, c-format
-#~ msgid "Error while searching for command '%ls'"
-#~ msgstr "Wystąpił błąd podczas wyszukiwania komendy '%ls'"
-
-#, c-format
-#~ msgid "%ls: %ls'%ls' terminated by signal %ls (%ls)"
-#~ msgstr "%ls: %ls'%ls' zakończony sygnałem %ls (%ls)"
-
-#, c-format
-#~ msgid "%ls: Process %d, '%ls' %ls'%ls' terminated by signal %ls (%ls)"
-#~ msgstr "%ls: Proces %d, '%ls' %ls'%ls' zakończony sygnałem %ls (%ls)"
-
-#~ msgid "An error occured while reading output from code block"
-#~ msgstr "Wystąpił błąd podczas odczytywania wyjścia z bloku kodu"
-
-#, c-format
-#~ msgid "Could not send job %d ('%ls') to foreground"
-#~ msgstr "Nie można przenieść zadania %d ('%ls') na pierwszy plan"
-
-#, c-format
-#~ msgid "More than one job in foreground: job 1: '%ls' job 2: '%ls'"
-#~ msgstr "Więcej niż jedno zadanie na pierwszym planie: zadanie 1: '%ls' zadanie 2: '%ls'"
-
-#~ msgid "Process argument list"
-#~ msgstr "Lista argumentów procesu"
-
-#~ msgid "Process name"
-#~ msgstr "Nazwa procesu"
-
-#, c-format
-#~ msgid "%ls: Invalid option -- %lc\n"
-#~ msgstr "%ls: Nieprawidłowa opcja -- %lc\n"
-
-#, c-format
-#~ msgid "%ls: Option requires an argument -- %lc\n"
-#~ msgstr "%ls: Opcja wymaga argumentu -- %lc\n"
-
-#, c-format
-#~ msgid "%ls: Option '--%ls' doesn't allow an argument\n"
-#~ msgstr "%ls: Opcja '--%ls' nie pozwala na argumenty\n"
-
-#, c-format
-#~ msgid "%ls: Option '%lc%ls' doesn't allow an argument\n"
-#~ msgstr "%ls: Opcja '%lc%ls' nie pozwala na argumenty\n"
-
-#, c-format
-#~ msgid "%ls: Option '%ls' requires an argument\n"
-#~ msgstr "%ls: Opcja '%ls' wymaga argumentu\n"
-
-#, c-format
-#~ msgid "%ls: Unrecognized option '--%ls'\n"
-#~ msgstr "%ls: Nierozpoznana opcja '--%ls'\n"
-
-#, c-format
-#~ msgid "%ls: Unrecognized option '%lc%ls'\n"
-#~ msgstr "%ls: Nierozpoznana opcja '%lc%ls'\n"
-
-#~ msgid "Executable"
-#~ msgstr "Wykonywalny"
-
-#~ msgid "Executable link"
-#~ msgstr "Link wykonywalny"
-
-#~ msgid "File"
-#~ msgstr "Plik"
-
-#~ msgid "Symbolic link"
-#~ msgstr "Nawiązanie symboliczne"
-
-#~ msgid "Symbolic link to directory"
-#~ msgstr "Nawiązanie symboliczne do katalogu"
-
-#~ msgid "Symbolic link loop"
-#~ msgstr "Pętla nawiązań symbolicznych"
-
-#~ msgid "Socket"
-#~ msgstr "Gniazdo"
-
-#~ msgid "Directory"
-#~ msgstr "Katalog"
-
-#, c-format
-#~ msgid "%ls: Expected argument for option %ls\n"
-#~ msgstr "%ls: Oczekiwano argumentu dla funkcji %ls\n"
-
-#, c-format
-#~ msgid ""
-#~ "%ls: Invalid combination of options,\n"
-#~ "%ls\n"
-#~ msgstr ""
-#~ "%ls: Nieprawidłowa kombinacja opcji,\n"
-#~ "%ls\n"
-
-#, c-format
-#~ msgid "%ls: Unknown option '%ls'\n"
-#~ msgstr "%ls: Nieznana opcja '%ls'\n"
-
-#, c-format
-#~ msgid "%ls: Too many arguments\n"
-#~ msgstr "%ls: Zbyt dużo argumentów\n"
-
-#, c-format
-#~ msgid "%ls: Argument '%ls' is not a number\n"
-#~ msgstr "%ls: Argument '%ls' nie jest liczbą \n"
-
-#, c-format
-#~ msgid "Send job %d, '%ls' to foreground\n"
-#~ msgstr "Wysłano zadanie %d, '%ls' na pierwszy plan\n"
-
-#, c-format
-#~ msgid "Illegal command name '%ls'"
-#~ msgstr "Niedozwolona nazwa komendy '%ls'"
-
-#, c-format
-#~ msgid "Unable to find a process '%ls'"
-#~ msgstr "Nie udało się odnaleźć procesu '%ls'"
-
-#~ msgid "'return' outside of function definition"
-#~ msgstr "'return' poza definicją funkcji"
-
-#, c-format
-#~ msgid "$(...) is not supported. In fish, please use '(%ls)'."
-#~ msgstr "$(...) nie jest obsługiwane. W fish używane jest '(%ls)'."
-
-#~ msgid "Unsupported use of '||'. In fish, please use 'COMMAND; or COMMAND'."
-#~ msgstr "Nieobsługiwane użycie '||'. W fish używane jest 'COMMAND; or COMMAND'."
-
-#~ msgid "Unsupported use of '&&'. In fish, please use 'COMMAND; and COMMAND'."
-#~ msgstr "Nieobsługiwane użycie '&&'. W fish używane jest 'COMMAND; and COMMAND'."
-
-#, c-format
-#~ msgid "Unsupported use of '='. To run '%ls' with a modified environment, please use 'env %ls=%ls %ls%ls'"
-#~ msgstr "Nieobsługiwane użycie '='. Aby uruchomić '%ls' w zmodyfikowanym środowisku, użyj 'env %ls=%ls %ls%ls'"
-
-#~ msgid "%ls: --array option requires a single variable name.\n"
-#~ msgstr "%ls: opcja  --array wymaga nazwy jednej zmiennej.\n"
-
-#~ msgid "printf: not enough arguments"
-#~ msgstr "printf: brak wystarczających argumentów"
-
-#~ msgid "string: Expected subcommand\n"
-#~ msgstr "string: Oczekiwano podpolecenia\n"
-
-#~ msgid "string: Unknown subcommand '%ls'\n"
-#~ msgstr "string: Nieznane podpolecenie '%ls'\n"
-
-#~ msgid "getopt_long() unexpectedly returned zero\n"
-#~ msgstr "getopt_long() nieoczekiwanie zwrócił 0\n"
-
-#~ msgid "terminal_give_to_job(): Could not send job %d ('%ls') to foreground"
-#~ msgstr "Nie można przenieść zadania %d ('%ls') na pierwszy plan"
-
-#~ msgid "funced: You must specify one function name"
-#~ msgstr "Oczekiwano dokładnie jednej nazwy funkcji"
-
-#~ msgid "%s: Expected function name\\n"
-#~ msgstr "%s: Oczekiwano nazwy funkcji"
-
-#~ msgid "%ls: Invalid combination of options,\\n%ls\\n"
-#~ msgstr "%ls: Nieprawidłowa kombinacja opcji,\\n%ls\\n"
