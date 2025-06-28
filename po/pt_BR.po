@@ -11169,6 +11169,9 @@ msgstr ""
 msgid "Control default input to the policy engine"
 msgstr ""
 
+msgid "Control disassembler syntax highlighting style"
+msgstr ""
+
 msgid "Control display of additional"
 msgstr ""
 
@@ -62990,6 +62993,9 @@ msgid "Stop a package"
 msgstr ""
 
 msgid "Stop a profile"
+msgstr ""
+
+msgid "Stop a running model."
 msgstr ""
 
 msgid "Stop a standalone server instance"

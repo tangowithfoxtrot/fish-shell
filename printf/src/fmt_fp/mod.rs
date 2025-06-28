@@ -279,6 +279,7 @@ fn format_a(mut y: f64, params: FormatParams<'_, impl Write>) -> Result<usize, E
 
     // Compute the number of hex digits in the mantissa after the decimal.
     // -1 for leading 1 bit (we are to the range [1, 2)), then divide by 4, rounding up.
+    #[allow(unknown_lints)] // for old clippy
     #[allow(clippy::manual_div_ceil)]
     const MANTISSA_HEX_DIGITS: usize = (MANTISSA_BITS - 1 + 3) / 4;
     if had_prec && prec < MANTISSA_HEX_DIGITS {
@@ -495,7 +496,7 @@ fn format_mantissa_e(
         let digit = if d < decimal.len_i32() { decimal[d] } else { 0 };
         let min_width = if d > 0 { DIGIT_WIDTH } else { 1 };
         buf.clear();
-        write!(buf, "{:0width$}", digit, width = min_width)?;
+        write!(buf, "{digit:0min_width$}")?;
         let mut s = buf.as_str();
         if d == 0 {
             // First digit. Emit it, and likely also a decimal point.
