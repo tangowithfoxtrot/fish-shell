@@ -1,28 +1,18 @@
 use crate::common::{
     fish_reserved_codepoint, is_windows_subsystem_for_linux, read_blocked, shell_modes,
-    str2wcstring, ScopeGuard, WSL,
+    str2wcstring, WSL,
 };
 use crate::env::{EnvStack, Environment};
 use crate::fd_readable_set::{FdReadableSet, Timeout};
 use crate::flog::{FloggableDebug, FloggableDisplay, FLOG};
-use crate::fork_exec::flog_safe::FLOG_SAFE;
-use crate::global_safety::RelaxedAtomicBool;
 use crate::key::{
     self, alt, canonicalize_control_char, canonicalize_keyed_control_char, char_to_symbol, ctrl,
     function_key, shift, Key, Modifiers, ViewportPosition,
 };
-use crate::reader::{reader_current_data, reader_test_and_clear_interrupted};
-use crate::terminal::TerminalCommand::{
-    ApplicationKeypadModeDisable, ApplicationKeypadModeEnable, DecrstBracketedPaste,
-    DecrstFocusReporting, DecsetBracketedPaste, DecsetFocusReporting,
-    KittyKeyboardProgressiveEnhancementsDisable, KittyKeyboardProgressiveEnhancementsEnable,
-    ModifyOtherKeysDisable, ModifyOtherKeysEnable,
-};
-use crate::terminal::{
-    Capability, Output, Outputter, KITTY_KEYBOARD_SUPPORTED, SCROLL_FORWARD_SUPPORTED,
-    SCROLL_FORWARD_TERMINFO_CODE,
-};
-use crate::threads::{iothread_port, is_main_thread};
+use crate::reader::reader_test_and_clear_interrupted;
+use crate::terminal::{Capability, SCROLL_FORWARD_SUPPORTED, SCROLL_FORWARD_TERMINFO_CODE};
+use crate::threads::iothread_port;
+use crate::tty_handoff::set_kitty_keyboard_capability;
 use crate::universal_notifier::default_notifier;
 use crate::wchar::{encode_byte_to_char, prelude::*};
 use crate::wutil::encoding::{mbrtowc, mbstate_t, zero_mbstate};
@@ -31,9 +21,8 @@ use std::cell::{RefCell, RefMut};
 use std::collections::VecDeque;
 use std::mem::MaybeUninit;
 use std::os::fd::RawFd;
-use std::os::unix::ffi::OsStrExt;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 // The range of key codes for inputrc-style keyboard functions.
@@ -645,120 +634,6 @@ pub fn update_wait_on_sequence_key_ms(vars: &EnvStack) {
     }
 }
 
-static TERMINAL_PROTOCOLS: AtomicBool = AtomicBool::new(false);
-static BRACKETED_PASTE: AtomicBool = AtomicBool::new(false);
-
-static IS_TMUX: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
-
-pub(crate) static IN_MIDNIGHT_COMMANDER: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
-pub(crate) static IN_DVTM: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
-static ITERM_NO_KITTY_KEYBOARD: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
-
-pub fn terminal_protocol_hacks() {
-    use std::env::var_os;
-    IN_MIDNIGHT_COMMANDER.store(var_os("MC_TMPDIR").is_some());
-    IN_DVTM
-        .store(var_os("TERM").is_some_and(|term| term.as_os_str().as_bytes() == b"dvtm-256color"));
-    IS_TMUX.store(var_os("TMUX").is_some());
-    ITERM_NO_KITTY_KEYBOARD.store(
-        var_os("LC_TERMINAL").is_some_and(|term| term.as_os_str().as_bytes() == b"iTerm2")
-            && var_os("LC_TERMINAL_VERSION").is_some_and(|version| {
-                let Some(version) = parse_version(&str2wcstring(version.as_os_str().as_bytes()))
-                else {
-                    return false;
-                };
-                version < (3, 5, 12)
-            }),
-    );
-}
-
-fn parse_version(version: &wstr) -> Option<(i64, i64, i64)> {
-    let mut numbers = version.split('.');
-    let major = fish_wcstol(numbers.next()?).ok()?;
-    let minor = fish_wcstol(numbers.next()?).ok()?;
-    let patch = numbers.next()?;
-    let patch = &patch[..patch
-        .chars()
-        .position(|c| !c.is_ascii_digit())
-        .unwrap_or(patch.len())];
-    let patch = fish_wcstol(patch).ok()?;
-    Some((major, minor, patch))
-}
-
-#[test]
-fn test_parse_version() {
-    assert_eq!(parse_version(L!("3.5.2")), Some((3, 5, 2)));
-    assert_eq!(parse_version(L!("3.5.3beta")), Some((3, 5, 3)));
-}
-
-pub fn terminal_protocols_enable_ifn() {
-    let did_write = RelaxedAtomicBool::new(false);
-    let _save_screen_state = ScopeGuard::new((), |()| {
-        if did_write.load() {
-            reader_current_data().map(|data| data.save_screen_state());
-        }
-    });
-    let mut out = Outputter::stdoutput().borrow_mut();
-    if !BRACKETED_PASTE.load(Ordering::Relaxed) {
-        BRACKETED_PASTE.store(true, Ordering::Release);
-        out.write_command(DecsetBracketedPaste);
-        if IS_TMUX.load() {
-            out.write_command(DecsetFocusReporting);
-        }
-        did_write.store(true);
-    }
-    let kitty_keyboard_supported = KITTY_KEYBOARD_SUPPORTED.load(Ordering::Relaxed);
-    if kitty_keyboard_supported == Capability::Unknown as _ {
-        return;
-    }
-    if TERMINAL_PROTOCOLS.load(Ordering::Relaxed) {
-        return;
-    }
-    TERMINAL_PROTOCOLS.store(true, Ordering::Release);
-    FLOG!(term_protocols, "Enabling extended keys");
-    if kitty_keyboard_supported == Capability::NotSupported as _ || ITERM_NO_KITTY_KEYBOARD.load() {
-        out.write_command(ModifyOtherKeysEnable); // XTerm's modifyOtherKeys
-        out.write_command(ApplicationKeypadModeEnable); // set application keypad mode, so the keypad keys send unique codes
-    } else {
-        out.write_command(KittyKeyboardProgressiveEnhancementsEnable);
-    }
-    did_write.store(true);
-}
-
-pub(crate) fn terminal_protocols_disable_ifn() {
-    let did_write = RelaxedAtomicBool::new(false);
-    let _save_screen_state = is_main_thread().then(|| {
-        ScopeGuard::new((), |()| {
-            if did_write.load() {
-                reader_current_data().map(|data| data.save_screen_state());
-            }
-        })
-    });
-    let mut out = Outputter::stdoutput().borrow_mut();
-    if BRACKETED_PASTE.load(Ordering::Acquire) {
-        out.write_command(DecrstBracketedPaste);
-        if IS_TMUX.load() {
-            out.write_command(DecrstFocusReporting);
-        }
-        BRACKETED_PASTE.store(false, Ordering::Release);
-        did_write.store(true);
-    }
-    if !TERMINAL_PROTOCOLS.load(Ordering::Acquire) {
-        return;
-    }
-    FLOG_SAFE!(term_protocols, "Disabling extended keys");
-    let kitty_keyboard_supported = KITTY_KEYBOARD_SUPPORTED.load(Ordering::Acquire);
-    assert_ne!(kitty_keyboard_supported, Capability::Unknown as _);
-    if kitty_keyboard_supported == Capability::NotSupported as _ || ITERM_NO_KITTY_KEYBOARD.load() {
-        out.write_command(ModifyOtherKeysDisable);
-        out.write_command(ApplicationKeypadModeDisable);
-    } else {
-        out.write_command(KittyKeyboardProgressiveEnhancementsDisable);
-    }
-    TERMINAL_PROTOCOLS.store(false, Ordering::Release);
-    did_write.store(true);
-}
-
 fn parse_mask(mask: u32) -> (Modifiers, bool) {
     let modifiers = Modifiers {
         ctrl: (mask & 4) != 0,
@@ -1293,7 +1168,7 @@ pub trait InputEventQueuer {
                         reader,
                         "Received kitty progressive enhancement flags, marking as supported"
                     );
-                    KITTY_KEYBOARD_SUPPORTED.store(Capability::Supported as _, Ordering::Release);
+                    set_kitty_keyboard_capability(Capability::Supported);
                     return None;
                 }
 
@@ -1527,7 +1402,6 @@ pub trait InputEventQueuer {
         if let Some(evt) = self.try_pop() {
             return Some(evt);
         }
-        terminal_protocols_enable_ifn();
 
         // We are not prepared to handle a signal immediately; we only want to know if we get input on
         // our fd before the timeout. Use pselect to block all signals; we will handle signals

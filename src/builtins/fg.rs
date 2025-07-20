@@ -5,7 +5,7 @@ use crate::proc::Pid;
 use crate::reader::reader_write_title;
 use crate::tokenizer::tok_command;
 use crate::wutil::perror;
-use crate::{env::EnvMode, proc::TtyTransfer};
+use crate::{env::EnvMode, tty_handoff::TtyHandoff};
 use libc::{STDIN_FILENO, TCSADRAIN};
 
 use super::prelude::*;
@@ -139,12 +139,13 @@ pub fn fg(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Built
 
     // Note if tty transfer fails, we still try running the job.
     parser.job_promote_at(job_pos);
+    let mut handoff = TtyHandoff::new();
     let _ = make_fd_blocking(STDIN_FILENO);
     {
         let job_group = job.group();
         job_group.set_is_foreground(true);
         if job.entitled_to_terminal() {
-            crate::input_common::terminal_protocols_disable_ifn();
+            handoff.disable_tty_protocols();
         }
         let tmodes = job_group.tmodes.borrow();
         if job_group.wants_terminal() && tmodes.is_some() {
@@ -155,16 +156,15 @@ pub fn fg(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Built
             }
         }
     }
-    let mut transfer = TtyTransfer::new();
-    transfer.to_job_group(job.group.as_ref().unwrap());
+    handoff.to_job_group(job.group.as_ref().unwrap());
     let resumed = job.resume();
     if resumed {
         job.continue_job(parser);
     }
     if job.is_stopped() {
-        transfer.save_tty_modes();
+        handoff.save_tty_modes();
     }
-    transfer.reclaim();
+    handoff.reclaim();
     if resumed {
         Ok(SUCCESS)
     } else {

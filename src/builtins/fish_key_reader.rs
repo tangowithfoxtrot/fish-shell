@@ -7,7 +7,7 @@
 //!
 //! Type "exit" or "quit" to terminate the program.
 
-use std::{cell::RefCell, ops::ControlFlow, os::unix::prelude::OsStrExt, sync::atomic::Ordering};
+use std::{cell::RefCell, ops::ControlFlow, os::unix::prelude::OsStrExt};
 
 use libc::{STDIN_FILENO, TCSANOW, VEOF, VINTR};
 use once_cell::unsync::OnceCell;
@@ -20,8 +20,8 @@ use crate::{
     env::{env_init, EnvStack, Environment},
     future_feature_flags,
     input_common::{
-        match_key_event_to_key, terminal_protocol_hacks, terminal_protocols_enable_ifn, CharEvent,
-        InputEventQueue, InputEventQueuer, KeyEvent, QueryResponseEvent, TerminalQuery,
+        match_key_event_to_key, CharEvent, InputEventQueue, InputEventQueuer, KeyEvent,
+        QueryResponseEvent, TerminalQuery,
     },
     key::{char_to_symbol, Key},
     nix::isatty,
@@ -30,9 +30,13 @@ use crate::{
     proc::set_interactive_session,
     reader::{check_exit_loop_maybe_warning, initial_query, reader_init},
     signal::signal_set_handlers,
-    terminal::{Capability, KITTY_KEYBOARD_SUPPORTED},
+    terminal::Capability,
     threads,
     topic_monitor::topic_monitor_init,
+    tty_handoff::{
+        get_kitty_keyboard_capability, initialize_tty_metadata, set_kitty_keyboard_capability,
+        TtyHandoff,
+    },
     wchar::prelude::*,
     wgetopt::{wopt, ArgType, WGetopter, WOption},
 };
@@ -87,16 +91,16 @@ fn process_input(streams: &mut IoStreams, continuous_mode: bool, verbose: bool) 
     let mut recent_chars = vec![];
     streams.err.appendln("Press a key:\n");
 
-    while (!first_char_seen || continuous_mode) && !check_exit_loop_maybe_warning(None) {
-        terminal_protocols_enable_ifn();
+    let mut handoff = TtyHandoff::new();
+    handoff.enable_tty_protocols();
 
+    while (!first_char_seen || continuous_mode) && !check_exit_loop_maybe_warning(None) {
         let kevt = match queue.readch() {
             CharEvent::Key(kevt) => kevt,
             CharEvent::Readline(_) | CharEvent::Command(_) | CharEvent::Implicit(_) => continue,
             CharEvent::QueryResponse(QueryResponseEvent::PrimaryDeviceAttribute) => {
-                if KITTY_KEYBOARD_SUPPORTED.load(Ordering::Relaxed) == Capability::Unknown as _ {
-                    KITTY_KEYBOARD_SUPPORTED
-                        .store(Capability::NotSupported as _, Ordering::Release);
+                if get_kitty_keyboard_capability() == Capability::Unknown {
+                    set_kitty_keyboard_capability(Capability::NotSupported);
                 }
                 continue;
             }
@@ -151,7 +155,7 @@ fn setup_and_process_keys(
     // We need to set the shell-modes for ICRNL,
     // in fish-proper this is done once a command is run.
     unsafe { libc::tcsetattr(0, TCSANOW, &*shell_modes()) };
-    terminal_protocol_hacks();
+    initialize_tty_metadata();
     let blocking_query: OnceCell<RefCell<Option<TerminalQuery>>> = OnceCell::new();
     initial_query(&blocking_query, streams.out, None);
 
