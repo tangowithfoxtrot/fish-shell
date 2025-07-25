@@ -6,10 +6,10 @@ use crate::env::{EnvStack, Environment};
 use crate::fd_readable_set::{FdReadableSet, Timeout};
 use crate::flog::{FloggableDebug, FloggableDisplay, FLOG};
 use crate::key::{
-    self, alt, canonicalize_control_char, canonicalize_keyed_control_char, char_to_symbol, ctrl,
+    self, alt, canonicalize_control_char, canonicalize_keyed_control_char, char_to_symbol,
     function_key, shift, Key, Modifiers, ViewportPosition,
 };
-use crate::reader::reader_test_and_clear_interrupted;
+use crate::reader::{reader_save_screen_state, reader_test_and_clear_interrupted};
 use crate::terminal::{Capability, SCROLL_FORWARD_SUPPORTED, SCROLL_FORWARD_TERMINFO_CODE};
 use crate::threads::iothread_port;
 use crate::tty_handoff::set_kitty_keyboard_capability;
@@ -942,7 +942,7 @@ pub trait InputEventQueuer {
         // The maximum number of CSI parameters is defined by NPAR, nominally 16.
         let mut params = [[0_u32; 4]; 16];
         let Some(mut c) = self.try_readb(buffer) else {
-            return Some(KeyEvent::from(ctrl('[')));
+            return Some(KeyEvent::from(alt('[')));
         };
         let mut next_char = |zelf: &mut Self| zelf.try_readb(buffer).unwrap_or(0xff);
         let private_mode;
@@ -1168,7 +1168,7 @@ pub trait InputEventQueuer {
                         reader,
                         "Received kitty progressive enhancement flags, marking as supported"
                     );
-                    set_kitty_keyboard_capability(Capability::Supported);
+                    set_kitty_keyboard_capability(reader_save_screen_state, Capability::Supported);
                     return None;
                 }
 

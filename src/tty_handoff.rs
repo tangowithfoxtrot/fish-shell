@@ -1,7 +1,7 @@
 //! Utility for transferring the tty to a child process in a scoped way,
 //! and reclaiming it after.
 
-use crate::common;
+use crate::common::{self, safe_write_loop};
 use crate::flog::{FLOG, FLOGF};
 use crate::global_safety::RelaxedAtomicBool;
 use crate::job_group::JobGroup;
@@ -18,8 +18,7 @@ use crate::wchar_ext::ToWString;
 use crate::wutil::perror;
 use libc::{EINVAL, ENOTTY, EPERM, STDIN_FILENO, WNOHANG};
 use std::mem::MaybeUninit;
-use std::os::fd::BorrowedFd;
-use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
 
 // Facts about our environment, which inform how we handle the tty.
 #[derive(Debug, Copy, Clone)]
@@ -47,10 +46,7 @@ impl TtyMetadata {
         let in_tmux = var_os("TMUX").is_some();
 
         // Detect iTerm2 before 3.5.12.
-        let pre_kitty_iterm2 = match get_iterm2_version() {
-            None => true,
-            Some(v) => v < (3, 5, 12),
-        };
+        let pre_kitty_iterm2 = get_iterm2_version().is_some_and(|v| v < (3, 5, 12));
         Self {
             in_midnight_commander,
             in_dvtm,
@@ -75,10 +71,10 @@ pub fn get_kitty_keyboard_capability() -> Capability {
 
 // Set CSI-U ("Kitty") support capability.
 // This correctly handles the case where we think protocols are already enabled.
-pub fn set_kitty_keyboard_capability(cap: Capability) {
+pub fn set_kitty_keyboard_capability(on_write: fn(), cap: Capability) {
     assert_is_main_thread();
     // Disable and renable protocols around capabilities.
-    let mut tty = TtyHandoff::new();
+    let mut tty = TtyHandoff::new(on_write);
     tty.disable_tty_protocols();
     KITTY_KEYBOARD_SUPPORTED.store(cap as _, Ordering::Relaxed);
     FLOG!(
@@ -138,7 +134,7 @@ impl TtyProtocolsSet {
 }
 
 // Serialize a sequence of terminal commands into a byte array.
-fn serialize_commands<const N: usize>(cmds: [TerminalCommand<'_>; N]) -> Box<[u8]> {
+fn serialize_commands<'a>(cmds: impl Iterator<Item = TerminalCommand<'a>>) -> Box<[u8]> {
     let mut out = Outputter::new_buffering();
     for cmd in cmds {
         out.write_command(cmd);
@@ -164,33 +160,38 @@ impl TtyMetadata {
 
     // Return the protocols set to enable or disable TTY protocols.
     fn get_protocols(self) -> TtyProtocolsSet {
+        // Enable focus reporting under tmux
+        let focus_reporting_on = || self.in_tmux.then_some(DecsetFocusReporting).into_iter();
+        let focus_reporting_off = || self.in_tmux.then_some(DecrstFocusReporting).into_iter();
+        let maybe_enable_focus_reporting = |protocols: &'static [TerminalCommand<'static>]| {
+            protocols.iter().cloned().chain(focus_reporting_on())
+        };
+        let maybe_disable_focus_reporting = |protocols: &'static [TerminalCommand<'static>]| {
+            protocols.iter().cloned().chain(focus_reporting_off())
+        };
         let enablers = ProtocolBytes {
-            csi_u: serialize_commands([
+            csi_u: serialize_commands(maybe_enable_focus_reporting(&[
                 DecsetBracketedPaste,                       // Enable bracketed paste
-                DecsetFocusReporting,                       // Enable focus reporting under tmux
                 KittyKeyboardProgressiveEnhancementsEnable, // Kitty keyboard progressive enhancements
-            ]),
-            other: serialize_commands([
+            ])),
+            other: serialize_commands(maybe_enable_focus_reporting(&[
                 DecsetBracketedPaste,
-                DecsetFocusReporting,
                 ModifyOtherKeysEnable,       // XTerm's modifyOtherKeys
                 ApplicationKeypadModeEnable, // set application keypad mode, so the keypad keys send unique codes
-            ]),
-            none: serialize_commands([DecsetBracketedPaste, DecsetFocusReporting]),
+            ])),
+            none: serialize_commands(maybe_enable_focus_reporting(&[DecsetBracketedPaste])),
         };
         let disablers = ProtocolBytes {
-            csi_u: serialize_commands([
+            csi_u: serialize_commands(maybe_disable_focus_reporting(&[
                 DecrstBracketedPaste,                        // Disable bracketed paste
-                DecrstFocusReporting,                        // Disable focus reporting under tmux
                 KittyKeyboardProgressiveEnhancementsDisable, // Kitty keyboard progressive enhancements
-            ]),
-            other: serialize_commands([
+            ])),
+            other: serialize_commands(maybe_disable_focus_reporting(&[
                 DecrstBracketedPaste,
-                DecrstFocusReporting,
                 ModifyOtherKeysDisable,
                 ApplicationKeypadModeDisable,
-            ]),
-            none: serialize_commands([DecrstBracketedPaste, DecrstFocusReporting]),
+            ])),
+            none: serialize_commands(maybe_disable_focus_reporting(&[DecrstBracketedPaste])),
         };
         TtyProtocolsSet {
             md: self,
@@ -242,7 +243,7 @@ pub fn initialize_tty_metadata() {
 }
 
 // A marker of the current state of the tty protocols.
-static TTY_PROTOCOLS_ACTIVE: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
+static TTY_PROTOCOLS_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // A marker that the tty has been closed (SIGHUP, etc) and so we should not try to write to it.
 static TTY_INVALID: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
@@ -250,7 +251,7 @@ static TTY_INVALID: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
 // Enable or disable TTY protocols by writing the appropriate commands to the tty.
 // Return true if we emitted any bytes to the tty.
 // Note this does NOT intialize the TTY protocls if not already initialized.
-fn set_tty_protocols_active(enable: bool) -> bool {
+fn set_tty_protocols_active(on_write: fn(), enable: bool) -> bool {
     assert_is_main_thread();
     // Have protocols at all? We require someone else to have initialized them.
     let Some(protocols) = tty_protocols() else {
@@ -259,10 +260,12 @@ fn set_tty_protocols_active(enable: bool) -> bool {
     // Already set?
     // Note we don't need atomic swaps as this is only called on the main thread.
     // Also note we (logically) set and clear this even if we got SIGHUP.
-    if TTY_PROTOCOLS_ACTIVE.load() == enable {
+    if TTY_PROTOCOLS_ACTIVE.load(Ordering::Relaxed) == enable {
         return false;
     }
-    TTY_PROTOCOLS_ACTIVE.store(enable);
+    if enable {
+        TTY_PROTOCOLS_ACTIVE.store(true, Ordering::Release);
+    }
 
     // Did we get SIGHUP?
     if TTY_INVALID.load() {
@@ -272,6 +275,9 @@ fn set_tty_protocols_active(enable: bool) -> bool {
     // Write the commands to the tty, ignoring errors.
     let commands = protocols.safe_get_commands(enable);
     let _ = common::write_loop(&libc::STDOUT_FILENO, commands);
+    if !enable {
+        TTY_PROTOCOLS_ACTIVE.store(false, Ordering::Relaxed);
+    }
 
     // Flog any terminal protocol changes of interest.
     let mode = if enable { "Enabling" } else { "Disabling" };
@@ -280,12 +286,13 @@ fn set_tty_protocols_active(enable: bool) -> bool {
         ProtocolKind::Other => FLOG!(term_protocols, mode, "other extended keys"),
         ProtocolKind::None => (),
     };
+    (on_write)();
     true
 }
 
 // Helper to check if TTY protocols are active.
 pub fn get_tty_protocols_active() -> bool {
-    TTY_PROTOCOLS_ACTIVE.load()
+    TTY_PROTOCOLS_ACTIVE.load(Ordering::Relaxed)
 }
 
 // Called from a signal handler to deactivate TTY protocols before exiting.
@@ -297,7 +304,7 @@ pub fn safe_deactivate_tty_protocols() {
         // No protocols set, nothing to do.
         return;
     };
-    if !TTY_PROTOCOLS_ACTIVE.load() {
+    if !TTY_PROTOCOLS_ACTIVE.load(Ordering::Acquire) {
         return;
     }
 
@@ -306,11 +313,10 @@ pub fn safe_deactivate_tty_protocols() {
         return;
     }
 
-    TTY_PROTOCOLS_ACTIVE.store(false);
     let commands = protocols.safe_get_commands(false);
     // Safety: just writing data to stdout.
-    let stdout_fd = unsafe { BorrowedFd::borrow_raw(libc::STDOUT_FILENO) };
-    let _ = nix::unistd::write(stdout_fd, commands);
+    let _ = safe_write_loop(&libc::STDOUT_FILENO, commands);
+    TTY_PROTOCOLS_ACTIVE.store(false, Ordering::Release);
 }
 
 // Called from a signal handler to mark the tty as invalid (e.g. SIGHUP).
@@ -340,16 +346,19 @@ pub struct TtyHandoff {
     tty_protocols_applied: bool,
     // Whether reclaim was called, restoring the tty to its pre-scoped value.
     reclaimed: bool,
+    // Called after writing to the TTY.
+    on_write: fn(),
 }
 
 impl TtyHandoff {
-    pub fn new() -> Self {
+    pub fn new(on_write: fn()) -> Self {
         let protocols_active = get_tty_protocols_active();
         TtyHandoff {
             owner: None,
             tty_protocols_initial: protocols_active,
             tty_protocols_applied: protocols_active,
             reclaimed: false,
+            on_write,
         }
     }
 
@@ -360,7 +369,7 @@ impl TtyHandoff {
             return false; // Already enabled.
         }
         self.tty_protocols_applied = true;
-        set_tty_protocols_active(true)
+        set_tty_protocols_active(self.on_write, true)
     }
 
     /// Mark terminal modes as disabled.
@@ -370,7 +379,7 @@ impl TtyHandoff {
             return false; // Already disabled.
         };
         self.tty_protocols_applied = false;
-        set_tty_protocols_active(false)
+        set_tty_protocols_active(self.on_write, false)
     }
 
     /// Transfer to the given job group, if it wants to own the terminal.
