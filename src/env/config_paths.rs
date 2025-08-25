@@ -57,16 +57,18 @@ pub static CONFIG_PATHS: Lazy<ConfigPaths> = Lazy::new(|| {
                 let data_dir = base_path.join("share/fish/install");
                 #[cfg(not(feature = "embed-data"))]
                 let data_dir = base_path.join("share/fish");
+                let locale =
+                    (!cfg!(feature = "embed-data")).then(|| base_path.join("share/locale"));
                 paths = ConfigPaths {
                     // One obvious path is ~/.local (with fish in ~/.local/bin/).
                     // If we picked ~/.local/share/fish as our data path,
                     // we would install there and erase history.
                     // So let's isolate us a bit more.
-                    data: Some(data_dir.clone()),
+                    data: Some(data_dir),
                     sysconf: base_path.join("etc/fish"),
                     doc: base_path.join("share/doc/fish"),
                     bin: Some(base_path.join("bin")),
-                    locale: Some(data_dir.join("locale")),
+                    locale,
                 }
             } else if exec_path.ends_with("fish") {
                 FLOG!(
