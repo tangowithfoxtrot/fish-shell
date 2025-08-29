@@ -44,6 +44,8 @@ function man --description "Format and display the on-line manual pages"
         # isn't guaranteed to be allowed.
         # So we override them with the good name.
         switch $argv
+            case !
+                set argv not
             case :
                 set argv true
             case '['
@@ -53,10 +55,19 @@ function man --description "Format and display the on-line manual pages"
         end
     end
 
+    set -l tmpdir
     if not set -q argv[2] && status list-files "man/man1/$argv[1].1" &>/dev/null
-        __fish_print_help $argv
-        return
+        set tmpdir (__fish_mktemp_relative -d fish-man)
+        status get-file "man/man1/$argv[1].1" >$tmpdir/$argv.1
+        set argv $tmpdir/$argv.1
     end
 
     command man $argv
+    set -l saved_status $status
+
+    if set -q tmpdir[1]
+        rm -r $tmpdir
+    end
+
+    return $saved_status
 end
