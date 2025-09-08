@@ -7394,6 +7394,9 @@ msgstr "立即成为守护进程"
 msgid "Become an editor server for NetBeans"
 msgstr "成为NetBeans 的编辑服务器"
 
+msgid "Become password file"
+msgstr ""
+
 msgid "Beep if command has a non-zero exit"
 msgstr "如果命令有非零退出则鸣叫"
 
@@ -7624,6 +7627,12 @@ msgstr "粗体字体"
 
 msgid "Boolean as the value for the given key"
 msgstr "布尔为给定密钥的值"
+
+msgid "Boot into a specific boot loader entry on next boot"
+msgstr ""
+
+msgid "Boot into boot loader menu on next boot"
+msgstr ""
 
 msgid "Boot manager display label (Default: Linux)"
 msgstr "Boot 管理器显示标签( 默认: Linux)"
@@ -52255,6 +52264,9 @@ msgstr "保存到不依赖"
 
 msgid "Save to optionalDependencies"
 msgstr "保存到可选 依赖关系"
+
+msgid "Save to peerDependencies"
+msgstr ""
 
 msgid "Save which profiles are active"
 msgstr "保存哪些配置文件活动"

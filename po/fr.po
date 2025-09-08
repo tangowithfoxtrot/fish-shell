@@ -7496,6 +7496,9 @@ msgstr ""
 msgid "Become an editor server for NetBeans"
 msgstr "Servir de serveur d’édition pour NetBeans"
 
+msgid "Become password file"
+msgstr ""
+
 msgid "Beep if command has a non-zero exit"
 msgstr "Sonner en cas de code de retour non nul"
 
@@ -7725,6 +7728,12 @@ msgid "Bold font"
 msgstr ""
 
 msgid "Boolean as the value for the given key"
+msgstr ""
+
+msgid "Boot into a specific boot loader entry on next boot"
+msgstr ""
+
+msgid "Boot into boot loader menu on next boot"
 msgstr ""
 
 msgid "Boot manager display label (Default: Linux)"
@@ -52356,6 +52365,9 @@ msgid "Save to devDependencies"
 msgstr ""
 
 msgid "Save to optionalDependencies"
+msgstr ""
+
+msgid "Save to peerDependencies"
 msgstr ""
 
 msgid "Save which profiles are active"
