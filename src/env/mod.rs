@@ -1,8 +1,7 @@
-mod config_paths;
+pub mod config_paths;
 pub mod environment;
 mod environment_impl;
 pub mod var;
-pub use config_paths::CONFIG_PATHS;
 
 use crate::common::ToCString;
 pub use environment::*;

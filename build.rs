@@ -1,9 +1,14 @@
 #![allow(clippy::uninlined_format_args)]
 
+use fish_build_helper::{cargo_target_dir, workspace_root};
 use rsconf::{LinkType, Target};
 use std::env;
 use std::error::Error;
 use std::path::{Path, PathBuf};
+
+fn canonicalize<P: AsRef<Path>>(path: P) -> PathBuf {
+    std::fs::canonicalize(path).unwrap()
+}
 
 fn main() {
     setup_paths();
@@ -11,19 +16,21 @@ fn main() {
     // Add our default to enable tools that don't go through CMake, like "cargo test" and the
     // language server.
 
-    let cargo_target_dir = fish_build_helper::get_target_dir();
-
-    // FISH_BUILD_DIR is set by CMake, if we are using it.
     rsconf::set_env_value(
         "FISH_BUILD_DIR",
-        option_env!("FISH_BUILD_DIR").unwrap_or(cargo_target_dir.to_str().unwrap()),
+        // This is set by CMake and might include symlinks. Since we want to compare this to
+        // the dir fish is executed in we need to canonicalize it.
+        option_env!("FISH_BUILD_DIR")
+            .map_or(canonicalize(cargo_target_dir()), canonicalize)
+            .to_str()
+            .unwrap(),
     );
 
     // We need to canonicalize (i.e. realpath) the manifest dir because we want to be able to
     // compare it directly as a string at runtime.
     rsconf::set_env_value(
         "CARGO_MANIFEST_DIR",
-        fish_build_helper::get_repo_root().to_str().unwrap(),
+        canonicalize(workspace_root()).to_str().unwrap(),
     );
 
     // Some build info
@@ -245,53 +252,44 @@ fn setup_paths() {
         var
     }
 
-    let (prefix_from_home, prefix) = if let Ok(pre) = env::var("PREFIX") {
-        (false, PathBuf::from(pre))
-    } else {
-        (true, PathBuf::from(".local/"))
-    };
-
-    // If someone gives us a $PREFIX, we need it to be absolute.
-    // Otherwise we would try to get it from $HOME and that won't really work.
-    if !prefix_from_home && prefix.is_relative() {
-        panic!("Can't have relative prefix");
-    }
-
+    let prefix = PathBuf::from(env::var("PREFIX").unwrap_or("/usr/local".to_string()));
     rsconf::rebuild_if_env_changed("PREFIX");
     rsconf::set_env_value("PREFIX", prefix.to_str().unwrap());
 
     let datadir = get_path("DATADIR", "share/", &prefix);
-    rsconf::set_env_value("DATADIR", datadir.to_str().unwrap());
-    rsconf::rebuild_if_env_changed("DATADIR");
-
-    let datadir_subdir = if prefix_from_home {
-        "fish/install"
-    } else {
-        "fish"
-    };
-    rsconf::set_env_value("DATADIR_SUBDIR", datadir_subdir);
-
-    let bindir = get_path("BINDIR", "bin/", &prefix);
-    rsconf::set_env_value("BINDIR", bindir.to_str().unwrap());
-    rsconf::rebuild_if_env_changed("BINDIR");
 
     let sysconfdir = get_path(
         "SYSCONFDIR",
-        // If we get our prefix from $HOME, we should use the system's /etc/
-        // ~/.local/share/etc/ makes no sense
-        if prefix_from_home { "/etc/" } else { "etc/" },
+        // Embedded builds use "/etc," not "./share/etc".
+        if cfg!(feature = "embed-data") {
+            "/etc/"
+        } else {
+            "etc/"
+        },
         &datadir,
     );
     rsconf::set_env_value("SYSCONFDIR", sysconfdir.to_str().unwrap());
     rsconf::rebuild_if_env_changed("SYSCONFDIR");
 
-    let localedir = get_path("LOCALEDIR", "locale/", &datadir);
-    rsconf::set_env_value("LOCALEDIR", localedir.to_str().unwrap());
-    rsconf::rebuild_if_env_changed("LOCALEDIR");
+    #[cfg(not(feature = "embed-data"))]
+    {
+        rsconf::set_env_value("DATADIR", datadir.to_str().unwrap());
+        rsconf::rebuild_if_env_changed("DATADIR");
 
-    let docdir = get_path("DOCDIR", "doc/fish", &datadir);
-    rsconf::set_env_value("DOCDIR", docdir.to_str().unwrap());
-    rsconf::rebuild_if_env_changed("DOCDIR");
+        let bindir = get_path("BINDIR", "bin/", &prefix);
+        rsconf::set_env_value("BINDIR", bindir.to_str().unwrap());
+        rsconf::rebuild_if_env_changed("BINDIR");
+
+        let localedir = get_path("LOCALEDIR", "locale/", &datadir);
+        let localedir = localedir.to_str().unwrap();
+        assert!(!localedir.is_empty(), "empty LOCALEDIR is not supported");
+        rsconf::set_env_value("LOCALEDIR", localedir);
+        rsconf::rebuild_if_env_changed("LOCALEDIR");
+
+        let docdir = get_path("DOCDIR", "doc/fish", &datadir);
+        rsconf::set_env_value("DOCDIR", docdir.to_str().unwrap());
+        rsconf::rebuild_if_env_changed("DOCDIR");
+    }
 }
 
 fn get_version(src_dir: &Path) -> String {
@@ -331,9 +329,9 @@ fn get_version(src_dir: &Path) -> String {
     // or because it refused (safe.directory applies to `git describe`!)
     // So we read the SHA ourselves.
     fn get_git_hash() -> Result<String, Box<dyn std::error::Error>> {
-        let repo_root_dir = fish_build_helper::get_repo_root();
-        let gitdir = repo_root_dir.join(".git");
-        let jjdir = repo_root_dir.join(".jj");
+        let workspace_root = workspace_root();
+        let gitdir = workspace_root.join(".git");
+        let jjdir = workspace_root.join(".jj");
         let commit_id = if gitdir.exists() {
             // .git/HEAD contains ref: refs/heads/branch
             let headpath = gitdir.join("HEAD");

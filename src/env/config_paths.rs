@@ -1,154 +1,220 @@
-use super::ConfigPaths;
+use crate::common::wcs2string;
+use crate::global_safety::AtomicRef;
+use crate::wchar::prelude::*;
 use crate::{common::get_executable_path, FLOG, FLOGF};
-use once_cell::sync::Lazy;
+#[cfg(not(feature = "embed-data"))]
+use fish_build_helper::workspace_root;
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
-const DOC_DIR: &str = env!("DOCDIR");
-const DATA_DIR: &str = env!("DATADIR");
-const DATA_DIR_SUBDIR: &str = env!("DATADIR_SUBDIR");
-const SYSCONF_DIR: &str = env!("SYSCONFDIR");
-const LOCALE_DIR: &str = env!("LOCALEDIR");
-const BIN_DIR: &str = env!("BINDIR");
+/// A struct of configuration directories, determined in main() that fish will optionally pass to
+/// env_init.
+pub struct ConfigPaths {
+    pub sysconf: PathBuf,     // e.g., /usr/local/etc
+    pub bin: Option<PathBuf>, // e.g., /usr/local/bin
+    #[cfg(not(feature = "embed-data"))]
+    pub data: PathBuf, // e.g., /usr/local/share
+    #[cfg(not(feature = "embed-data"))]
+    pub doc: PathBuf, // e.g., /usr/local/share/doc/fish
+    #[cfg(not(feature = "embed-data"))]
+    pub locale: PathBuf, // e.g., /usr/local/share/locale
+}
 
-pub static CONFIG_PATHS: Lazy<ConfigPaths> = Lazy::new(|| {
-    // Read the current executable and follow all symlinks to it.
-    // OpenBSD has issues with `std::env::current_exe`, see gh-9086 and
-    // https://github.com/rust-lang/rust/issues/60560
-    let argv0 = PathBuf::from(std::env::args().next().unwrap());
-    let argv0 = if argv0.exists() {
-        argv0
-    } else {
-        std::env::current_exe().unwrap_or(argv0)
-    };
-    let argv0 = argv0.canonicalize().unwrap_or(argv0);
-    let mut paths = ConfigPaths::default();
-    let mut done = false;
-    let exec_path = get_executable_path(&argv0);
-    if let Ok(exec_path) = exec_path.canonicalize() {
+const SYSCONF_DIR: &str = env!("SYSCONFDIR");
+#[cfg(not(feature = "embed-data"))]
+const DOC_DIR: &str = env!("DOCDIR");
+
+#[cfg(not(feature = "embed-data"))]
+enum ConfigPathKind {
+    WorkspaceRoot,
+    RelocatableTree,
+    StaticPathsDueToInvalidExecPath,
+    StaticPathsDueToWeirdLayout,
+}
+
+pub struct ConfigPathDetection {
+    #[cfg(not(feature = "embed-data"))]
+    kind: ConfigPathKind,
+    pub paths: ConfigPaths,
+    exec_path: PathBuf,
+}
+
+impl ConfigPaths {
+    #[cfg(not(feature = "embed-data"))]
+    fn static_paths() -> Self {
+        Self {
+            sysconf: PathBuf::from(SYSCONF_DIR).join("fish"),
+            bin: Some(PathBuf::from(env!("BINDIR"))),
+            data: PathBuf::from(env!("DATADIR")).join("fish"),
+            doc: DOC_DIR.into(),
+            locale: PathBuf::from(env!("LOCALEDIR")),
+        }
+    }
+}
+
+const EMPTY_LOCALE_DIR: &[u8] = &[];
+pub static LOCALE_DIR: AtomicRef<[u8]> = AtomicRef::new(&EMPTY_LOCALE_DIR);
+
+/// NOTE: This is called during early startup, do not log anything.
+pub fn init_locale_dir(argv0: &wstr) -> ConfigPathDetection {
+    #[allow(clippy::let_and_return)] // for old clippy
+    let detection = ConfigPathDetection::new(argv0);
+    #[cfg(not(feature = "embed-data"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = detection.paths.locale.as_os_str().as_bytes();
+        assert!(!bytes.is_empty());
+        let bytes: Box<[u8]> = Box::from(bytes);
+        let bytes: Box<&'static [u8]> = Box::new(Box::leak(bytes));
+        LOCALE_DIR.store(Box::leak(bytes));
+    }
+    detection
+}
+
+impl ConfigPathDetection {
+    fn new(argv0: &wstr) -> Self {
+        let argv0 = PathBuf::from(OsString::from_vec(wcs2string(argv0)));
+        let exec_path = get_executable_path(argv0);
+        Self::from_exec_path(exec_path)
+    }
+
+    #[cfg(feature = "embed-data")]
+    fn from_exec_path(exec_path: PathBuf) -> Self {
+        Self {
+            paths: ConfigPaths {
+                sysconf: PathBuf::from(SYSCONF_DIR).join("fish"),
+                bin: exec_path.parent().map(|x| x.to_path_buf()),
+            },
+            exec_path,
+        }
+    }
+
+    #[cfg(not(feature = "embed-data"))]
+    fn from_exec_path(unresolved_exec_path: PathBuf) -> Self {
+        use ConfigPathKind::*;
+        let invalid_exec_path = |exec_path| Self {
+            kind: StaticPathsDueToInvalidExecPath,
+            paths: ConfigPaths::static_paths(),
+            exec_path,
+        };
+        let Ok(exec_path) = unresolved_exec_path.canonicalize() else {
+            return invalid_exec_path(unresolved_exec_path);
+        };
+        let Some(exec_path_parent) = exec_path.parent() else {
+            return invalid_exec_path(exec_path);
+        };
+
+        let workspace_root = workspace_root();
+
+        // The next check is that we are in a relocatable directory tree
+        if exec_path_parent.ends_with("bin") {
+            let base_path = exec_path_parent.parent().unwrap();
+            let data = base_path.join("share/fish");
+            let sysconf = base_path.join("etc/fish");
+            if base_path != workspace_root // Install to repo root is not supported.
+                && data.exists() && sysconf.exists()
+            {
+                let doc = base_path.join("share/doc/fish");
+                return Self {
+                    kind: RelocatableTree,
+                    paths: ConfigPaths {
+                        sysconf,
+                        bin: Some(exec_path_parent.to_owned()),
+                        data,
+                        // The docs dir may not exist; in that case fall back to the compiled in path.
+                        doc: if doc.exists() {
+                            doc
+                        } else {
+                            PathBuf::from(DOC_DIR)
+                        },
+                        locale: base_path.join("share/locale"),
+                    },
+                    exec_path,
+                };
+            }
+        }
+
+        // If we're in Cargo's target directory or in CMake's build directory, use the source files.
+        if exec_path.starts_with(env!("FISH_BUILD_DIR")) {
+            return Self {
+                kind: WorkspaceRoot,
+                paths: ConfigPaths {
+                    sysconf: workspace_root.join("etc"),
+                    bin: Some(exec_path_parent.to_owned()),
+                    data: workspace_root.join("share"),
+                    doc: workspace_root.join("user_doc/html"),
+                    locale: workspace_root.join("share/locale"),
+                },
+                exec_path,
+            };
+        }
+
+        Self {
+            kind: StaticPathsDueToWeirdLayout,
+            paths: ConfigPaths::static_paths(),
+            exec_path,
+        }
+    }
+
+    pub fn log_config_paths(&self) {
         FLOG!(
             config,
-            format!("exec_path: {:?}, argv[0]: {:?}", exec_path, &argv0)
+            format!("executable path: {}", self.exec_path.display())
         );
-        // TODO: we should determine program_name from argv0 somewhere in this file
-
-        // Detect if we're running right out of the CMAKE build directory
-        if exec_path.starts_with(env!("FISH_BUILD_DIR")) {
-            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            FLOG!(
-                config,
-                "Running out of target directory, using paths relative to CARGO_MANIFEST_DIR:\n",
-                manifest_dir.display()
-            );
-            done = true;
-            paths = ConfigPaths {
-                data: Some(manifest_dir.join("share")),
-                sysconf: manifest_dir.join("etc"),
-                doc: manifest_dir.join("user_doc/html"),
-                bin: Some(exec_path.parent().unwrap().to_owned()),
-                locale: Some(manifest_dir.join("share/locale")),
+        #[cfg(feature = "embed-data")]
+        FLOG!(config, "embed-data feature is active, ignoring data paths");
+        #[cfg(not(feature = "embed-data"))]
+        use ConfigPathKind::*;
+        #[cfg(not(feature = "embed-data"))]
+        match &self.kind {
+            WorkspaceRoot => {
+                FLOG!(
+                        config,
+                        format!(
+                            "Running out of build directory, using paths relative to $CARGO_MANIFEST_DIR ({})",
+                            workspace_root().display()
+                        ),
+                    );
             }
-        }
-
-        if !done {
-            // The next check is that we are in a relocatable directory tree
-            if exec_path.ends_with("bin/fish") {
-                let base_path = exec_path.parent().unwrap().parent().unwrap();
-                #[cfg(feature = "embed-data")]
-                let data_dir = base_path.join("share/fish/install");
-                #[cfg(not(feature = "embed-data"))]
-                let data_dir = base_path.join("share/fish");
-                let locale =
-                    (!cfg!(feature = "embed-data")).then(|| base_path.join("share/locale"));
-                paths = ConfigPaths {
-                    // One obvious path is ~/.local (with fish in ~/.local/bin/).
-                    // If we picked ~/.local/share/fish as our data path,
-                    // we would install there and erase history.
-                    // So let's isolate us a bit more.
-                    data: Some(data_dir),
-                    sysconf: base_path.join("etc/fish"),
-                    doc: base_path.join("share/doc/fish"),
-                    bin: Some(base_path.join("bin")),
-                    locale,
-                }
-            } else if exec_path.ends_with("fish") {
+            RelocatableTree => {
+                FLOG!(config, "Running from relocatable tree");
+            }
+            StaticPathsDueToInvalidExecPath => {
+                FLOG!(config, "Invalid executable path, using compiled-in paths");
+            }
+            StaticPathsDueToWeirdLayout => {
                 FLOG!(
                     config,
-                    "'fish' not in a 'bin/', trying paths relative to source tree"
+                    "Unexpected directory layout, using compiled-in paths"
                 );
-                let base_path = exec_path.parent().unwrap();
-                #[cfg(feature = "embed-data")]
-                let data_dir = base_path.join("share/install");
-                #[cfg(not(feature = "embed-data"))]
-                let data_dir = base_path.join("share");
-                paths = ConfigPaths {
-                    data: Some(data_dir.clone()),
-                    sysconf: base_path.join("etc"),
-                    doc: base_path.join("user_doc/html"),
-                    bin: Some(base_path.to_path_buf()),
-                    locale: Some(data_dir.join("locale")),
-                }
-            }
-
-            if paths.data.clone().is_some_and(|x| x.exists()) && paths.sysconf.exists() {
-                // The docs dir may not exist; in that case fall back to the compiled in path.
-                if !paths.doc.exists() {
-                    paths.doc = PathBuf::from(DOC_DIR);
-                }
-                done = true;
             }
         }
+
+        let paths = &self.paths;
+        FLOGF!(
+            config,
+            "paths.sysconf: %ls",
+            paths.sysconf.display().to_string()
+        );
+        FLOGF!(
+            config,
+            "paths.bin: %ls",
+            paths
+                .bin
+                .clone()
+                .map(|x| x.display().to_string())
+                .unwrap_or("|not found|".to_string()),
+        );
+        #[cfg(not(feature = "embed-data"))]
+        FLOGF!(config, "paths.data: %ls", paths.data.display().to_string());
+        #[cfg(not(feature = "embed-data"))]
+        FLOGF!(config, "paths.doc: %ls", paths.doc.display().to_string());
+        #[cfg(not(feature = "embed-data"))]
+        FLOGF!(
+            config,
+            "paths.locale: %ls",
+            paths.locale.display().to_string()
+        );
     }
-
-    if !done {
-        // Fall back to what got compiled in.
-        let data = if cfg!(feature = "embed-data") {
-            None
-        } else {
-            Some(PathBuf::from(DATA_DIR).join(DATA_DIR_SUBDIR))
-        };
-        let bin = if cfg!(feature = "embed-data") {
-            exec_path.parent().map(|x| x.to_path_buf())
-        } else {
-            Some(PathBuf::from(BIN_DIR))
-        };
-        let locale = if cfg!(feature = "embed-data") {
-            None
-        } else {
-            Some(PathBuf::from(LOCALE_DIR))
-        };
-
-        FLOG!(config, "Using compiled in paths:");
-        paths = ConfigPaths {
-            data,
-            sysconf: PathBuf::from(SYSCONF_DIR).join("fish"),
-            doc: DOC_DIR.into(),
-            bin,
-            locale,
-        }
-    }
-
-    FLOGF!(
-        config,
-        "determine_config_directory_paths() results:\npaths.data: %ls\npaths.sysconf: \
-        %ls\npaths.doc: %ls\npaths.bin: %ls\npaths.locale: %ls",
-        paths
-            .data
-            .clone()
-            .map(|x| x.display().to_string())
-            .unwrap_or("|not found|".to_string()),
-        paths.sysconf.display().to_string(),
-        paths.doc.display().to_string(),
-        paths
-            .bin
-            .clone()
-            .map(|x| x.display().to_string())
-            .unwrap_or("|not found|".to_string()),
-        paths
-            .locale
-            .clone()
-            .map(|x| x.display().to_string())
-            .unwrap_or("|not found|".to_string()),
-    );
-
-    paths
-});
+}

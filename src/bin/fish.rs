@@ -35,8 +35,9 @@ use fish::{
         PROFILING_ACTIVE, PROGRAM_NAME,
     },
     env::{
+        config_paths::{init_locale_dir, ConfigPaths},
         environment::{env_init, EnvStack, Environment},
-        ConfigPaths, EnvMode, Statuses, CONFIG_PATHS,
+        EnvMode, Statuses,
     },
     eprintf,
     event::{self, Event},
@@ -185,14 +186,7 @@ fn read_init(parser: &Parser, paths: &ConfigPaths) {
     }
     #[cfg(not(feature = "embed-data"))]
     {
-        let datapath = str2wcstring(
-            paths
-                .data
-                .clone()
-                .expect("Non-embed build not having a data path. That's a bug")
-                .as_os_str()
-                .as_bytes(),
-        );
+        let datapath = str2wcstring(paths.data.as_os_str().as_bytes());
         if !source_config_in_directory(parser, &datapath) {
             // If we cannot read share/config.fish, our internal configuration,
             // something is wrong.
@@ -422,9 +416,7 @@ fn throwing_main() -> i32 {
     let mut args: Vec<WString> = env::args_os()
         .map(|osstr| str2wcstring(osstr.as_bytes()))
         .collect();
-    if args.is_empty() {
-        args.push("fish".into());
-    }
+    let config_path_detection = init_locale_dir(&args[0]);
 
     // Enable debug categories set in FISH_DEBUG.
     // This is in *addition* to the ones given via --debug.
@@ -468,6 +460,8 @@ fn throwing_main() -> i32 {
         };
     }
 
+    config_path_detection.log_config_paths();
+
     // No-exec is prohibited when in interactive mode.
     if opts.is_interactive_session && opts.no_exec {
         FLOG!(
@@ -497,16 +491,15 @@ fn throwing_main() -> i32 {
         save_term_foreground_process_group();
     }
 
-    let mut paths: Option<&ConfigPaths> = None;
     // If we're not executing, there's no need to find the config.
-    if !opts.no_exec {
-        paths = Some(&*CONFIG_PATHS);
+    let config_paths = if !opts.no_exec {
+        let paths = config_path_detection.paths;
         env_init(
-            paths,
+            Some(&paths),
             /* do uvars */ !opts.no_config,
             /* default paths */ opts.no_config,
         );
-        paths
+        Some(paths)
     } else {
         None
     };
@@ -531,7 +524,7 @@ fn throwing_main() -> i32 {
     parser.set_syncs_uvars(!opts.no_config);
 
     if !opts.no_exec && !opts.no_config {
-        read_init(parser, paths.as_ref().unwrap());
+        read_init(parser, config_paths.as_ref().unwrap());
     }
 
     if is_interactive_session() && opts.no_config && !opts.no_exec {

@@ -1,8 +1,10 @@
 #[cfg(not(clippy))]
 use std::path::Path;
 
+use fish_build_helper::cargo_target_dir;
+
 fn main() {
-    let cargo_target_dir = fish_build_helper::get_target_dir();
+    let cargo_target_dir = cargo_target_dir();
     let mandir = cargo_target_dir.join("fish-man");
     let sec1dir = mandir.join("man1");
     // Running `cargo clippy` on a clean build directory panics, because when rust-embed tries to
@@ -17,19 +19,21 @@ fn main() {
 fn build_man(man_dir: &Path) {
     use std::{env, process::Command};
 
-    let repo_root_dir = fish_build_helper::get_repo_root();
+    use fish_build_helper::workspace_root;
+
+    let workspace_root = workspace_root();
 
     let man_str = man_dir.to_str().unwrap();
 
     let sec1_dir = man_dir.join("man1");
     let sec1_str = sec1_dir.to_str().unwrap();
 
-    let docsrc_dir = repo_root_dir.join("doc_src");
+    let docsrc_dir = workspace_root.join("doc_src");
     let docsrc_str = docsrc_dir.to_str().unwrap();
 
     let sphinx_doc_sources = [
-        repo_root_dir.join("CHANGELOG.rst"),
-        repo_root_dir.join("CONTRIBUTING.rst"),
+        workspace_root.join("CHANGELOG.rst"),
+        workspace_root.join("CONTRIBUTING.rst"),
         docsrc_dir.clone(),
     ];
     fish_build_helper::rebuild_if_paths_changed(sphinx_doc_sources);
