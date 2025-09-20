@@ -1,11 +1,8 @@
 #[cfg(not(clippy))]
 use std::path::Path;
 
-use fish_build_helper::cargo_target_dir;
-
 fn main() {
-    let cargo_target_dir = cargo_target_dir();
-    let mandir = cargo_target_dir.join("fish-man");
+    let mandir = fish_build_helper::fish_build_dir().join("fish-man");
     let sec1dir = mandir.join("man1");
     // Running `cargo clippy` on a clean build directory panics, because when rust-embed tries to
     // embed a directory which does not exist it will panic.
@@ -48,7 +45,7 @@ fn build_man(man_dir: &Path) {
 
     rsconf::rebuild_if_env_changed("FISH_BUILD_DOCS");
     if env::var("FISH_BUILD_DOCS") == Ok("0".to_string()) {
-        println!("cargo:warning=Skipping man pages because $FISH_BUILD_DOCS is set to 0");
+        rsconf::warn!("Skipping man pages because $FISH_BUILD_DOCS is set to 0");
         return;
     }
 
@@ -62,8 +59,8 @@ fn build_man(man_dir: &Path) {
             if env::var("FISH_BUILD_DOCS") == Ok("1".to_string()) {
                 panic!("Could not find sphinx-build to build man pages.\nInstall sphinx or disable building the docs by setting $FISH_BUILD_DOCS=0.");
             }
-            println!("cargo:warning=Cannot find sphinx-build to build man pages.");
-            println!("cargo:warning=If you install it now you need to run `cargo clean` and rebuild, or set $FISH_BUILD_DOCS=1 explicitly.");
+            rsconf::warn!("Cannot find sphinx-build to build man pages.");
+            rsconf::warn!("If you install it now you need to run `cargo clean` and rebuild, or set $FISH_BUILD_DOCS=1 explicitly.");
         }
         Err(x) => {
             // Another error - permissions wrong etc

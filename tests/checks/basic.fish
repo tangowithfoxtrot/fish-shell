@@ -429,10 +429,6 @@ for foo in 1 2 3
 end
 
 # Check that these error correctly.
-# Simplify __fish_print_help, as it's noisy.
-function __fish_print_help
-    echo $argv[2..]
-end
 $dyn_break
 eval break
 #CHECKERR: break: Not inside of loop
@@ -441,6 +437,15 @@ $dyn_continue
 eval continue
 #CHECKERR: continue: Not inside of loop
 #CHECKERR: continue: Not inside of loop
+
+break -h
+#CHECKERR: Documentation for break
+break --help
+#CHECKERR: Documentation for break
+$dyn_break -h
+#CHECKERR: Documentation for break
+continue -h
+#CHECKERR: Documentation for continue
 
 # Test implicit cd. This should do nothing.
 ./
