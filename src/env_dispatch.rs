@@ -12,6 +12,7 @@ use crate::screen::{
 };
 use crate::terminal::use_terminfo;
 use crate::terminal::ColorSupport;
+use crate::tty_handoff::xtversion;
 use crate::wchar::prelude::*;
 use crate::wutil::fish_wcstoi;
 use crate::{function, terminal};
@@ -153,7 +154,7 @@ fn handle_timezone(var_name: &wstr, vars: &EnvStack) {
 }
 
 /// Update the value of [`FISH_EMOJI_WIDTH`](crate::fallback::FISH_EMOJI_WIDTH).
-fn guess_emoji_width(vars: &EnvStack) {
+pub fn guess_emoji_width(vars: &EnvStack) {
     use crate::fallback::FISH_EMOJI_WIDTH;
 
     if let Some(width_str) = vars.get(L!("fish_emoji_width")) {
@@ -168,35 +169,31 @@ fn guess_emoji_width(vars: &EnvStack) {
         return;
     }
 
-    let term = vars
+    let term_program = vars
         .get(L!("TERM_PROGRAM"))
         .map(|v| v.as_string())
         .unwrap_or_else(WString::new);
-    // The format and contents of $TERM_PROGRAM_VERSION depend on $TERM_PROGRAM. Under
-    // Apple_Terminal, this is an integral value in the hundreds corresponding to the
-    // CFBundleVersion of Terminal.app; under iTerm, this is the version number which can contain
-    // multiple periods (e.g 3.4.19). Currently we only care about Apple_Terminal but the C++ code
-    // used wcstod() to parse at least the major.minor value of cases like the latter.
-    //
-    // TODO: Move this inside the Apple_Terminal branch and use i32::FromStr (i.e. str::parse())
-    // instead.
-    let version = vars
-        .get(L!("TERM_PROGRAM_VERSION"))
-        .map(|v| v.as_string())
-        .and_then(|v| {
-            let mut consumed = 0;
-            crate::wutil::wcstod::wcstod(&v, '.', &mut consumed).ok()
-        })
-        .unwrap_or(0.0);
 
-    if term == "Apple_Terminal" && version as i32 >= 400 {
-        // Apple Terminal on High Sierra
-        FISH_EMOJI_WIDTH.store(2, Ordering::Relaxed);
-        FLOG!(term_support, "default emoji width: 2 for", term);
-    } else if term == "iTerm.app" {
+    #[allow(renamed_and_removed_lints)] // for old clippy
+    #[allow(clippy::blocks_in_if_conditions)] // for old clippy
+    if xtversion().unwrap_or(L!("")).starts_with(L!("iTerm2 ")) {
         // iTerm2 now defaults to Unicode 9 sizes for anything after macOS 10.12
         FISH_EMOJI_WIDTH.store(2, Ordering::Relaxed);
         FLOG!(term_support, "default emoji width 2 for iTerm2");
+    } else if term_program == "Apple_Terminal" && {
+        let version = vars
+            .get(L!("TERM_PROGRAM_VERSION"))
+            .map(|v| v.as_string())
+            .and_then(|v| {
+                let mut consumed = 0;
+                crate::wutil::wcstod::wcstod(&v, '.', &mut consumed).ok()
+            })
+            .unwrap_or(0.0);
+        version as i32 >= 400
+    } {
+        // Apple Terminal on High Sierra
+        FISH_EMOJI_WIDTH.store(2, Ordering::Relaxed);
+        FLOG!(term_support, "default emoji width: 2 for", term_program);
     } else {
         // Default to whatever the system's wcwidth gives for U+1F603, but only if it's at least
         // 1 and at most 2.
@@ -372,7 +369,6 @@ pub fn env_dispatch_init(vars: &EnvStack) {
 fn run_inits(vars: &EnvStack) {
     init_locale(vars);
     init_terminal(vars);
-    guess_emoji_width(vars);
     update_wait_on_escape_ms(vars);
     update_wait_on_sequence_key_ms(vars);
     handle_read_limit_change(vars);

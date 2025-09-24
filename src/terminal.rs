@@ -178,7 +178,7 @@ pub(crate) trait Output {
             ApplicationKeypadModeEnable => write(self, b"\x1b="),
             ApplicationKeypadModeDisable => write(self, b"\x1b>"),
             Osc0WindowTitle(title) => osc_0_window_title(self, title),
-            Osc133PromptStart => write(self, OSC_133_PROMPT_START),
+            Osc133PromptStart => osc_133_prompt_start(self),
             Osc133CommandStart(command) => osc_133_command_start(self, command),
             Osc133CommandFinished(s) => osc_133_command_finished(self, s),
             QueryCursorPosition => write(self, b"\x1b[6n"),
@@ -214,14 +214,6 @@ fn maybe_terminfo(
         out.write_bytes(sequence);
     }
     true
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum Capability {
-    Unknown,
-    Supported,
-    NotSupported,
 }
 
 pub(crate) static SCROLL_FORWARD_SUPPORTED: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
@@ -392,9 +384,18 @@ fn osc_0_window_title(out: &mut impl Output, title: &[WString]) -> bool {
     true
 }
 
-const OSC_133_PROMPT_START: &[u8] = b"\x1b]133;A;click_events=1\x07";
+fn osc_133_prompt_start(out: &mut impl Output) -> bool {
+    if !future_feature_flags::test(FeatureFlag::mark_prompt) {
+        return false;
+    }
+    write_to_output!(out, "\x1b]133;A;click_events=1\x07");
+    true
+}
 
 fn osc_133_command_start(out: &mut impl Output, command: &wstr) -> bool {
+    if !future_feature_flags::test(FeatureFlag::mark_prompt) {
+        return false;
+    }
     write_to_output!(
         out,
         "\x1b]133;C;cmdline_url={}\x07",
@@ -404,6 +405,9 @@ fn osc_133_command_start(out: &mut impl Output, command: &wstr) -> bool {
 }
 
 fn osc_133_command_finished(out: &mut impl Output, exit_status: libc::c_int) -> bool {
+    if !future_feature_flags::test(FeatureFlag::mark_prompt) {
+        return false;
+    }
     write_to_output!(out, "\x1b]133;D;{}\x07", exit_status);
     true
 }

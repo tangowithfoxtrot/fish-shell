@@ -19,6 +19,7 @@ use crate::reader::commandline_set_buffer;
 use crate::reader::reader_save_screen_state;
 use crate::reader::ReaderConfig;
 use crate::reader::{reader_pop, reader_push, reader_readline};
+use crate::tokenizer::Tok;
 use crate::tokenizer::Tokenizer;
 use crate::tokenizer::TOK_ACCEPT_UNFINISHED;
 use crate::tokenizer::TOK_ARGUMENT_LIST;
@@ -33,6 +34,13 @@ use std::num::NonZeroUsize;
 use std::os::fd::RawFd;
 use std::sync::atomic::Ordering;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum TokenOutputMode {
+    Expanded,
+    Raw,
+    Unescaped,
+}
+
 #[derive(Default)]
 struct Options {
     print_help: bool,
@@ -44,13 +52,13 @@ struct Options {
     // If a delimiter was given. Used to distinguish between the default
     // empty string and a given empty delimiter.
     delimiter: Option<WString>,
-    tokenize: bool,
+    token_mode: Option<TokenOutputMode>, // never expanded
     shell: bool,
     array: bool,
     silent: bool,
     split_null: bool,
     to_stdout: bool,
-    nchars: usize,
+    nchars: Option<NonZeroUsize>,
     one_line: bool,
 }
 
@@ -83,9 +91,18 @@ const LONG_OPTIONS: &[WOption] = &[
     wopt(L!("shell"), ArgType::NoArgument, 'S'),
     wopt(L!("silent"), ArgType::NoArgument, 's'),
     wopt(L!("tokenize"), ArgType::NoArgument, 't'),
+    wopt(L!("tokenize-raw"), ArgType::NoArgument, '\x01'),
     wopt(L!("unexport"), ArgType::NoArgument, 'u'),
     wopt(L!("universal"), ArgType::NoArgument, 'U'),
 ];
+
+fn tokenize_flag(token_mode: TokenOutputMode) -> &'static wstr {
+    match token_mode {
+        TokenOutputMode::Expanded => panic!(),
+        TokenOutputMode::Raw => L!("--tokenize-raw"),
+        TokenOutputMode::Unescaped => L!("--tokenize"),
+    }
+}
 
 fn parse_cmd_opts(
     args: &mut [&wstr],
@@ -130,7 +147,7 @@ fn parse_cmd_opts(
             }
             'n' => {
                 opts.nchars = match fish_wcstoi(w.woptarg.unwrap()) {
-                    Ok(n) if n >= 0 => n.try_into().unwrap(),
+                    Ok(n) if n >= 0 => NonZeroUsize::new(n.try_into().unwrap()),
                     Err(wutil::Error::Overflow) => {
                         streams.err.append(wgettext_fmt!(
                             "%ls: Argument '%ls' is out of range\n",
@@ -166,8 +183,28 @@ fn parse_cmd_opts(
             'S' => {
                 opts.shell = true;
             }
-            't' => {
-                opts.tokenize = true;
+            't' | '\x01' => {
+                let new_mode = match opt {
+                    't' => TokenOutputMode::Unescaped,
+                    '\x01' => TokenOutputMode::Raw,
+                    _ => unreachable!(),
+                };
+                if let Some(old_mode) = opts.token_mode {
+                    if old_mode != new_mode {
+                        streams.err.append(wgettext_fmt!(
+                            BUILTIN_ERR_COMBO2,
+                            cmd,
+                            wgettext_fmt!(
+                                "%s and %s are mutually exclusive",
+                                tokenize_flag(old_mode),
+                                tokenize_flag(new_mode),
+                            )
+                        ));
+                        builtin_print_error_trailer(parser, streams.err, cmd);
+                        return Err(STATUS_INVALID_ARGS);
+                    }
+                }
+                opts.token_mode = Some(new_mode);
             }
             'U' => {
                 opts.place |= EnvMode::UNIVERSAL;
@@ -207,7 +244,7 @@ fn parse_cmd_opts(
 fn read_interactive(
     parser: &Parser,
     buff: &mut WString,
-    nchars: usize,
+    nchars: Option<NonZeroUsize>,
     shell: bool,
     silent: bool,
     prompt: &wstr,
@@ -251,16 +288,18 @@ fn read_interactive(
         let _interactive = parser.push_scope(|s| s.is_interactive = true);
         let mut scoped_handoff = TtyHandoff::new(reader_save_screen_state);
         scoped_handoff.enable_tty_protocols();
-        reader_readline(parser, NonZeroUsize::try_from(nchars).ok())
+        reader_readline(parser, nchars)
     };
     if let Some(line) = mline {
         *buff = line;
-        if nchars > 0 && nchars < buff.len() {
+        if let Some(nchars) = nchars.map(usize::from) {
             // Line may be longer than nchars if a keybinding used `commandline -i`
             // note: we're deliberately throwing away the tail of the commandline.
             // It shouldn't be unread because it was produced with `commandline -i`,
             // not typed.
-            buff.truncate(nchars);
+            if nchars < buff.len() {
+                buff.truncate(nchars);
+            }
         }
     } else {
         exit_res = Err(STATUS_CMD_ERROR);
@@ -341,7 +380,7 @@ fn read_in_chunks(fd: RawFd, buff: &mut WString, split_null: bool, do_seek: bool
 fn read_one_char_at_a_time(
     fd: RawFd,
     buff: &mut WString,
-    nchars: usize,
+    nchars: Option<NonZeroUsize>,
     split_null: bool,
 ) -> BuiltinResult {
     let mut exit_res = Ok(SUCCESS);
@@ -398,8 +437,10 @@ fn read_one_char_at_a_time(
             buff.pop();
             break;
         }
-        if nchars > 0 && nchars <= buff.len() {
-            break;
+        if let Some(nchars) = nchars.map(usize::from) {
+            if nchars <= buff.len() {
+                break;
+            }
         }
     }
 
@@ -490,24 +531,34 @@ fn validate_read_args(
         return Err(STATUS_INVALID_ARGS);
     }
 
-    if opts.tokenize && opts.delimiter.is_some() {
-        streams.err.append(wgettext_fmt!(
-            BUILTIN_ERR_COMBO2_EXCLUSIVE,
-            cmd,
-            "--delimiter",
-            "--tokenize"
-        ));
-        return Err(STATUS_INVALID_ARGS);
+    fn tokenize_flag(token_mode: TokenOutputMode) -> &'static wstr {
+        match token_mode {
+            TokenOutputMode::Expanded => panic!(),
+            TokenOutputMode::Raw => L!("--tokenize-raw"),
+            TokenOutputMode::Unescaped => L!("--tokenize"),
+        }
     }
 
-    if opts.tokenize && opts.one_line {
-        streams.err.append(wgettext_fmt!(
-            BUILTIN_ERR_COMBO2_EXCLUSIVE,
-            cmd,
-            "--line",
-            "--tokenize"
-        ));
-        return Err(STATUS_INVALID_ARGS);
+    if let Some(token_mode) = opts.token_mode {
+        if opts.delimiter.is_some() {
+            streams.err.append(wgettext_fmt!(
+                BUILTIN_ERR_COMBO2_EXCLUSIVE,
+                cmd,
+                "--delimiter",
+                tokenize_flag(token_mode),
+            ));
+            return Err(STATUS_INVALID_ARGS);
+        }
+
+        if opts.one_line {
+            streams.err.append(wgettext_fmt!(
+                BUILTIN_ERR_COMBO2_EXCLUSIVE,
+                cmd,
+                "--line",
+                tokenize_flag(token_mode),
+            ));
+            return Err(STATUS_INVALID_ARGS);
+        }
     }
 
     // Verify all variable names.
@@ -603,7 +654,7 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
                 &opts.commandline,
                 streams.stdin_fd,
             );
-        } else if opts.nchars == 0 && !stream_stdin_is_a_tty &&
+        } else if opts.nchars.is_none() && !stream_stdin_is_a_tty &&
                    // "one_line" is implemented as reading n-times to a new line,
                    // if we're chunking we could get multiple lines so we would have to advance
                    // more than 1 per run through the loop. Let's skip that for now.
@@ -640,18 +691,28 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
             return exit_res;
         }
 
-        if opts.tokenize {
+        if let Some(token_mode) = opts.token_mode {
             let mut tok = Tokenizer::new(&buff, TOK_ACCEPT_UNFINISHED | TOK_ARGUMENT_LIST);
+            let token_text = |tokenizer: &mut Tokenizer<'_>, token: &Tok| -> WString {
+                let mut text = Cow::Borrowed(tokenizer.text_of(token));
+                match token_mode {
+                    TokenOutputMode::Expanded => panic!(),
+                    TokenOutputMode::Raw => (),
+                    TokenOutputMode::Unescaped => {
+                        if let Some(unescaped) =
+                            unescape_string(&text, UnescapeStringStyle::default())
+                        {
+                            text = Cow::Owned(unescaped);
+                        }
+                    }
+                };
+                text.into_owned()
+            };
             if opts.array {
                 // Array mode: assign each token as a separate element of the sole var.
                 let mut tokens = vec![];
                 while let Some(t) = tok.next() {
-                    let text = tok.text_of(&t);
-                    if let Some(out) = unescape_string(text, UnescapeStringStyle::default()) {
-                        tokens.push(out);
-                    } else {
-                        tokens.push(text.to_owned());
-                    }
+                    tokens.push(token_text(&mut tok, &t));
                 }
 
                 parser.set_var_and_fire(argv[var_ptr], opts.place, tokens);
@@ -661,9 +722,7 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
                     let Some(t) = tok.next() else {
                         break;
                     };
-                    let text = tok.text_of(&t);
-                    let out = unescape_string(text, UnescapeStringStyle::default())
-                        .unwrap_or_else(|| text.to_owned());
+                    let out = token_text(&mut tok, &t);
                     parser.set_var_and_fire(argv[var_ptr], opts.place, vec![out]);
                     var_ptr += 1;
                 }

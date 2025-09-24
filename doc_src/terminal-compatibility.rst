@@ -5,7 +5,7 @@ fish writes various control sequences to the terminal.
 Some must be implemented to enable basic functionality,
 while others enable optional features and may be ignored by the terminal.
 
-The terminal must be able to parse Control Sequence Introducer (CSI) commands, Operating System Commands (OSC) and optionally Device Control Strings (DCS).
+The terminal must be able to parse Control Sequence Introducer (CSI) commands, Operating System Commands (OSC) and :ref:`optionally <term-compat-dcs-gnu-screen>` Device Control Strings (DCS).
 These are defined by ECMA-48.
 If a valid CSI, OSC or DCS sequence does not represent a command implemented by the terminal, the terminal must ignore it.
 
@@ -68,10 +68,15 @@ Required Commands
      - clear
      - Clear the screen.
      - VT100
-   * - ``\e[0c``
+   * - .. _term-compat-primary-da:
+
+       ``\e[0c``
      -
      - Request primary device attribute.
        The terminal must respond with a CSI command that starts with the ``?`` parameter byte (so a sequence starting with ``\e[?``) and has ``c`` as final byte.
+
+       Failure to implement this will cause a brief pause at startup followed by a warning.
+       For the time being, both can be turned off by turning off the ``query-terminal`` :ref:`feature flag <featureflags>`.
      - VT100
    * - n/a
      - am
@@ -189,17 +194,31 @@ Optional Commands
      - Su
      - Reset underline color to the default (follow the foreground color).
      - kitty
-   * - ``\e[ Ps S``
+   * - .. _term-compat-indn:
+
+       ``\e[ Ps S``
      - indn
-     - Scroll forward Ps lines.
-     -
+     - Scroll up Ps lines (aka ``SU`` but terminfo calls it "scroll forward")
+       This enables the :ref:`scrollback-push <special-input-functions-scrollback-push>` special input function which is used by :kbd:`ctrl-l`.
+     - ECMA-48
    * - ``\e[= Ps u``, ``\e[? Ps u``
      - n/a
      - Enable the kitty keyboard protocol.
      - kitty
-   * - ``\e[6n``
+   * - .. _term-compat-cursor-position-report:
+
+       ``\e[6n``
      - n/a
      - Request cursor position report.
+       The response must be of the form ``\e[ Ps ; Ps R``
+       where the first parameter is the row number
+       and the second parameter is the column number.
+       Both start at 1.
+
+       This is used inside terminals that either
+
+       - implement the OSC 133 :ref:`click_events <term-compat-osc-133>` feature.
+       - advertise the :ref:`indn <term-compat-indn>` capability via :ref:`XTGETTCAP <term-compat-xtgettcap>`
      - VT100
    * - ``\e[ \x20 q``
      - Se
@@ -210,9 +229,12 @@ Optional Commands
      - Ss
      - Set cursor style (DECSCUSR); Ps is 2, 4 or 6 for block, underscore or line shape.
      - VT520
-   * - ``\e[ Ps q``
+   * - .. _term-compat-xtversion:
+
+       ``\e[ Ps q``
      - n/a
      - Request terminal name and version (XTVERSION).
+       This is only used for temporary workarounds for incompatible terminals.
      - XTerm
    * - ``\e[?25h``
      - cvvis
@@ -265,11 +287,13 @@ Optional Commands
      -
      - Copy to clipboard (OSC 52).
      - XTerm
-   * - .. _click-events:
+   * - .. _term-compat-osc-133:
 
        ``\e]133;A; click_events=1\x07``
      -
      - Mark prompt start (OSC 133), with kitty's ``click_events`` extension.
+       The ``click_events`` extension enables mouse clicks to move the cursor or select pager items,
+       assuming that :ref:`cursor position reporting <term-compat-cursor-position-report>` is available.
      - FinalTerm, kitty
    * - ``\e]133;C; cmdline_url= Pt \x07``
      -
@@ -279,8 +303,39 @@ Optional Commands
      -
      - Mark command end (OSC 133);  Ps is the exit status.
      - FinalTerm
-   * - ``\eP+q Pt \e\\``
+   * - .. _term-compat-xtgettcap:
+
+        ``\eP+q Pt \e\\``
      -
-     - Request terminfo capability (XTGETTCAP). The parameter is the capability's hex-encoded terminfo code.
-       Specifically, fish asks for the ``indn`` string capability. At the time of writing string capabilities are supported by kitty and foot.
-     - XTerm, kitty, foot
+     - Request terminfo capability (XTGETTCAP).
+       The parameter is the capability's hex-encoded terminfo code.
+       To advertise a capability, the response must of the form
+       ``\eP1+q Pt \e\\`` or ``\eP1+q Pt = Pt \e\\``.
+       In either variant the first parameter must be the hex-encoded terminfo code.
+       The second variant's second parameter is ignored.
+
+       Currently, fish only queries the :ref:`indn <term-compat-indn>` string capability.
+     - XTerm (but without string capabilities), kitty;
+       also adopted by foot, wezterm, contour, ghostty
+
+
+.. _term-compat-dcs-gnu-screen:
+
+DCS commands and GNU screen
+---------------------------
+
+Fully-correct DCS parsing is optional because fish switches to the alternate screen before printing any DCS commands.
+However, since GNU screen neither allows turning on the alternate screen buffer by default,
+nor treats DCS commands in a compatible way,
+fish's initial prompt may be garbled by a DCS payload like ``+q696e646e``.
+For the time being, fish works around this by checking for presence of the :envvar:`STY` environment variable.
+If that doesn't work for some reason, you can add this to your ``~/.screenrc``::
+
+    altscreen on
+
+Or add this to your ``config.fish``::
+
+    function GNU-screen-workaround --on-event fish_prompt
+        commandline -f repaint
+        functions --erase GNU-screen-workaround
+    end
