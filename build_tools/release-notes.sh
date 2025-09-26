@@ -11,15 +11,18 @@ mkdir -p "$relnotes_tmp/fake-workspace" "$relnotes_tmp/out"
     cp -r doc_src CONTRIBUTING.rst README.rst "$relnotes_tmp/fake-workspace"
 )
 version=$(sed 's,^fish \(\S*\) .*,\1,; 1q' "$workspace_root/CHANGELOG.rst")
-previous_version=$(awk <"$workspace_root/CHANGELOG.rst" '
-    ( /^fish \S*\.\S*\.\S* \(released .*\)$/ &&
-        NR > 1 &&
-        # Skip tags that have not been created yet..
-        system("git rev-parse --verify >/dev/null --quiet refs/tags/"$2) == 0 \
-    ) {
-        print $2; exit
-    }
-')
+previous_version=$(
+    cd "$workspace_root"
+    awk <CHANGELOG.rst '
+        ( /^fish \S*\.\S*\.\S* \(released .*\)$/ &&
+            NR > 1 &&
+            # Skip tags that have not been created yet..
+            system("git rev-parse --verify >/dev/null --quiet refs/tags/"$2) == 0 \
+        ) {
+            print $2; exit
+        }
+    '
+)
 minor_version=${version%.*}
 changelog_for_this_version=$(awk <"$workspace_root/CHANGELOG.rst" '
     /^===/ { if (v++) { exit } }
@@ -30,10 +33,9 @@ changelog_for_this_version=$(awk <"$workspace_root/CHANGELOG.rst" '
 printf %s "$changelog_for_this_version" |
     sed -e '$s/^----*$//' >"$relnotes_tmp/fake-workspace"/CHANGELOG.rst
 
-# Use "-j 1" because sphinx-markdown-builder is not marked concurrency-safe.
-sphinx-build >&2 -j 1 \
+sphinx-build >&2 -j auto \
     -W -E -b markdown -c "$workspace_root/doc_src" \
-    -d "$relnotes_tmp/doctree" "$relnotes_tmp/fake-workspace/doc_src" $relnotes_tmp/out \
+    -d "$relnotes_tmp/doctree" "$relnotes_tmp/fake-workspace/doc_src" "$relnotes_tmp/out" \
     -D markdown_http_base="https://fishshell.com/docs/$minor_version" \
     -D markdown_uri_doc_suffix=".html" \
     "$@"
@@ -48,7 +50,10 @@ sed -i 1,2d "$relnotes_tmp/out/relnotes.md"
     echo ""
     echo "---"
     echo ""
-    "$workspace_root"/build_tools/list_committers_since.fish "$previous_version"
+    (
+        cd "$workspace_root"
+        build_tools/list_committers_since.fish "$previous_version"
+    )
     cat <<EOF
 
 ---

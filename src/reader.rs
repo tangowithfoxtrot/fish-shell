@@ -28,7 +28,6 @@ use once_cell::sync::Lazy;
 #[cfg(not(target_has_atomic = "64"))]
 use portable_atomic::AtomicU64;
 use std::borrow::Cow;
-use std::cell::RefMut;
 use std::cell::UnsafeCell;
 use std::cmp;
 use std::io::BufReader;
@@ -38,7 +37,6 @@ use std::ops::ControlFlow;
 use std::ops::Range;
 use std::os::fd::BorrowedFd;
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::ffi::OsStrExt;
 use std::pin::Pin;
 use std::rc::Rc;
 #[cfg(target_has_atomic = "64")]
@@ -54,6 +52,7 @@ use crate::ast::{self, is_same_node, Kind};
 use crate::builtins::shared::ErrorCode;
 use crate::builtins::shared::STATUS_CMD_ERROR;
 use crate::builtins::shared::STATUS_CMD_OK;
+use crate::common::ScopeGuarding;
 use crate::common::{
     escape, escape_string, exit_without_destructors, get_ellipsis_char, get_obfuscation_read_char,
     restore_term_foreground_process_group_for_exit, shell_modes, str2wcstring, write_loop,
@@ -66,6 +65,7 @@ use crate::complete::{
 use crate::editable_line::{line_at_cursor, range_of_line_at_cursor, Edit, EditableLine};
 use crate::env::EnvStack;
 use crate::env::{EnvMode, Environment, Statuses};
+use crate::env_dispatch::guess_emoji_width;
 use crate::exec::exec_subshell;
 use crate::expand::expand_one;
 use crate::expand::{expand_string, expand_tilde, ExpandFlags, ExpandResultCode};
@@ -134,7 +134,6 @@ use crate::terminal::TerminalCommand::{
     QueryCursorPosition, QueryKittyKeyboardProgressiveEnhancements, QueryPrimaryDeviceAttribute,
     QueryXtgettcap, QueryXtversion,
 };
-use crate::terminal::{SCROLL_FORWARD_SUPPORTED, SCROLL_FORWARD_TERMINFO_CODE};
 use crate::termsize::{termsize_invalidate_tty, termsize_last, termsize_update};
 use crate::text_face::parse_text_face;
 use crate::text_face::TextFace;
@@ -148,10 +147,11 @@ use crate::tokenizer::{
     tok_command, MoveWordStateMachine, MoveWordStyle, TokenType, Tokenizer, TOK_ACCEPT_UNFINISHED,
     TOK_SHOW_COMMENTS,
 };
-use crate::tty_handoff::XTVERSION;
+use crate::tty_handoff::get_scroll_content_up_capability;
+use crate::tty_handoff::xtversion;
+use crate::tty_handoff::SCROLL_CONTENT_UP_TERMINFO_CODE;
 use crate::tty_handoff::{
-    get_tty_protocols_active, initialize_tty_metadata, maybe_set_kitty_keyboard_capability,
-    safe_deactivate_tty_protocols, TtyHandoff,
+    get_tty_protocols_active, initialize_tty_metadata, safe_deactivate_tty_protocols, TtyHandoff,
 };
 use crate::wchar::prelude::*;
 use crate::wcstringutil::string_prefixes_string_maybe_case_insensitive;
@@ -262,34 +262,38 @@ fn redirect_tty_after_sighup() {
     }
 }
 
-fn querying_allowed(in_fd: RawFd) -> bool {
+fn querying_allowed() -> bool {
     future_feature_flags::test(FeatureFlag::query_term) &&
     !is_dumb() && std::env::var_os("MC_TMPDIR").is_none()
         // Could use /dev/tty in future.
-        && isatty(in_fd)
         && isatty(STDOUT_FILENO)
 }
 
-pub fn terminal_init() -> InputEventQueue {
+pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> InputEventQueue {
+    assert!(isatty(inputfd));
     reader_interactive_init();
 
-    let mut input_queue = InputEventQueue::new(STDIN_FILENO);
+    const INITIAL_QUERY_TIMEOUT_SECONDS: u64 = 2;
+    let mut input_queue = InputEventQueue::new(
+        inputfd,
+        Some(Duration::from_secs(INITIAL_QUERY_TIMEOUT_SECONDS)),
+    );
 
     let _init_tty_metadata = ScopeGuard::new((), |()| {
-        initialize_tty_metadata(XTVERSION.get_or_init(WString::new));
+        initialize_tty_metadata();
     });
 
-    if !querying_allowed(STDIN_FILENO) {
+    if !querying_allowed() {
         return input_queue;
     }
 
-    set_shell_modes(STDIN_FILENO, "initial query");
+    set_shell_modes(inputfd, "initial query");
     {
         let mut out = BufferedOutputter::new(Outputter::stdoutput());
         // Query for kitty keyboard protocol support.
         out.write_command(QueryKittyKeyboardProgressiveEnhancements);
         out.write_command(QueryXtversion);
-        query_capabilities_via_dcs(out.by_ref());
+        query_capabilities_via_dcs(out.by_ref(), vars);
         out.write_command(QueryPrimaryDeviceAttribute);
     }
     input_queue.blocking_query().replace(TerminalQuery::Initial);
@@ -302,8 +306,28 @@ pub fn terminal_init() -> InputEventQueue {
             Implicit(Eof) => reader_sighup(),
             Implicit(CheckExit) => {}
             Implicit(QueryInterrupted) => break,
-            CharEvent::QueryResult(Response(QueryResponse::PrimaryDeviceAttribute) | Timeout) => {
-                maybe_set_kitty_keyboard_capability(false);
+            CharEvent::QueryResult(Response(QueryResponse::PrimaryDeviceAttribute)) => {
+                break;
+            }
+            CharEvent::QueryResult(Timeout) => {
+                let program = PROGRAM_NAME.get().unwrap();
+                FLOG!(
+                    warning,
+                    wgettext_fmt!(
+                        "%s could not read response to primary device attribute query after waiting for %d seconds. \
+                         This is often due to a missing feature in your terminal. \
+                         See 'help terminal-compatibility' or 'man fish-terminal-compatibility'. \
+                         This %s process will no longer wait for outstanding queries, \
+                         which disables some optional features.",
+                         program,
+                         INITIAL_QUERY_TIMEOUT_SECONDS,
+                         program
+                    ),
+                );
+                input_queue
+                    .get_input_data_mut()
+                    .blocking_query_timeout
+                    .replace(Duration::from_millis(30));
                 break;
             }
             CharEvent::QueryResult(Response(_)) => (),
@@ -316,14 +340,6 @@ pub fn terminal_init() -> InputEventQueue {
     let input_data = input_queue.get_input_data();
     // We blocked execution of code and mappings so input function args must be empty.
     assert!(input_data.input_function_args.is_empty());
-    if input_data.paste_buffer.is_some() {
-        // The terminal should never interleave query responses with a bracketed paste
-        // command. hence this should only happen on timeout.
-        FLOG!(
-            reader,
-            "Bracketed paste was interrupted; dropping uncommitted paste buffer"
-        )
-    }
     assert!(input_data.event_storage.is_empty());
     FLOGF!(
         reader,
@@ -365,20 +381,37 @@ pub use current_data as reader_current_data;
 /// If `history_name` is empty, then save history in-memory only; do not write it to disk.
 pub fn reader_push<'a>(parser: &'a Parser, history_name: &wstr, conf: ReaderConfig) -> Reader<'a> {
     assert_is_main_thread();
-    let hist = History::with_name(history_name);
-    hist.resolve_pending();
-    let data = ReaderData::new(hist, conf, reader_data_stack().is_empty());
-    reader_data_stack().push(data);
-    let data = current_data().unwrap();
-    data.command_line_changed(EditableLineTag::Commandline, AutosuggestionUpdate::Remove);
-    if !parser.interactive_initialized.swap(true) {
+    let inputfd = conf.inputfd;
+    let input_data = if !parser.interactive_initialized.swap(true) {
+        let mut input_queue = terminal_init(parser.vars(), inputfd);
+        let input_data = input_queue.get_input_data_mut();
+        parser.vars().set_one(
+            L!("fish_terminal"),
+            EnvMode::GLOBAL,
+            xtversion().unwrap().to_owned(),
+        );
+        guess_emoji_width(parser.vars());
+
         // Provide value for `status current-command`
         parser.libdata_mut().status_vars.command = L!("fish").to_owned();
         // Also provide a value for the deprecated fish 2.0 $_ variable
         parser
             .vars()
             .set_one(L!("_"), EnvMode::GLOBAL, L!("fish").to_owned());
-    }
+        let old = parser
+            .blocking_query_timeout
+            .replace(input_data.blocking_query_timeout);
+        assert!(old.is_none());
+        std::mem::take(input_data)
+    } else {
+        InputData::new(inputfd, *parser.blocking_query_timeout.borrow())
+    };
+    let hist = History::with_name(history_name);
+    hist.resolve_pending();
+    let data = ReaderData::new(input_data, hist, conf, reader_data_stack().is_empty());
+    reader_data_stack().push(data);
+    let data = current_data().unwrap();
+    data.command_line_changed(EditableLineTag::Commandline, AutosuggestionUpdate::Remove);
     Reader { data, parser }
 }
 
@@ -394,6 +427,23 @@ pub fn reader_pop() {
         Outputter::stdoutput().borrow_mut().reset_text_face();
         *commandline_state_snapshot() = CommandlineState::new();
     }
+}
+
+pub fn fake_scoped_reader<'a>(parser: &'a Parser) -> impl ScopeGuarding<Target = Reader<'a>> + 'a {
+    let inputfd = -1;
+    let conf = ReaderConfig {
+        inputfd,
+        ..Default::default()
+    };
+    let hist = History::with_name(L!(""));
+    let input_data = InputData::new(inputfd, None);
+    let data = ReaderData::new(input_data, hist, conf, reader_data_stack().is_empty());
+    reader_data_stack().push(data);
+    let data = current_data().unwrap();
+    let reader = Reader { data, parser };
+    ScopeGuard::new(reader, |_reader| {
+        reader_data_stack().pop().unwrap();
+    })
 }
 
 /// Configuration that we provide to a reader.
@@ -1068,30 +1118,31 @@ pub fn reader_execute_readline_cmd(parser: &Parser, ch: CharEvent) {
     if parser.scope().readonly_commandline {
         return;
     }
-    if let Some(data) = current_data() {
-        let mut data = Reader { parser, data };
-        let CharEvent::Readline(readline_cmd_evt) = &ch else {
-            panic!()
-        };
-        if matches!(
-            readline_cmd_evt.cmd,
-            ReadlineCmd::ClearScreenAndRepaint
-                | ReadlineCmd::RepaintMode
-                | ReadlineCmd::Repaint
-                | ReadlineCmd::ForceRepaint
-        ) {
-            data.queued_repaint = true;
-        }
-        if data.queued_repaint {
-            data.input_data.queue_char(ch);
-            return;
-        }
-        if data.rls.is_none() {
-            data.rls = Some(ReadlineLoopState::new());
-        }
-        data.save_screen_state();
-        let _ = data.handle_char_event(Some(ch));
+    let Some(data) = current_data() else {
+        return;
+    };
+    let mut data = Reader { parser, data };
+    let CharEvent::Readline(readline_cmd_evt) = &ch else {
+        panic!()
+    };
+    if matches!(
+        readline_cmd_evt.cmd,
+        ReadlineCmd::ClearScreenAndRepaint
+            | ReadlineCmd::RepaintMode
+            | ReadlineCmd::Repaint
+            | ReadlineCmd::ForceRepaint
+    ) {
+        data.queued_repaint = true;
     }
+    if data.queued_repaint {
+        data.input_data.queue_char(ch);
+        return;
+    }
+    if data.rls.is_none() {
+        data.rls = Some(ReadlineLoopState::new());
+    }
+    data.save_screen_state();
+    let _ = data.handle_char_event(Some(ch));
 }
 
 pub fn reader_showing_suggestion(parser: &Parser) -> bool {
@@ -1264,8 +1315,12 @@ fn reader_received_sighup() -> bool {
 }
 
 impl ReaderData {
-    fn new(history: Arc<History>, conf: ReaderConfig, is_top_level: bool) -> Pin<Box<Self>> {
-        let input_data = InputData::new(conf.inputfd);
+    fn new(
+        input_data: InputData,
+        history: Arc<History>,
+        conf: ReaderConfig,
+        is_top_level: bool,
+    ) -> Pin<Box<Self>> {
         let mut command_line = EditableLine::default();
         if is_top_level {
             let state = commandline_state_snapshot();
@@ -1595,12 +1650,8 @@ pub fn combine_command_and_autosuggestion(
 }
 
 impl<'a> Reader<'a> {
-    pub(crate) fn blocking_query(&self) -> RefMut<'_, Option<TerminalQuery>> {
-        self.parser.blocking_query.borrow_mut()
-    }
-
     pub fn request_cursor_position(&mut self, out: &mut Outputter, q: CursorPositionQuery) {
-        if !querying_allowed(self.get_in_fd()) {
+        if !querying_allowed() {
             return;
         }
         let mut query = self.blocking_query();
@@ -2304,7 +2355,6 @@ impl<'a> Reader<'a> {
         // Start out as initially dirty.
         self.force_exec_prompt_and_repaint = true;
 
-        self.insert_front(self.parser.pending_input.take());
         while !self.rls().finished && !check_exit_loop_maybe_warning(Some(self)) {
             // Enable tty protocols while we read input.
             tty.enable_tty_protocols();
@@ -2616,7 +2666,7 @@ impl<'a> Reader<'a> {
                         Response(CursorPosition(cursor_pos)),
                     ) => {
                         cursor_pos_query.result = Some(cursor_pos);
-                        maybe_query
+                        return ControlFlow::Continue(());
                     }
                     (
                         Some(TerminalQuery::CursorPosition(cursor_pos_query)),
@@ -2665,19 +2715,18 @@ fn send_xtgettcap_query(out: &mut impl Output, cap: &'static str) {
 
 #[allow(renamed_and_removed_lints)]
 #[allow(clippy::blocks_in_if_conditions)] // for old clippy
-fn query_capabilities_via_dcs(out: &mut impl Output) {
+fn query_capabilities_via_dcs(out: &mut impl Output, vars: &dyn Environment) {
     if {
-        use std::env::var_os;
-        var_os("STY").is_some()
-            || var_os("TERM").is_some_and(|term| {
-                let screens: [&[u8]; 2] = [b"screen", b"screen-256color"];
-                screens.contains(&term.as_bytes())
+        vars.get_unless_empty(L!("STY")).is_some()
+            || vars.get_unless_empty(L!("TERM")).is_some_and(|term| {
+                let term = &term.as_list()[0];
+                term == "screen" || term == "screen-256color"
             })
     } {
         return;
     }
     out.write_command(DecsetAlternateScreenBuffer); // enable alternative screen buffer
-    send_xtgettcap_query(out, SCROLL_FORWARD_TERMINFO_CODE);
+    send_xtgettcap_query(out, SCROLL_CONTENT_UP_TERMINFO_CODE);
     out.write_command(DecrstAlternateScreenBuffer); // disable alternative screen buffer
 }
 
@@ -3945,7 +3994,7 @@ impl<'a> Reader<'a> {
                 self.clear_screen_and_repaint();
             }
             rl::ScrollbackPush => {
-                if !SCROLL_FORWARD_SUPPORTED.load() {
+                if !get_scroll_content_up_capability().unwrap() {
                     return;
                 }
                 let query = self.blocking_query();

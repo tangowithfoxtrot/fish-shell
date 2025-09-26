@@ -1,20 +1,19 @@
 use crate::common::{
     fish_reserved_codepoint, is_windows_subsystem_for_linux, read_blocked, shell_modes,
-    str2wcstring, PROGRAM_NAME, WSL,
+    str2wcstring, WSL,
 };
 use crate::env::{EnvStack, Environment};
 use crate::fd_readable_set::{FdReadableSet, Timeout};
 use crate::flog::{FloggableDebug, FloggableDisplay, FLOG};
-use crate::global_safety::RelaxedAtomicBool;
 use crate::key::{
     self, alt, canonicalize_control_char, canonicalize_keyed_control_char, char_to_symbol,
     function_key, shift, Key, Modifiers, ViewportPosition,
 };
 use crate::reader::reader_test_and_clear_interrupted;
-use crate::terminal::{SCROLL_FORWARD_SUPPORTED, SCROLL_FORWARD_TERMINFO_CODE};
 use crate::threads::iothread_port;
 use crate::tty_handoff::{
-    get_kitty_keyboard_capability, maybe_set_kitty_keyboard_capability, XTVERSION,
+    get_kitty_keyboard_capability, maybe_set_kitty_keyboard_capability,
+    maybe_set_scroll_content_up_capability, SCROLL_CONTENT_UP_TERMINFO_CODE, XTVERSION,
 };
 use crate::universal_notifier::default_notifier;
 use crate::wchar::{encode_byte_to_char, prelude::*};
@@ -728,6 +727,7 @@ fn parse_mask(mask: u32) -> (Modifiers, bool) {
 }
 
 // A data type used by the input machinery.
+#[derive(Default)]
 pub struct InputData {
     // The file descriptor from which we read input, often stdin.
     pub in_fd: RawFd,
@@ -746,11 +746,17 @@ pub struct InputData {
 
     // Transient storage to avoid repeated allocations.
     pub event_storage: Vec<CharEvent>,
+
+    // How long to wait for responses for TTY queries.
+    pub blocking_query_timeout: Option<Duration>,
+
+    // If set, events will be buffered until the query finishes.
+    pub blocking_query: RefCell<Option<TerminalQuery>>,
 }
 
 impl InputData {
     /// Construct from the fd from which to read.
-    pub fn new(in_fd: RawFd) -> Self {
+    pub fn new(in_fd: RawFd, blocking_query_timeout: Option<Duration>) -> Self {
         Self {
             in_fd,
             queue: VecDeque::new(),
@@ -758,6 +764,8 @@ impl InputData {
             input_function_args: Vec::new(),
             function_status: false,
             event_storage: Vec::new(),
+            blocking_query_timeout,
+            blocking_query: RefCell::new(None),
         }
     }
 
@@ -836,22 +844,10 @@ pub trait InputEventQueuer {
                 return mevt;
             }
 
-            const INITIAL_QUERY_TIMEOUT_SECONDS: u64 = 2;
-            static ABANDON_WAITING_FOR_QUERIES: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
-
             match next_input_event(
                 self.get_in_fd(),
                 if self.is_blocked_querying() {
-                    Timeout::Duration(if ABANDON_WAITING_FOR_QUERIES.load() {
-                        // This should small enough so the delay on incompatible terminals is
-                        // not noticeable, and high enough so we can still receive some query
-                        // responses if we ever get into this state on a compatible terminal,
-                        // which can happen after extreme (network) latency exceeds our initial
-                        // timeout.  In future, we should tolerate this better.
-                        Duration::from_millis(30)
-                    } else {
-                        Duration::from_secs(INITIAL_QUERY_TIMEOUT_SECONDS)
-                    })
+                    Timeout::Duration(self.get_input_data().blocking_query_timeout.unwrap())
                 } else {
                     Timeout::Forever
                 },
@@ -977,23 +973,6 @@ pub trait InputEventQueuer {
                     return key_evt;
                 }
                 InputEventTrigger::TimeoutElapsed => {
-                    if !ABANDON_WAITING_FOR_QUERIES.load() {
-                        let program = PROGRAM_NAME.get().unwrap();
-                        FLOG!(
-                            warning,
-                            wgettext_fmt!(
-                                "%s could not read response to primary device attribute query after waiting for %d seconds. \
-                                 This is often due to a missing feature in your terminal. \
-                                 See 'help terminal-compatibility' or 'man fish-terminal-compatibility'. \
-                                 This %s process will no longer wait for outstanding queries, \
-                                 which disables some optional features.",
-                                 program,
-                                 INITIAL_QUERY_TIMEOUT_SECONDS,
-                                 program
-                            ),
-                        );
-                        ABANDON_WAITING_FOR_QUERIES.store(true);
-                    }
                     return CharEvent::QueryResult(QueryResultEvent::Timeout);
                 }
             }
@@ -1296,7 +1275,7 @@ pub trait InputEventQueuer {
             }
             b'u' => {
                 if private_mode == Some(b'?') {
-                    maybe_set_kitty_keyboard_capability(true);
+                    maybe_set_kitty_keyboard_capability();
                     return None;
                 }
 
@@ -1505,9 +1484,8 @@ pub trait InputEventQueuer {
                 format!("Received XTGETTCAP response: {}", str2wcstring(&key))
             );
         }
-        if key == SCROLL_FORWARD_TERMINFO_CODE.as_bytes() {
-            SCROLL_FORWARD_SUPPORTED.store(true);
-            FLOG!(reader, "Scroll forward is supported");
+        if key == SCROLL_CONTENT_UP_TERMINFO_CODE.as_bytes() {
+            maybe_set_scroll_content_up_capability();
         }
         return None;
     }
@@ -1646,7 +1624,9 @@ pub trait InputEventQueuer {
         }
     }
 
-    fn blocking_query(&self) -> RefMut<'_, Option<TerminalQuery>>;
+    fn blocking_query(&self) -> RefMut<'_, Option<TerminalQuery>> {
+        self.get_input_data().blocking_query.borrow_mut()
+    }
     fn is_blocked_querying(&self) -> bool {
         self.blocking_query().is_some()
     }
@@ -1798,14 +1778,12 @@ impl<'a> FloggableDisplay for DisplayBytes<'a> {}
 /// A simple, concrete implementation of InputEventQueuer.
 pub struct InputEventQueue {
     data: InputData,
-    blocking_query: RefCell<Option<TerminalQuery>>,
 }
 
 impl InputEventQueue {
-    pub fn new(in_fd: RawFd) -> Self {
+    pub fn new(in_fd: RawFd, blocking_query_timeout: Option<Duration>) -> Self {
         Self {
-            data: InputData::new(in_fd),
-            blocking_query: RefCell::new(None),
+            data: InputData::new(in_fd, blocking_query_timeout),
         }
     }
 }
@@ -1823,9 +1801,6 @@ impl InputEventQueuer for InputEventQueue {
         if reader_test_and_clear_interrupted() != 0 {
             self.enqueue_interrupt_key();
         }
-    }
-    fn blocking_query(&self) -> RefMut<'_, Option<TerminalQuery>> {
-        self.blocking_query.borrow_mut()
     }
 }
 
