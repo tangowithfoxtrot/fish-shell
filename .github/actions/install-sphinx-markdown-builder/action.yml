@@ -6,6 +6,9 @@ permissions:
 runs:
   using: "composite"
   steps:
-    - run: |
-        pip install git+https://github.com/krobelus/sphinx-markdown-builder@ae8cf577bfb263dcda509ad449a331b9b74664fa
-      shell: bash
+    - shell: bash
+      run: |
+        set -x
+        commit=b259de1dc97573a71470a1d71c3d83535934136b
+        pip install git+https://github.com/krobelus/sphinx-markdown-builder@"$commit"
+        python -c 'import sphinx_markdown_builder'

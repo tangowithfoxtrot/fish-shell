@@ -33,6 +33,8 @@ Synopsis
     status build-info
     status get-file FILE
     status list-files [PATH]
+    status terminal
+    status test-terminal-feature FEATURE
 
 Description
 -----------
@@ -108,18 +110,40 @@ The following operations (subcommands) are available:
     This prints information on how fish was build - which architecture, which build system or profile was used, etc.
     This is mainly useful for debugging.
 
+.. _status-get-file:
+
 **get-file** *FILE*
+    NOTE: this subcommand is mainly intended for fish's internal use; let us know if you want to use it elsewhere.
+
     This prints a file embedded in the fish binary at compile time. This includes the default set of functions and completions,
     as well as the man pages and themes. Which files are included depends on build settings.
     Returns 0 if the file was included, 1 otherwise.
 
 **list-files** *FILE*
+    NOTE: this subcommand is mainly intended for fish's internal use; let us know if you want to use it elsewhere.
+
     This lists the files embedded in the fish binary at compile time. Only files where the path starts with the optional *FILE* argument are shown.
     Returns 0 if something was printed, 1 otherwise.
+
+.. _status-terminal:
+
+**terminal**
+    Prints the name and version of the terminal fish is running inside (for example as reported via :ref:`XTVERSION <term-compat-xtversion>`).
+    This is not available during early startup but only starting from when the first interactive prompt is shown, possibly via builtin :doc:`read <read>`,
+    so before the first ``fish_prompt`` or ``fish_read`` :ref:`event <event>`.
+
+.. _status-test-terminal-features:
+
+**test-terminal-feature** *FEATURE*
+    Returns 0 when the terminal was :ref:`detected <term-compat-xtgettcap>` to support the given feature.
+    Like :ref:`status terminal <status-terminal>`, this only works once the first interactive prompt is shown.
+
+    Currently the only available *FEATURE* is :ref:`scroll-content-up <term-compat-indn>`.
+    An error will be printed when passed an unrecognized feature.
 
 Notes
 -----
 
-For backwards compatibility most subcommands can also be specified as a long or short option. For example, rather than ``status is-login`` you can type ``status --is-login``. The flag forms are deprecated and may be removed in a future release (but not before fish 4.0).
+For backwards compatibility most subcommands can also be specified as a long or short option. For example, rather than ``status is-login`` you can type ``status --is-login``. The flag forms are deprecated and may be removed in a future release.
 
 You can only specify one subcommand per invocation even if you use the flag form of the subcommand.

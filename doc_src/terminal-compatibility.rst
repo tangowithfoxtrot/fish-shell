@@ -198,8 +198,9 @@ Optional Commands
 
        ``\e[ Ps S``
      - indn
-     - Scroll up the content (not the viewport) Ps lines (aka ``SU`` but terminfo calls it "scroll forward")
-       This enables the :ref:`scrollback-push <special-input-functions-scrollback-push>` special input function which is used by :kbd:`ctrl-l`.
+     - Scroll up the content (not the viewport) Ps lines (called ``SCROLL UP`` / ``SU`` by ECMA-48 and "scroll forward" by terminfo).
+       When fish detects support for this feature, :ref:`status test-terminal-features scroll-content-up <status-test-terminal-features>` will return 0,
+       which enables the :kbd:`ctrl-l` binding to use the :ref:`scrollback-push <special-input-functions-scrollback-push>` special input function.
      - ECMA-48
    * - ``\e[= Ps u``, ``\e[? Ps u``
      - n/a
@@ -215,10 +216,8 @@ Optional Commands
        and the second parameter is the column number.
        Both start at 1.
 
-       This is used inside terminals that either
-
-       - implement the OSC 133 :ref:`click_events <term-compat-osc-133>` feature.
-       - advertise the :ref:`indn <term-compat-indn>` capability via :ref:`XTGETTCAP <term-compat-xtgettcap>`
+       This is used by the :ref:`scrollback-push <special-input-functions-scrollback-push>` special input function,
+       and inside terminals that implement the OSC 133 :ref:`click_events <term-compat-osc-133>` feature.
      - VT100
    * - ``\e[ \x20 q``
      - Se
@@ -283,9 +282,11 @@ Optional Commands
      - Create a `hyperlink (OSC 8) <https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda>`_.
        This is used in fish's man pages.
      - GNOME Terminal
-   * - ``\e]52;c; Pt \x07``
+   * - .. _term-compat-osc-52:
+
+       ``\e]52;c; Pt \x07``
      -
-     - Copy to clipboard (OSC 52).
+     - Copy to clipboard (OSC 52). Used by :doc:`fish_clipboard_copy <cmds/fish_clipboard_copy>`.
      - XTerm
    * - .. _term-compat-osc-133:
 
@@ -309,7 +310,7 @@ Optional Commands
      -
      - Request terminfo capability (XTGETTCAP).
        The parameter is the capability's hex-encoded terminfo code.
-       To advertise a capability, the response must of the form
+       To advertise a capability, the response must be of the form
        ``\eP1+q Pt \e\\`` or ``\eP1+q Pt = Pt \e\\``.
        In either variant the first parameter must be the hex-encoded terminfo code.
        The second variant's second parameter is ignored.
@@ -329,7 +330,9 @@ However, since GNU screen neither allows turning on the alternate screen buffer 
 nor treats DCS commands in a compatible way,
 fish's initial prompt may be garbled by a DCS payload like ``+q696e646e``.
 For the time being, fish works around this by checking for presence of the :envvar:`STY` environment variable.
-If that doesn't work for some reason, you can add this to your ``~/.screenrc``::
+If that doesn't work for some reason, you can add this to your ``~/.screenrc``:
+
+.. code-block:: none
 
     altscreen on
 
