@@ -1,5 +1,8 @@
-fish 4.1.0 (released ???)
+fish ?.?.? (released ???)
 =========================
+
+fish 4.1.0 (released September 27, 2025)
+========================================
 
 .. ignore for 4.1: 10929 10940 10948 10955 10965 10975 10989 10990 10998 11028 11052 11055 11069 11071 11079 11092 11098 11104 11106 11110 11140 11146 11148 11150 11214 11218 11259 11288 11299 11328 11350 11373 11395 11417 11419
 
@@ -106,7 +109,7 @@ For distributors
   This allows truly distributing fish as a single file (:issue:`10876`).
 - The CMake build configuration has been simplified and no longer second-guesses rustup.
   It will run rustc and cargo via :envvar:`PATH` or in ~/.cargo/bin/.
-  If that doesn't match your setup, set the Rust_COMPILER and Rust_CARGO cmake variables (:issue:`11328`).
+  If that doesn't match your setup, set the Rust_COMPILER and Rust_CARGO CMake variables (:issue:`11328`).
 - Cygwin support has been reintroduced, since `Rust gained a Cygwin target <https://github.com/rust-lang/rust/pull/134999>`__ (:issue:`11238`).
 - CMake 3.15 is now required.
 
@@ -173,10 +176,14 @@ Changes to the :doc:`argparse <cmds/argparse>` builtin
 
 --------------
 
-fish 4.0.9 (released ???)
-=========================
+fish 4.0.9 (released September 27, 2025)
+========================================
 
-This release fixes a regression in 4.0.6 that caused shifted keys to not be inserted on some terminals.
+This release fixes:
+
+- a regression in 4.0.6 causing shifted keys to not be inserted on some terminals (:issue:`11813`).
+- a regression in 4.0.6 causing the build to fail on systems where ``char`` is unsigned (:issue:`11804`).
+- a regression in 4.0.0 causing a crash on an invalid :doc:`bg <cmds/bg>` invocation.
 
 --------------
 
