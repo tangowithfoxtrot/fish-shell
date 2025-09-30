@@ -149,7 +149,7 @@ use crate::tokenizer::{
 };
 use crate::tty_handoff::SCROLL_CONTENT_UP_TERMINFO_CODE;
 use crate::tty_handoff::{
-    get_tty_protocols_active, initialize_tty_metadata, safe_deactivate_tty_protocols, TtyHandoff,
+    get_tty_protocols_active, initialize_tty_protocols, safe_deactivate_tty_protocols, TtyHandoff,
 };
 use crate::wchar::prelude::*;
 use crate::wcstringutil::string_prefixes_string_maybe_case_insensitive;
@@ -278,7 +278,7 @@ pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> InputEventQueue 
     );
 
     let _init_tty_metadata = ScopeGuard::new((), |()| {
-        initialize_tty_metadata();
+        initialize_tty_protocols();
     });
 
     if !querying_allowed() {
@@ -312,7 +312,7 @@ pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> InputEventQueue 
                 FLOG!(
                     warning,
                     wgettext_fmt!(
-                        "%s could not read response to primary device attribute query after waiting for %d seconds. \
+                        "%s could not read response to Primary Device Attribute query after waiting for %d seconds. \
                          This is often due to a missing feature in your terminal. \
                          See 'help terminal-compatibility' or 'man fish-terminal-compatibility'. \
                          This %s process will no longer wait for outstanding queries, \
@@ -4551,7 +4551,7 @@ fn acquire_tty_or_exit(shell_pgid: libc::pid_t) {
             if check_for_orphaned_process(loop_count, shell_pgid) {
                 // We're orphaned, so we just die. Another sad statistic.
                 let pid = getpid();
-                FLOG!(warning, wgettext_fmt!("I appear to be an orphaned process, so I am quitting politely. My pid is %d.", pid));
+                FLOG!(warning, sprintf!("I appear to be an orphaned process, so I am quitting politely. My pid is %d.", pid));
                 exit_without_destructors(1);
             }
 
