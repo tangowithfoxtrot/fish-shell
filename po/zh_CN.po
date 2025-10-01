@@ -1,4 +1,4 @@
-# fish-note-sections: Translations are divided into sections, each starting with a fish-section-* comment.
+# fish-note-sections: Translations are divided into sections, each starting with a fish-section-* pseudo-message.
 # fish-note-sections: The first few sections are more important.
 # fish-note-sections: Ignore the tier3 sections unless you have a lot of time.
 #
@@ -42,6 +42,9 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "X-Generator: Poedit 3.7\n"
 
+msgid "fish-section-tier1-from-rust"
+msgstr ""
+
 msgid ""
 "\n"
 "   PID  Command\n"
@@ -50,7 +53,6 @@ msgstr ""
 "   PID  命令\n"
 
 #, c-format
-# fish-section-tier1-from-rust
 msgid " (%ls)\n"
 msgstr " (%ls)\n"
 
@@ -1918,7 +1920,9 @@ msgstr "无限制\n"
 msgid "|& is not valid. In fish, use &| to pipe both stdout and stderr."
 msgstr "|& 无效。在 fish 中，用 &| 来同时管道链接 stdout 和 stderr。"
 
-# fish-section-tier1-from-script-explicitly-added
+msgid "fish-section-tier1-from-script-explicitly-added"
+msgstr ""
+
 msgid "%ls: %ls: expected %d arguments; got %d\\n"
 msgstr "%ls: %ls: 期望 %d 个参数；收到 %d 个\\n"
 
@@ -2141,7 +2145,9 @@ msgstr "或文件为空"
 msgid "python executable not found"
 msgstr "找不到 python 可执行文件"
 
-# fish-section-tier1-from-script-implicitly-added
+msgid "fish-section-tier1-from-script-implicitly-added"
+msgstr ""
+
 msgid "# comments"
 msgstr "# 注释"
 
@@ -3667,7 +3673,7 @@ msgid "What characters are allowed in names"
 msgstr "名称中允许什么字符"
 
 msgid "What set -x does"
-msgstr "设置 -x 做什么"
+msgstr "`set -x` 做什么"
 
 msgid "Where to direct debug output to"
 msgstr "将调试输出导向何处"
@@ -3843,7 +3849,12 @@ msgstr "{a,b} 大括号展开"
 msgid "~ expansion"
 msgstr "~ 展开"
 
-# fish-section-tier3-from-script-implicitly-added
+msgid "fish-section-tier3-from-script-explicitly-added"
+msgstr ""
+
+msgid "fish-section-tier3-from-script-implicitly-added"
+msgstr ""
+
 msgid " "
 msgstr " "
 
@@ -40049,7 +40060,7 @@ msgid "Operate quietly and do not report progress"
 msgstr "安静操作，不报告进度"
 
 msgid "Operate recursively"
-msgstr "递归操"
+msgstr "递归操作"
 
 msgid "Operate recursively on datasets"
 msgstr "在数据集上递归操作"
