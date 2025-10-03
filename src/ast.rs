@@ -24,6 +24,7 @@ use crate::tokenizer::{
     TOK_ACCEPT_UNFINISHED, TOK_ARGUMENT_LIST, TOK_CONTINUE_AFTER_ERROR, TOK_SHOW_COMMENTS,
 };
 use crate::wchar::prelude::*;
+use macro_rules_attribute::derive;
 use std::borrow::Cow;
 use std::convert::AsMut;
 use std::ops::{ControlFlow, Deref};
@@ -404,8 +405,8 @@ trait CheckParse: Default {
 }
 
 /// Implement the node trait.
-macro_rules! implement_node {
-    ( $name:ident ) => {
+macro_rules! Node {
+    ($name:ident) => {
         impl Node for $name {
             fn kind(&self) -> Kind<'_> {
                 Kind::$name(self)
@@ -425,11 +426,19 @@ macro_rules! implement_node {
             }
         }
     };
+
+    ( $(#[$_m:meta])* $_v:vis struct $name:ident $_:tt $(;)? ) => {
+        Node!($name);
+    };
+
+    ( $(#[$_m:meta])* $_v:vis enum $name:ident $_:tt ) => {
+        Node!($name);
+    };
 }
 
 /// Implement the leaf trait.
-macro_rules! implement_leaf {
-    ( $name:ident ) => {
+macro_rules! Leaf {
+    ($name:ident) => {
         impl Leaf for $name {
             fn range(&self) -> Option<SourceRange> {
                 self.range
@@ -450,17 +459,20 @@ macro_rules! implement_leaf {
             }
         }
     };
+
+    ( $(#[$_m:meta])* $_v:vis struct $name:ident $_:tt $(;)? ) => {
+        Leaf!($name);
+    };
 }
 
 /// Define a node that implements the keyword trait.
 macro_rules! define_keyword_node {
     ( $name:ident, $($allowed:ident),* $(,)? ) => {
-        #[derive(Default, Debug)]
+        #[derive(Default, Debug, Leaf!)]
         pub struct $name {
             range: Option<SourceRange>,
             keyword: ParseKeyword,
         }
-        implement_leaf!($name);
         impl Node for $name {
             fn kind(&self) -> Kind<'_> {
                 Kind::Keyword(self)
@@ -489,7 +501,7 @@ macro_rules! define_keyword_node {
 /// Define a node that implements the token trait.
 macro_rules! define_token_node {
     ( $name:ident, $($allowed:ident),* $(,)? ) => {
-        #[derive(Default, Debug)]
+        #[derive(Default, Debug, Leaf!)]
         pub struct $name {
             range: Option<SourceRange>,
             parse_token_type: ParseTokenType,
@@ -502,7 +514,6 @@ macro_rules! define_token_node {
                 KindMut::Token(self)
             }
         }
-        implement_leaf!($name);
         impl Token for $name {
             fn token_type(&self) -> ParseTokenType {
                 self.parse_token_type
@@ -535,10 +546,8 @@ macro_rules! define_list_node {
         $name:ident,
         $contents:ident
     ) => {
-        #[derive(Default, Debug)]
+        #[derive(Default, Debug, Node!)]
         pub struct $name(Box<[$contents]>);
-
-        implement_node!($name);
 
         impl Deref for $name {
             type Target = Box<[$contents]>;
@@ -582,11 +591,15 @@ macro_rules! define_list_node {
 }
 
 /// Implement the acceptor trait for the given branch node.
-macro_rules! implement_acceptor_for_branch {
+macro_rules! Acceptor {
     (
-        $name:ident
-        $(, $field_name:ident )*
-        $(,)?
+        $(#[$_m:meta])*
+        $_v:vis struct $name:ident {
+            $(
+                $(#[$_fm:meta])*
+                $_fv:vis $field_name:ident : $_ft:ty
+            ),* $(,)?
+        }
     ) => {
         impl Acceptor for $name {
             #[allow(unused_variables)]
@@ -612,18 +625,16 @@ macro_rules! implement_acceptor_for_branch {
                 visitor.did_visit_fields_of(self, flow);
             }
         }
-    }
+    };
 }
 
 /// A redirection has an operator like > or 2>, and a target like /dev/null or &1.
 /// Note that pipes are not redirections.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct Redirection {
     pub oper: TokenRedirection,
     pub target: String_,
 }
-implement_node!(Redirection);
-implement_acceptor_for_branch!(Redirection, oper, target);
 
 impl CheckParse for Redirection {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
@@ -633,7 +644,7 @@ impl CheckParse for Redirection {
 
 define_list_node!(VariableAssignmentList, VariableAssignment);
 
-#[derive(Debug)]
+#[derive(Debug, Node!)]
 pub enum ArgumentOrRedirection {
     Argument(Argument),
     Redirection(Box<Redirection>), // Boxed because it's bigger
@@ -689,8 +700,6 @@ impl ArgumentOrRedirection {
     }
 }
 
-implement_node!(ArgumentOrRedirection);
-
 impl CheckParse for ArgumentOrRedirection {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         let typ = pop.peek_type(0);
@@ -701,7 +710,7 @@ impl CheckParse for ArgumentOrRedirection {
 define_list_node!(ArgumentOrRedirectionList, ArgumentOrRedirection);
 
 /// A statement is a normal command, or an if / while / etc
-#[derive(Debug)]
+#[derive(Debug, Node!)]
 pub enum Statement {
     Decorated(DecoratedStatement),
     Not(Box<NotStatement>),
@@ -710,7 +719,6 @@ pub enum Statement {
     If(Box<IfStatement>),
     Switch(Box<SwitchStatement>),
 }
-implement_node!(Statement);
 
 impl Default for Statement {
     fn default() -> Self {
@@ -756,7 +764,7 @@ impl AcceptorMut for Statement {
 
 /// A job is a non-empty list of statements, separated by pipes. (Non-empty is useful for cases
 /// like if statements, where we require a command).
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct JobPipeline {
     /// Maybe the time keyword.
     pub time: Option<KeywordTime>,
@@ -769,11 +777,9 @@ pub struct JobPipeline {
     /// Maybe backgrounded.
     pub bg: Option<TokenBackground>,
 }
-implement_node!(JobPipeline);
-implement_acceptor_for_branch!(JobPipeline, time, variables, statement, continuation, bg);
 
 /// A job_conjunction is a job followed by a && or || continuations.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct JobConjunction {
     /// The job conjunction decorator.
     pub decorator: Option<JobConjunctionDecorator>,
@@ -786,8 +792,6 @@ pub struct JobConjunction {
     /// only fail to be present if we ran out of tokens.
     pub semi_nl: Option<SemiNl>,
 }
-implement_node!(JobConjunction);
-implement_acceptor_for_branch!(JobConjunction, decorator, job, continuations, semi_nl);
 
 impl CheckParse for JobConjunction {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
@@ -802,7 +806,7 @@ impl CheckParse for JobConjunction {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct ForHeader {
     /// 'for'
     pub kw_for: KeywordFor,
@@ -815,20 +819,16 @@ pub struct ForHeader {
     /// newline or semicolon
     pub semi_nl: SemiNl,
 }
-implement_node!(ForHeader);
-implement_acceptor_for_branch!(ForHeader, kw_for, var_name, kw_in, args, semi_nl);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct WhileHeader {
     /// 'while'
     pub kw_while: KeywordWhile,
     pub condition: JobConjunction,
     pub andor_tail: AndorJobList,
 }
-implement_node!(WhileHeader);
-implement_acceptor_for_branch!(WhileHeader, kw_while, condition, andor_tail);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct FunctionHeader {
     pub kw_function: KeywordFunction,
     /// functions require at least one argument.
@@ -836,20 +836,16 @@ pub struct FunctionHeader {
     pub args: ArgumentList,
     pub semi_nl: SemiNl,
 }
-implement_node!(FunctionHeader);
-implement_acceptor_for_branch!(FunctionHeader, kw_function, first_arg, args, semi_nl);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct BeginHeader {
     pub kw_begin: KeywordBegin,
     /// Note that 'begin' does NOT require a semi or nl afterwards.
     /// This is valid: begin echo hi; end
     pub semi_nl: Option<SemiNl>,
 }
-implement_node!(BeginHeader);
-implement_acceptor_for_branch!(BeginHeader, kw_begin, semi_nl);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct BlockStatement {
     /// A header like for, while, etc.
     pub header: BlockStatementHeader,
@@ -860,10 +856,8 @@ pub struct BlockStatement {
     /// Arguments and redirections associated with the block.
     pub args_or_redirs: ArgumentOrRedirectionList,
 }
-implement_node!(BlockStatement);
-implement_acceptor_for_branch!(BlockStatement, header, jobs, end, args_or_redirs);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct BraceStatement {
     /// The opening brace, in command position.
     pub left_brace: TokenLeftBrace,
@@ -874,16 +868,8 @@ pub struct BraceStatement {
     /// Arguments and redirections associated with the block.
     pub args_or_redirs: ArgumentOrRedirectionList,
 }
-implement_node!(BraceStatement);
-implement_acceptor_for_branch!(
-    BraceStatement,
-    left_brace,
-    jobs,
-    right_brace,
-    args_or_redirs
-);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct IfClause {
     /// The 'if' keyword.
     pub kw_if: KeywordIf,
@@ -894,18 +880,14 @@ pub struct IfClause {
     /// The body to execute if the condition is true.
     pub body: JobList,
 }
-implement_node!(IfClause);
-implement_acceptor_for_branch!(IfClause, kw_if, condition, andor_tail, body);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct ElseifClause {
     /// The 'else' keyword.
     pub kw_else: KeywordElse,
     /// The 'if' clause following it.
     pub if_clause: IfClause,
 }
-implement_node!(ElseifClause);
-implement_acceptor_for_branch!(ElseifClause, kw_else, if_clause);
 impl CheckParse for ElseifClause {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         pop.peek_token(0).keyword == ParseKeyword::Else
@@ -915,22 +897,20 @@ impl CheckParse for ElseifClause {
 
 define_list_node!(ElseifClauseList, ElseifClause);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct ElseClause {
     /// else ; body
     pub kw_else: KeywordElse,
     pub semi_nl: Option<SemiNl>,
     pub body: JobList,
 }
-implement_node!(ElseClause);
-implement_acceptor_for_branch!(ElseClause, kw_else, semi_nl, body);
 impl CheckParse for ElseClause {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         pop.peek_token(0).keyword == ParseKeyword::Else
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct IfStatement {
     /// if part
     pub if_clause: IfClause,
@@ -943,17 +923,8 @@ pub struct IfStatement {
     /// block args / redirs
     pub args_or_redirs: ArgumentOrRedirectionList,
 }
-implement_node!(IfStatement);
-implement_acceptor_for_branch!(
-    IfStatement,
-    if_clause,
-    elseif_clauses,
-    else_clause,
-    end,
-    args_or_redirs
-);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct CaseItem {
     /// case \<arguments\> ; body
     pub kw_case: KeywordCase,
@@ -961,15 +932,13 @@ pub struct CaseItem {
     pub semi_nl: SemiNl,
     pub body: JobList,
 }
-implement_node!(CaseItem);
-implement_acceptor_for_branch!(CaseItem, kw_case, arguments, semi_nl, body);
 impl CheckParse for CaseItem {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         pop.peek_token(0).keyword == ParseKeyword::Case
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct SwitchStatement {
     /// switch \<argument\> ; body ; end args_redirs
     pub kw_switch: KeywordSwitch,
@@ -979,20 +948,10 @@ pub struct SwitchStatement {
     pub end: KeywordEnd,
     pub args_or_redirs: ArgumentOrRedirectionList,
 }
-implement_node!(SwitchStatement);
-implement_acceptor_for_branch!(
-    SwitchStatement,
-    kw_switch,
-    argument,
-    semi_nl,
-    cases,
-    end,
-    args_or_redirs
-);
 
 /// A decorated_statement is a command with a list of arguments_or_redirections, possibly with
 /// "builtin" or "command" or "exec"
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct DecoratedStatement {
     /// An optional decoration (command, builtin, exec, etc).
     pub opt_decoration: Option<DecoratedStatementDecorator>,
@@ -1001,11 +960,9 @@ pub struct DecoratedStatement {
     /// Args and redirs
     pub args_or_redirs: ArgumentOrRedirectionList,
 }
-implement_node!(DecoratedStatement);
-implement_acceptor_for_branch!(DecoratedStatement, opt_decoration, command, args_or_redirs);
 
 /// A not statement like `not true` or `! true`
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct NotStatement {
     /// Keyword, either not or exclam.
     pub kw: KeywordNot,
@@ -1013,18 +970,14 @@ pub struct NotStatement {
     pub variables: VariableAssignmentList,
     pub contents: Statement,
 }
-implement_node!(NotStatement);
-implement_acceptor_for_branch!(NotStatement, kw, time, variables, contents);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct JobContinuation {
     pub pipe: TokenPipe,
     pub newlines: MaybeNewlines,
     pub variables: VariableAssignmentList,
     pub statement: Statement,
 }
-implement_node!(JobContinuation);
-implement_acceptor_for_branch!(JobContinuation, pipe, newlines, variables, statement);
 impl CheckParse for JobContinuation {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         pop.peek_type(0) == ParseTokenType::pipe
@@ -1033,7 +986,7 @@ impl CheckParse for JobContinuation {
 
 define_list_node!(JobContinuationList, JobContinuation);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct JobConjunctionContinuation {
     /// The && or || token.
     pub conjunction: TokenConjunction,
@@ -1041,8 +994,6 @@ pub struct JobConjunctionContinuation {
     /// The job itself.
     pub job: JobPipeline,
 }
-implement_node!(JobConjunctionContinuation);
-implement_acceptor_for_branch!(JobConjunctionContinuation, conjunction, newlines, job);
 impl CheckParse for JobConjunctionContinuation {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         let typ = pop.peek_type(0);
@@ -1053,12 +1004,10 @@ impl CheckParse for JobConjunctionContinuation {
 /// An andor_job just wraps a job, but requires that the job have an 'and' or 'or' job_decorator.
 /// Note this is only used for andor_job_list; jobs that are not part of an andor_job_list are not
 /// instances of this.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct AndorJob {
     pub job: JobConjunction,
 }
-implement_node!(AndorJob);
-implement_acceptor_for_branch!(AndorJob, job);
 impl CheckParse for AndorJob {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         let keyword = pop.peek_token(0).keyword;
@@ -1080,12 +1029,10 @@ define_list_node!(AndorJobList, AndorJob);
 /// A freestanding_argument_list is equivalent to a normal argument list, except it may contain
 /// TOK_END (newlines, and even semicolons, for historical reasons).
 /// In practice the tok_ends are ignored by fish code so we do not bother to store them.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Acceptor!)]
 pub struct FreestandingArgumentList {
     pub arguments: ArgumentList,
 }
-implement_node!(FreestandingArgumentList);
-implement_acceptor_for_branch!(FreestandingArgumentList, arguments);
 
 define_list_node!(JobConjunctionContinuationList, JobConjunctionContinuation);
 
@@ -1097,12 +1044,10 @@ define_list_node!(JobList, JobConjunction);
 define_list_node!(CaseItemList, CaseItem);
 
 /// A variable_assignment contains a source range like FOO=bar.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Leaf!)]
 pub struct VariableAssignment {
     range: Option<SourceRange>,
 }
-implement_node!(VariableAssignment);
-implement_leaf!(VariableAssignment);
 impl CheckParse for VariableAssignment {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         // Do we have a variable assignment at all?
@@ -1124,21 +1069,17 @@ impl CheckParse for VariableAssignment {
 }
 
 /// Zero or more newlines.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Leaf!)]
 pub struct MaybeNewlines {
     range: Option<SourceRange>,
 }
-implement_node!(MaybeNewlines);
-implement_leaf!(MaybeNewlines);
 
 /// An argument is just a node whose source range determines its contents.
 /// This is a separate type because it is sometimes useful to find all arguments.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Node!, Leaf!)]
 pub struct Argument {
     range: Option<SourceRange>,
 }
-implement_node!(Argument);
-implement_leaf!(Argument);
 impl CheckParse for Argument {
     fn can_be_parsed(pop: &mut Populator<'_>) -> bool {
         pop.peek_type(0) == ParseTokenType::string
@@ -1226,14 +1167,13 @@ impl DecoratedStatement {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Node!)]
 pub enum BlockStatementHeader {
     Begin(BeginHeader),
     For(ForHeader),
     While(WhileHeader),
     Function(FunctionHeader),
 }
-implement_node!(BlockStatementHeader);
 
 impl Default for BlockStatementHeader {
     fn default() -> Self {
