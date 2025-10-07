@@ -1,6 +1,6 @@
 #![allow(clippy::uninlined_format_args)]
 
-use fish_build_helper::{fish_build_dir, workspace_root};
+use fish_build_helper::{env_var, fish_build_dir, workspace_root};
 use rsconf::Target;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ fn main() {
     // language server.
 
     rsconf::set_env_value(
-        "FISH_BUILD_DIR",
+        "FISH_RESOLVED_BUILD_DIR",
         // If set by CMake, this might include symlinks. Since we want to compare this to the
         // dir fish is executed in we need to canonicalize it.
         canonicalize(fish_build_dir()).to_str().unwrap(),
@@ -30,9 +30,9 @@ fn main() {
     );
 
     // Some build info
-    rsconf::set_env_value("BUILD_TARGET_TRIPLE", &env::var("TARGET").unwrap());
-    rsconf::set_env_value("BUILD_HOST_TRIPLE", &env::var("HOST").unwrap());
-    rsconf::set_env_value("BUILD_PROFILE", &env::var("PROFILE").unwrap());
+    rsconf::set_env_value("BUILD_TARGET_TRIPLE", &env_var("TARGET").unwrap());
+    rsconf::set_env_value("BUILD_HOST_TRIPLE", &env_var("HOST").unwrap());
+    rsconf::set_env_value("BUILD_PROFILE", &env_var("PROFILE").unwrap());
 
     let version = &get_version(&env::current_dir().unwrap());
     // Per https://doc.rust-lang.org/cargo/reference/build-scripts.html#inputs-to-the-build-script,
@@ -114,7 +114,7 @@ fn detect_apple(_: &Target) -> bool {
 
 fn detect_cygwin(_: &Target) -> bool {
     // Cygwin target is usually cross-compiled.
-    std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "cygwin"
+    env_var("CARGO_CFG_TARGET_OS").unwrap() == "cygwin"
 }
 
 /// Detect if we're being compiled for a BSD-derived OS, allowing targeting code conditionally with
@@ -126,7 +126,7 @@ fn detect_cygwin(_: &Target) -> bool {
 fn detect_bsd(_: &Target) -> bool {
     // Instead of using `uname`, we can inspect the TARGET env variable set by Cargo. This lets us
     // support cross-compilation scenarios.
-    let mut target = std::env::var("TARGET").unwrap();
+    let mut target = env_var("TARGET").unwrap();
     if !target.chars().all(|c| c.is_ascii_lowercase()) {
         target = target.to_ascii_lowercase();
     }
@@ -177,51 +177,57 @@ fn setup_paths() {
     #[cfg(windows)]
     use unix_path::{Path, PathBuf};
 
-    fn get_path(name: &str, default: &str, onvar: &Path) -> PathBuf {
-        let mut var = PathBuf::from(env::var(name).unwrap_or(default.to_string()));
-        if var.is_relative() {
-            var = onvar.join(var);
-        }
-        var
+    fn overridable_path(env_var_name: &str, f: impl FnOnce(Option<String>) -> PathBuf) -> PathBuf {
+        rsconf::rebuild_if_env_changed(env_var_name);
+        let path = f(env_var(env_var_name));
+        rsconf::set_env_value(env_var_name, path.to_str().unwrap());
+        path
     }
 
-    let prefix = PathBuf::from(env::var("PREFIX").unwrap_or("/usr/local".to_string()));
-    rsconf::rebuild_if_env_changed("PREFIX");
-    rsconf::set_env_value("PREFIX", prefix.to_str().unwrap());
-
-    let datadir = get_path("DATADIR", "share/", &prefix);
-
-    let sysconfdir = get_path(
-        "SYSCONFDIR",
-        // Embedded builds use "/etc," not "./share/etc".
-        if cfg!(feature = "embed-data") {
-            "/etc/"
+    fn join_if_relative(parent_if_relative: &Path, path: String) -> PathBuf {
+        let path = PathBuf::from(path);
+        if path.is_relative() {
+            parent_if_relative.join(path)
         } else {
-            "etc/"
-        },
-        &datadir,
-    );
-    rsconf::set_env_value("SYSCONFDIR", sysconfdir.to_str().unwrap());
-    rsconf::rebuild_if_env_changed("SYSCONFDIR");
+            path
+        }
+    }
+
+    let prefix = overridable_path("PREFIX", |env_prefix| {
+        PathBuf::from(env_prefix.unwrap_or("/usr/local".to_string()))
+    });
+
+    let datadir = join_if_relative(&prefix, env_var("DATADIR").unwrap_or("share/".to_string()));
+    rsconf::rebuild_if_env_changed("DATADIR");
+    #[cfg(not(feature = "embed-data"))]
+    rsconf::set_env_value("DATADIR", datadir.to_str().unwrap());
+
+    overridable_path("SYSCONFDIR", |env_sysconfdir| {
+        join_if_relative(
+            &datadir,
+            env_sysconfdir.unwrap_or(
+                // Embedded builds use "/etc," not "./share/etc".
+                if cfg!(feature = "embed-data") {
+                    "/etc/"
+                } else {
+                    "etc/"
+                }
+                .to_string(),
+            ),
+        )
+    });
 
     #[cfg(not(feature = "embed-data"))]
     {
-        rsconf::set_env_value("DATADIR", datadir.to_str().unwrap());
-        rsconf::rebuild_if_env_changed("DATADIR");
-
-        let bindir = get_path("BINDIR", "bin/", &prefix);
-        rsconf::set_env_value("BINDIR", bindir.to_str().unwrap());
-        rsconf::rebuild_if_env_changed("BINDIR");
-
-        let localedir = get_path("LOCALEDIR", "locale/", &datadir);
-        let localedir = localedir.to_str().unwrap();
-        assert!(!localedir.is_empty(), "empty LOCALEDIR is not supported");
-        rsconf::set_env_value("LOCALEDIR", localedir);
-        rsconf::rebuild_if_env_changed("LOCALEDIR");
-
-        let docdir = get_path("DOCDIR", "doc/fish", &datadir);
-        rsconf::set_env_value("DOCDIR", docdir.to_str().unwrap());
-        rsconf::rebuild_if_env_changed("DOCDIR");
+        overridable_path("BINDIR", |env_bindir| {
+            join_if_relative(&prefix, env_bindir.unwrap_or("bin/".to_string()))
+        });
+        overridable_path("LOCALEDIR", |env_localedir| {
+            join_if_relative(&datadir, env_localedir.unwrap_or("locale/".to_string()))
+        });
+        overridable_path("DOCDIR", |env_docdir| {
+            join_if_relative(&datadir, env_docdir.unwrap_or("doc/fish".to_string()))
+        });
     }
 }
 
@@ -229,7 +235,7 @@ fn get_version(src_dir: &Path) -> String {
     use std::fs::read_to_string;
     use std::process::Command;
 
-    if let Ok(var) = std::env::var("FISH_BUILD_VERSION") {
+    if let Some(var) = env_var("FISH_BUILD_VERSION") {
         return var;
     }
 

@@ -1,4 +1,21 @@
-use std::{borrow::Cow, env, path::Path};
+use std::{borrow::Cow, env, os::unix::ffi::OsStrExt, path::Path};
+
+pub fn env_var(name: &str) -> Option<String> {
+    let err = match env::var(name) {
+        Ok(p) => return Some(p),
+        Err(err) => err,
+    };
+    use env::VarError::*;
+    match err {
+        NotPresent => None,
+        NotUnicode(os_string) => {
+            panic!(
+                "Environment variable {name} is not valid Unicode: {:?}",
+                os_string.as_bytes()
+            )
+        }
+    }
+}
 
 pub fn workspace_root() -> &'static Path {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -12,7 +29,7 @@ fn cargo_target_dir() -> Cow<'static, Path> {
 }
 
 pub fn fish_build_dir() -> Cow<'static, Path> {
-    // FISH_BUILD_DIR is set by CMake, if we are using it.
+    // This is set if using CMake.
     option_env!("FISH_BUILD_DIR")
         .map(|d| Cow::Borrowed(Path::new(d)))
         .unwrap_or(cargo_target_dir())
