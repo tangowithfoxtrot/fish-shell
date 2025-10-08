@@ -161,7 +161,7 @@ gh_api_repo() {
     command gh api \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        "/repos/$repository_owner/fish-shell/$1" \
+        "/repos/$repository_owner/fish-shell/$path" \
         "$@"
 }
 
@@ -233,7 +233,7 @@ milestone_number=$(
     gh_api_repo milestones?state=open |
         jq '.[] | select(.title == "fish '"$version"'") | .number'
 )
-gh_api_repo --method PATCH milestones/$milestone_number \
+gh_api_repo milestones/$milestone_number --method PATCH \
     --raw-field state=closed
 
 next_patch_version=$(
@@ -244,7 +244,7 @@ next_patch_version=$(
     '
 )
 if [ -n "$next_patch_version" ]; then
-    gh_api_repo --method POST milestones \
+    gh_api_repo milestones --method POST \
         --raw-field title="fish $next_patch_version"
 fi
 
