@@ -68,14 +68,6 @@ def find_executable(exe, paths=()):
             return proposed_path
 
 
-def isMacOS10_12_5_OrLater():
-    """Return whether this system is macOS 10.12.5 or a later version."""
-    try:
-        return [int(x) for x in platform.mac_ver()[0].split(".")] >= [10, 12, 5]
-    except ValueError:
-        return False
-
-
 def is_wsl():
     """Return whether we are running under the Windows Subsystem for Linux"""
     if "linux" in platform.system().lower() and os.access("/proc/version", os.R_OK):
@@ -1544,8 +1536,9 @@ print("%sHit ENTER to stop.%s" % (ENTER_BOLD_MODE, EXIT_ATTRIBUTE_MODE))
 
 
 def runThing():
-    if isMacOS10_12_5_OrLater():
-        subprocess.check_call(["open", fileurl])
+    if os.environ.get("BROWSER") == "true":
+        # Don't start a browser in this case (see issue #11926)
+        pass
     elif is_wsl():
         cmd_path = find_executable("cmd.exe", COMMON_WSL_CMD_PATHS)
         if cmd_path:
@@ -1606,7 +1599,15 @@ def capture_enter(port):
 
 def get_windows_signal():
     """Using socket as a replacement for stdin on Windows."""
-    (sig, sig_port) = create_socket(8000, 9000)
+    # The intent is to get a free port between 8000 and 9000, like for the HTTP
+    # server. But we already know that port 8000..PORT are not available. So
+    # starting from `PORT+1` is more efficient.
+    # More importantly though, Windows allows multiple sockets to bind to the
+    # same port in some circumstances (see SO_EXCLUSIVEADDRUSE documentation),
+    # and thus allows the signal socket to bind to the same port as HTTP.
+    # A browser may then end up reaching the wrong socket and causing
+    # fish_config to shutdown prematurely.
+    (sig, sig_port) = create_socket(PORT + 1, 9000)
     threading.Thread(target=capture_enter, args=(sig_port,)).start()
     return sig
 

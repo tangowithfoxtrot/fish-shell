@@ -274,10 +274,13 @@ pub struct Pid(NonZeroU32);
 
 impl Pid {
     #[inline(always)]
-    pub fn new(pid: i32) -> Option<Pid> {
-        // Construct a pid from an i32, which must be at least zero.
-        assert!(pid >= 0, "Pid must be at least zero");
-        NonZeroU32::new(pid as u32).map(Pid)
+    pub fn new(pid: i32) -> Self {
+        Self(
+            u32::try_from(pid)
+                .ok()
+                .and_then(NonZeroU32::new)
+                .expect("PID must be greater than zero"),
+        )
     }
     #[inline(always)]
     pub fn get(&self) -> i32 {
@@ -518,7 +521,7 @@ impl Process {
     }
 
     /// Create a wait handle for the process.
-    /// As a process does not know its job id, we pass it in.
+    /// As a process does not know its job ID, we pass it in.
     /// Note this will return null if the process is not waitable (has no pid).
     pub fn make_wait_handle(&self, jid: InternalJobId) -> Option<WaitHandleRef> {
         let pid = self.pid()?;
@@ -646,7 +649,7 @@ impl Job {
     }
 
     /// Returns a truncated version of the job string. Used when a message has already been emitted
-    /// containing the full job string and job id, but using the job id alone would be confusing
+    /// containing the full job string and job ID, but using the job ID alone would be confusing
     /// due to reuse of freed job ids. Prevents overloading the debug comments with the full,
     /// untruncated job string when we don't care what the job is, only which of the currently
     /// running jobs it is.
@@ -1234,9 +1237,10 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool) {
                     WNOHANG | WUNTRACED | WCONTINUED,
                 )
             };
-            let Some(pid) = Pid::new(pid) else {
+            if pid == 0 {
                 continue;
-            };
+            }
+            let pid = Pid::new(pid);
             assert!(pid == proc.pid().unwrap(), "Unexpected waitpid() return");
 
             // The process has stopped or exited! Update its status.

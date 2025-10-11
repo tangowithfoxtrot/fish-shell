@@ -1,15 +1,13 @@
 use super::prelude::*;
-use crate::builtins::*;
 use crate::common::{escape, get_by_sorted_name, str2wcstring, Named};
 use crate::io::OutputStream;
 use crate::parse_constants::UNKNOWN_BUILTIN_ERR_MSG;
 use crate::parse_util::parse_util_argument_is_help;
-use crate::parser::{Block, BlockType, LoopStatus};
-use crate::proc::{no_exec, ProcStatus};
-use crate::reader::reader_read;
+use crate::parser::{BlockType, LoopStatus};
+use crate::proc::{no_exec, Pid, ProcStatus};
 use crate::wchar::L;
+use crate::{builtins::*, wutil};
 use errno::errno;
-use libc::STDIN_FILENO;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -193,7 +191,7 @@ const BUILTIN_DATAS: &[BuiltinData] = &[
     },
     BuiltinData {
         name: L!(":"),
-        func: builtin_true,
+        func: r#true::r#true,
     },
     BuiltinData {
         name: L!("["), // ]
@@ -201,7 +199,7 @@ const BUILTIN_DATAS: &[BuiltinData] = &[
     },
     BuiltinData {
         name: L!("_"),
-        func: builtin_gettext,
+        func: gettext::gettext,
     },
     BuiltinData {
         name: L!("abbr"),
@@ -233,11 +231,11 @@ const BUILTIN_DATAS: &[BuiltinData] = &[
     },
     BuiltinData {
         name: L!("break"),
-        func: builtin_break_continue,
+        func: r#break::r#break,
     },
     BuiltinData {
         name: L!("breakpoint"),
-        func: builtin_breakpoint,
+        func: breakpoint::breakpoint,
     },
     BuiltinData {
         name: L!("builtin"),
@@ -269,7 +267,7 @@ const BUILTIN_DATAS: &[BuiltinData] = &[
     },
     BuiltinData {
         name: L!("continue"),
-        func: builtin_break_continue,
+        func: r#continue::r#continue,
     },
     BuiltinData {
         name: L!("count"),
@@ -309,7 +307,7 @@ const BUILTIN_DATAS: &[BuiltinData] = &[
     },
     BuiltinData {
         name: L!("false"),
-        func: builtin_false,
+        func: r#false::r#false,
     },
     BuiltinData {
         name: L!("fg"),
@@ -421,7 +419,7 @@ const BUILTIN_DATAS: &[BuiltinData] = &[
     },
     BuiltinData {
         name: L!("true"),
-        func: builtin_true,
+        func: r#true::r#true,
     },
     BuiltinData {
         name: L!("type"),
@@ -931,6 +929,41 @@ impl<'args> Iterator for Arguments<'args, '_> {
     }
 }
 
+pub fn parse_pid(streams: &mut IoStreams, cmd: &wstr, arg: &wstr) -> Result<Pid, ErrorCode> {
+    parsed_pid(streams, cmd, arg, fish_wcstoi(arg))
+}
+
+pub fn parse_pid_may_be_zero(
+    streams: &mut IoStreams,
+    cmd: &wstr,
+    arg: &wstr,
+) -> Result<Option<Pid>, ErrorCode> {
+    let parsed = fish_wcstoi(arg);
+    if parsed == Ok(0) {
+        return Ok(None);
+    }
+    parsed_pid(streams, cmd, arg, parsed).map(Some)
+}
+
+fn parsed_pid(
+    streams: &mut IoStreams,
+    cmd: &wstr,
+    arg: &wstr,
+    pid: Result<i32, wutil::Error>,
+) -> Result<Pid, ErrorCode> {
+    match pid {
+        Ok(pid @ 1..) => Ok(Pid::new(pid)),
+        _ => {
+            streams.err.append(wgettext_fmt!(
+                "%s: '%s' is not a valid process ID\n",
+                cmd,
+                arg
+            ));
+            Err(STATUS_INVALID_ARGS)
+        }
+    }
+}
+
 /// A generic builtin that only supports showing a help message. This is only a placeholder that
 /// prints the help message. Useful for commands that live in the parser.
 fn builtin_generic(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> BuiltinResult {
@@ -954,7 +987,7 @@ fn builtin_generic(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr])
 
 /// This function handles both the 'continue' and the 'break' builtins that are used for loop
 /// control.
-fn builtin_break_continue(
+pub fn builtin_break_continue(
     parser: &Parser,
     streams: &mut IoStreams,
     argv: &mut [&wstr],
@@ -1001,70 +1034,5 @@ fn builtin_break_continue(
     } else {
         LoopStatus::continues
     };
-    Ok(SUCCESS)
-}
-
-/// Implementation of the builtin breakpoint command, used to launch the interactive debugger.
-fn builtin_breakpoint(
-    parser: &Parser,
-    streams: &mut IoStreams,
-    argv: &mut [&wstr],
-) -> BuiltinResult {
-    let cmd = argv[0];
-    if argv.len() != 1 {
-        streams.err.append(wgettext_fmt!(
-            BUILTIN_ERR_ARG_COUNT1,
-            cmd,
-            0,
-            argv.len() - 1
-        ));
-        return Err(STATUS_INVALID_ARGS);
-    }
-
-    // If we're not interactive then we can't enter the debugger. So treat this command as a no-op.
-    if !parser.is_interactive() {
-        return Err(STATUS_CMD_ERROR);
-    }
-
-    // Ensure we don't allow creating a breakpoint at an interactive prompt. There may be a simpler
-    // or clearer way to do this but this works.
-    {
-        if parser
-            .block_at_index(1)
-            .map_or(true, |b| b.typ() == BlockType::breakpoint)
-        {
-            streams.err.append(wgettext_fmt!(
-                "%s: Command not valid at an interactive prompt\n",
-                cmd,
-            ));
-            return Err(STATUS_ILLEGAL_CMD);
-        }
-    }
-
-    let bpb = parser.push_block(Block::breakpoint_block());
-    let io_chain = &streams.io_chain;
-    reader_read(parser, STDIN_FILENO, io_chain)?;
-    parser.pop_block(bpb);
-    BuiltinResult::from_dynamic(parser.get_last_status())
-}
-
-fn builtin_true(_parser: &Parser, _streams: &mut IoStreams, _argv: &mut [&wstr]) -> BuiltinResult {
-    Ok(SUCCESS)
-}
-
-fn builtin_false(_parser: &Parser, _streams: &mut IoStreams, _argv: &mut [&wstr]) -> BuiltinResult {
-    Err(STATUS_CMD_ERROR)
-}
-
-/// Used for the fish `_` builtin for requesting translations.
-/// For scripts in `share/`, the corresponding strings are extracted from the scripts using
-/// `build_tools/fish_xgettext.fish`.
-/// Strings not present in our repo would require a custom MO file for translation to be possible.
-fn builtin_gettext(_parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> BuiltinResult {
-    for arg in &argv[1..] {
-        streams.out.append(
-            crate::wutil::LocalizableString::from_external_source((*arg).to_owned()).localize(),
-        );
-    }
     Ok(SUCCESS)
 }

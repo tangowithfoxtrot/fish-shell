@@ -108,16 +108,16 @@ test "$name3[3..-1]" = "$name3a[3..-1]"; and echo "3 = 3a"
 # Test the first two lines.
 string join \n -- $name1[1..2]
 #CHECK: # Defined in {{(?:(?!, copied).)*}}
-#CHECK: function name1 --argument-names arg1 --argument-names arg2
+#CHECK: function name1 --argument-names arg1 arg2
 string join \n -- $name1a[1..2]
 #CHECK: # Defined in {{.*}}, copied in {{.*}}
-#CHECK: function name1a --argument-names arg1 --argument-names arg2
+#CHECK: function name1a --argument-names arg1 arg2
 string join \n -- $name3[1..2]
 #CHECK: # Defined in {{(?:(?!, copied).)*}}
-#CHECK: function name3 --argument-names arg1 --argument-names arg2
+#CHECK: function name3 --argument-names arg1 arg2
 string join \n -- $name3a[1..2]
 #CHECK: # Defined in {{.*}}, copied in {{.*}}
-#CHECK: function name3a --argument-names arg1 --argument-names arg2
+#CHECK: function name3a --argument-names arg1 arg2
 
 function test
     echo banana
@@ -147,7 +147,7 @@ rm -r $tmpdir
 functions -e foo
 
 function foo -p bar; end
-# CHECKERR: {{.*}}function.fish (line {{\d+}}): function: bar: invalid process id
+# CHECKERR: {{.*}}function.fish (line {{\d+}}): function: 'bar' is not a valid process ID
 # CHECKERR: function foo -p bar; end
 # CHECKERR: ^~~~~~~~~~~~~~~~~~~^
 
@@ -191,5 +191,52 @@ end
 # CHECKERR: {{.*}}/tests/checks/function.fish (line {{\d+}}): function: function name required
 # CHECKERR: function ()
 # CHECKERR: ^
+
+# Tests the --argument-names and --inherit-variable can overwrite argv
+function t --argument-names a argv c
+    echo $argv
+end
+t 1 2 3
+#CHECK: 2
+
+function t -a argv
+    echo $argv
+end
+t 1 2 3
+#CHECK: 1
+
+function outer
+    function inner -v argv -V argv
+        echo $argv
+    end
+    set -gx argv 4 5 6
+end
+outer 1 2 3
+#CHECK: 1 2 3
+
+for flag in --on-process-exit --on-job-exit
+    for invalid_pid in (math 2 ^ 31) -1 -(math 2 ^ 31)
+        function invalid $flag=$invalid_pid
+        end
+    end
+    # CHECKERR: {{.*}}/function.fish (line {{\d+}}): function: '2147483648' is not a valid process ID
+    # CHECKERR:     function invalid $flag=$invalid_pid
+    # CHECKERR:     ^
+    # CHECKERR: {{.*}}/function.fish (line {{\d+}}): function: '-1' is not a valid process ID
+    # CHECKERR:     function invalid $flag=$invalid_pid
+    # CHECKERR:     ^
+    # CHECKERR: {{.*}}/function.fish (line {{\d+}}): function: '-2147483648' is not a valid process ID
+    # CHECKERR:     function invalid $flag=$invalid_pid
+    # CHECKERR:     ^
+    # CHECKERR: {{.*}}/function.fish (line {{\d+}}): function: '2147483648' is not a valid process ID
+    # CHECKERR:     function invalid $flag=$invalid_pid
+    # CHECKERR:     ^
+    # CHECKERR: {{.*}}/function.fish (line {{\d+}}): function: '-1' is not a valid process ID
+    # CHECKERR:     function invalid $flag=$invalid_pid
+    # CHECKERR:     ^
+    # CHECKERR: {{.*}}/function.fish (line {{\d+}}): function: '-2147483648' is not a valid process ID
+    # CHECKERR:     function invalid $flag=$invalid_pid
+    # CHECKERR:     ^
+end
 
 exit 0
