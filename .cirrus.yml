@@ -12,14 +12,6 @@ linux_task:
           container:
               <<: *step
               image: ghcr.io/krobelus/fish-ci/jammy:latest
-        # - name: jammy-asan
-        #   container:
-        #       <<: *step
-        #       image: ghcr.io/krobelus/fish-ci/jammy-asan:latest
-        # - name: focal-32bit
-        #   container:
-        #       <<: *step
-        #       image: ghcr.io/krobelus/fish-ci/focal-32bit:latest
     tests_script:
         # cirrus at times gives us 32 procs and 2 GB of RAM
         # Unrestriced parallelism results in OOM
@@ -47,7 +39,6 @@ linux_arm_task:
         - mkdir build && cd build
         - FISH_TEST_MAX_CONCURRENCY=6 cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug ..
         - ninja -j 6 fish
-        - file ./fish
         - ninja fish_run_tests
     # CI task disabled during RIIR transition
     only_if: false && $CIRRUS_REPO_OWNER == 'fish-shell'
