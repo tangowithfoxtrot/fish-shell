@@ -6,7 +6,7 @@ use crate::event::{enqueue_signal, is_signal_observed};
 use crate::nix::getpid;
 use crate::reader::{reader_handle_sigint, reader_sighup, safe_restore_term_mode};
 use crate::termsize::TermsizeContainer;
-use crate::topic_monitor::{topic_monitor_principal, Generation, GenerationsList, Topic};
+use crate::topic_monitor::{Generation, GenerationsList, Topic, topic_monitor_principal};
 use crate::tty_handoff::{safe_deactivate_tty_protocols, safe_mark_tty_invalid};
 use crate::wchar::prelude::*;
 use crate::wutil::{fish_wcstoi, perror};
@@ -417,7 +417,15 @@ const SIGNAL_TABLE : &[LookupEntry] = &[
     #[cfg(any(apple, bsd))]
     signal_entry!(SIGINFO, SIGINFO_DESC),
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6",
+        ))
+    ))]
     signal_entry!(SIGSTKFLT, SIGSTKFLT_DESC),
 
     #[cfg(target_os = "linux")]

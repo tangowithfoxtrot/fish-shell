@@ -3,6 +3,7 @@ fish ?.?.? (released ???)
 
 Notable improvements and fixes
 ------------------------------
+- New Taiwanese Chinese translation.
 
 Deprecations and removed features
 ---------------------------------
@@ -19,6 +20,8 @@ Other improvements
 
 For distributors
 ----------------
+- Fixed build on MIPS machines (:issue:`11965`).
+- Fixed broken universal variables on Cygwin (:issue:`11948`).
 
 
 fish 4.1.3 (released ???)

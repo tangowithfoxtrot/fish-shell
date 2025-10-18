@@ -3,7 +3,7 @@
 
 use crate::ast::unescape_keyword;
 use crate::common::valid_var_name_char;
-use crate::future_feature_flags::{feature_test, FeatureFlag};
+use crate::future_feature_flags::{FeatureFlag, feature_test};
 use crate::parse_constants::SOURCE_OFFSET_INVALID;
 use crate::parser_keywords::parser_keywords_is_subcommand;
 use crate::redirection::RedirectionMode;
@@ -1333,8 +1333,9 @@ impl MoveWordStateMachine {
         while self.state != S_END && !consumed {
             match self.state {
                 S_ALWAYS_ONE => {
-                    consumed = true; // always consume the first character
-                                     // If it's not whitespace, only consume those from here.
+                    // always consume the first character
+                    // If it's not whitespace, only consume those from here.
+                    consumed = true;
                     if !c.is_whitespace() {
                         self.state = S_GRAPH;
                     } else {
@@ -1344,14 +1345,16 @@ impl MoveWordStateMachine {
                 }
                 S_BLANK => {
                     if c.is_whitespace() {
-                        consumed = true; // consumed whitespace
+                        // consumed whitespace
+                        consumed = true;
                     } else {
                         self.state = S_GRAPH;
                     }
                 }
                 S_GRAPH => {
                     if !c.is_whitespace() {
-                        consumed = true; // consumed printable non-space
+                        // consumed printable non-space
+                        consumed = true;
                     } else {
                         self.state = S_END;
                     }

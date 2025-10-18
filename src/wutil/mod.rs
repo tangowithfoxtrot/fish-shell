@@ -11,17 +11,14 @@ mod tests;
 pub mod wcstod;
 pub mod wcstoi;
 
-use crate::common::{
-    cstr2wcstring, fish_reserved_codepoint, str2wcstring, wcs2osstring, wcs2string, wcs2zstring,
-};
-use crate::fallback;
-use crate::flog::FLOGF;
-use crate::wchar::{wstr, WString, L};
+use crate::common::{fish_reserved_codepoint, str2wcstring, wcs2osstring, wcs2string, wcs2zstring};
+use crate::wchar::{L, WString, wstr};
 use crate::wchar_ext::WExt;
 use crate::wcstringutil::{join_strings, wcs2string_callback};
+use crate::{FLOG, fallback};
 use errno::errno;
 pub use gettext::{
-    localizable_consts, localizable_string, wgettext, wgettext_fmt, LocalizableString,
+    LocalizableString, localizable_consts, localizable_string, wgettext, wgettext_fmt,
 };
 use std::ffi::{CStr, OsStr};
 use std::fs::{self, canonicalize};
@@ -31,7 +28,7 @@ use std::os::unix::prelude::*;
 pub use crate::wutil::printf::{eprintf, fprintf, printf, sprintf};
 
 pub use fileid::{
-    file_id_for_file, file_id_for_path, file_id_for_path_narrow, DevInode, FileId, INVALID_FILE_ID,
+    DevInode, FileId, INVALID_FILE_ID, file_id_for_file, file_id_for_path, file_id_for_path_narrow,
 };
 pub use wcstoi::*;
 
@@ -104,24 +101,13 @@ pub fn perror_io(s: &str, e: &io::Error) {
 
 /// Wide character version of getcwd().
 pub fn wgetcwd() -> WString {
-    let mut cwd = [b'\0'; libc::PATH_MAX as usize];
-    let res = unsafe {
-        libc::getcwd(
-            std::ptr::addr_of_mut!(cwd).cast(),
-            std::mem::size_of_val(&cwd),
-        )
-    };
-    if !res.is_null() {
-        return cstr2wcstring(&cwd);
+    match std::env::current_dir() {
+        Ok(cwd) => str2wcstring(cwd.into_os_string().as_bytes()),
+        Err(e) => {
+            FLOG!(error, "std::env::current_dir() failed with error:", e);
+            WString::new()
+        }
     }
-
-    FLOGF!(
-        error,
-        "getcwd() failed with errno %d/%s",
-        errno::errno().0,
-        errno::errno().to_string()
-    );
-    WString::new()
 }
 
 /// Wide character version of readlink().
@@ -571,11 +557,7 @@ pub fn wwrite_to_fd(input: &wstr, fd: RawFd) -> Option<usize> {
     if success {
         success = flush_accum(&mut total_written, &accum, &mut accumlen);
     }
-    if success {
-        Some(total_written)
-    } else {
-        None
-    }
+    if success { Some(total_written) } else { None }
 }
 
 const PUA1_START: char = '\u{E000}';
