@@ -43,7 +43,7 @@ use rand::Rng;
 
 use crate::{
     ast::{self, Kind, Node},
-    common::{CancelChecker, UnescapeStringStyle, str2wcstring, unescape_string, valid_var_name},
+    common::{CancelChecker, UnescapeStringStyle, bytes2wcstring, unescape_string, valid_var_name},
     env::{EnvMode, EnvStack, Environment},
     expand::{ExpandFlags, expand_one},
     fds::wopen_cloexec,
@@ -119,7 +119,7 @@ const DFLT_FISH_HISTORY_SESSION_ID: &wstr = L!("fish");
 
 /// When we rewrite the history, the number of items we keep.
 // FIXME: https://github.com/rust-lang/rust/issues/67441
-const HISTORY_SAVE_MAX: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024 * 256) };
+const HISTORY_SAVE_MAX: NonZeroUsize = NonZeroUsize::new(1024 * 256).unwrap();
 
 /// Default buffer size for flushing to the history file.
 const HISTORY_OUTPUT_BUFFER_SIZE: usize = 64 * 1024;
@@ -382,10 +382,9 @@ impl HistoryImpl {
         if let Some(canonicalized_path) = wrealpath(&path) {
             Ok(Some(canonicalized_path))
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("wrealpath failed to produce a canonical version of '{path}'."),
-            ))
+            Err(std::io::Error::other(format!(
+                "wrealpath failed to produce a canonical version of '{path}'."
+            )))
         }
     }
 
@@ -967,7 +966,7 @@ impl HistoryImpl {
             let Ok(line) = line else {
                 break;
             };
-            let wide_line = trim(str2wcstring(&line), None);
+            let wide_line = trim(bytes2wcstring(&line), None);
             // Add this line if it doesn't contain anything we know we can't handle.
             if should_import_bash_history_line(&wide_line) {
                 self.add(

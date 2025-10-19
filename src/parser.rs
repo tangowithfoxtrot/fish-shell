@@ -4,7 +4,7 @@ use crate::ast::{self, Node};
 use crate::builtins::shared::STATUS_ILLEGAL_CMD;
 use crate::common::{
     CancelChecker, EscapeFlags, EscapeStringStyle, FilenameRef, PROFILING_ACTIVE, ScopeGuarding,
-    ScopedCell, ScopedRefCell, escape_string, wcs2string,
+    ScopedCell, ScopedRefCell, escape_string, wcs2bytes,
 };
 use crate::complete::CompletionList;
 use crate::env::{EnvMode, EnvStack, EnvStackSetResult, Environment, Statuses};
@@ -37,7 +37,7 @@ use libc::c_int;
 #[cfg(not(target_has_atomic = "64"))]
 use portable_atomic::AtomicU64;
 use std::cell::{Ref, RefCell, RefMut};
-use std::ffi::{CStr, OsStr};
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -470,7 +470,7 @@ impl Parser {
             blocking_query_timeout: RefCell::new(None),
         };
 
-        match open_dir(CStr::from_bytes_with_nul(b".\0").unwrap(), BEST_O_SEARCH) {
+        match open_dir(c".", BEST_O_SEARCH) {
             Ok(fd) => {
                 result.libdata_mut().cwd_fd = Some(Arc::new(fd));
             }
@@ -1270,7 +1270,7 @@ fn print_profile(items: &[ProfileItem], out: &mut File) {
             L!("\n"),
             &(WString::from("\n") + &wstr::repeat(L!(" "), indentation_level)[..]),
         );
-        let _ = out.write_all(&wcs2string(&indented_cmd));
+        let _ = out.write_all(&wcs2bytes(&indented_cmd));
         let _ = out.write_all(b"\n");
     }
 }

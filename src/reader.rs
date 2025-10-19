@@ -54,10 +54,10 @@ use crate::builtins::shared::STATUS_CMD_ERROR;
 use crate::builtins::shared::STATUS_CMD_OK;
 use crate::common::ScopeGuarding;
 use crate::common::{
-    EscapeFlags, EscapeStringStyle, PROGRAM_NAME, ScopeGuard, UTF8_BOM_WCHAR, escape,
-    escape_string, exit_without_destructors, get_ellipsis_char, get_is_multibyte_locale,
+    EscapeFlags, EscapeStringStyle, PROGRAM_NAME, ScopeGuard, UTF8_BOM_WCHAR, bytes2wcstring,
+    escape, escape_string, exit_without_destructors, get_ellipsis_char, get_is_multibyte_locale,
     get_obfuscation_read_char, restore_term_foreground_process_group_for_exit, shell_modes,
-    str2wcstring, write_loop,
+    write_loop,
 };
 use crate::complete::{
     CompleteFlags, Completion, CompletionList, CompletionRequestOptions, complete, complete_load,
@@ -75,8 +75,6 @@ use crate::fallback::fish_wcwidth;
 use crate::fd_readable_set::poll_fd_readable;
 use crate::fds::{AutoCloseFd, make_fd_blocking, wopen_cloexec};
 use crate::flog::{FLOG, FLOGF};
-#[allow(unused_imports)]
-use crate::future::IsSomeAnd;
 use crate::future_feature_flags;
 use crate::future_feature_flags::FeatureFlag;
 use crate::global_safety::RelaxedAtomicBool;
@@ -943,7 +941,7 @@ fn read_ni(parser: &Parser, fd: RawFd, io: &IoChain) -> Result<(), ErrorCode> {
         }
     }
 
-    let mut s = str2wcstring(&fd_contents);
+    let mut s = bytes2wcstring(&fd_contents);
 
     // Eagerly deallocate to save memory.
     drop(fd_contents);
@@ -2368,9 +2366,7 @@ impl<'a> Reader<'a> {
 
         // Redraw the command line. This is what ensures the autosuggestion is hidden, etc. after the
         // user presses enter.
-        if self.is_repaint_needed(None)
-            || self.screen.scrolled()
-            || self.conf.inputfd != STDIN_FILENO
+        if self.is_repaint_needed(None) || self.screen.scrolled || self.conf.inputfd != STDIN_FILENO
         {
             self.layout_and_repaint_before_execution();
         }
@@ -2711,16 +2707,13 @@ fn send_xtgettcap_query(out: &mut impl Output, cap: &'static str) {
     out.write_command(QueryXtgettcap(cap));
 }
 
-#[allow(renamed_and_removed_lints)]
-#[allow(clippy::blocks_in_if_conditions)] // for old clippy
 fn query_capabilities_via_dcs(out: &mut impl Output, vars: &dyn Environment) {
-    if {
-        vars.get_unless_empty(L!("STY")).is_some()
-            || vars.get_unless_empty(L!("TERM")).is_some_and(|term| {
-                let term = &term.as_list()[0];
-                term == "screen" || term == "screen-256color"
-            })
-    } {
+    if vars.get_unless_empty(L!("STY")).is_some()
+        || vars.get_unless_empty(L!("TERM")).is_some_and(|term| {
+            let term = &term.as_list()[0];
+            term == "screen" || term == "screen-256color"
+        })
+    {
         return;
     }
     out.write_command(DecsetAlternateScreenBuffer); // enable alternative screen buffer
@@ -4254,7 +4247,7 @@ impl ReaderData {
         }
 
         let col = pager.get_selected_column(&self.current_page_rendering);
-        !col.is_some_and(|col| col != 0)
+        col.is_none_or(|col| col == 0)
     }
 }
 
@@ -4748,10 +4741,6 @@ impl<'a> Reader<'a> {
 
                 self.left_prompt_buff =
                     join_strings(&self.exec_prompt_cmd(prompt_cmd, final_prompt), '\n');
-
-                if final_prompt {
-                    self.screen.multiline_prompt_hack();
-                }
             }
 
             // Don't execute the right prompt if it is undefined fish_right_prompt
@@ -6360,12 +6349,14 @@ pub fn completion_apply_to_command_line(
             let (tok, _) = parse_util_token_extent(command_line, cursor_pos);
             maybe_add_slash(&mut trailer, &result[tok.start..new_cursor_pos]);
         }
+        // TODO(MSRV/edition 2024): use if let chain for quote instead of `is_some` followed
+        // by unwrap
         if trailer != '/'
             && quote.is_some()
             && unescaped_quote(command_line, insertion_point) != quote
         {
             // This is a quoted parameter, first print a quote.
-            #[allow(clippy::unnecessary_unwrap)] // for old clippy
+            #[allow(clippy::unnecessary_unwrap)]
             result.insert(new_cursor_pos, quote.unwrap());
             new_cursor_pos += 1;
         }

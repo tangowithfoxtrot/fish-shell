@@ -1,5 +1,5 @@
 use super::wopendir;
-use crate::common::{str2wcstring, wcs2zstring};
+use crate::common::{bytes2wcstring, wcs2zstring};
 use crate::wchar::{WString, wstr};
 use crate::wutil::DevInode;
 use cfg_if::cfg_if;
@@ -285,7 +285,7 @@ impl DirIter {
         }
 
         self.entry.reset();
-        self.entry.name = str2wcstring(d_name);
+        self.entry.name = bytes2wcstring(d_name);
         cfg_if!(
             if #[cfg(bsd)] {
                 self.entry.inode = dent.d_fileno;
@@ -424,7 +424,7 @@ fn test_dir_iter() {
         ret = symlink(makepath(dirname).as_ptr(), makepath(dirlinkname).as_ptr());
         assert!(ret == 0);
         ret = symlink(
-            b"/this/is/an/invalid/path\0".as_ptr().cast(),
+            c"/this/is/an/invalid/path".as_ptr().cast(),
             makepath(badlinkname).as_ptr(),
         );
         assert!(ret == 0);
