@@ -96,14 +96,16 @@ fn test_complete() {
     std::fs::create_dir_all("test/complete_test").unwrap();
     std::fs::write("test/complete_test/has space", []).unwrap();
     std::fs::write("test/complete_test/bracket[abc]", []).unwrap();
-    std::fs::write(r"test/complete_test/gnarlybracket\[abc]", []).unwrap();
-    #[cfg(not(windows))] // Square brackets are not legal path characters on WIN32/CYGWIN
+    #[cfg(not(cygwin))]
+    // Backslashes and colons are not legal filename characters on WIN32/CYGWIN
     {
         std::fs::write(r"test/complete_test/gnarlybracket\[abc]", []).unwrap();
         std::fs::write(r"test/complete_test/colon:abc", []).unwrap();
     }
     std::fs::write(r"test/complete_test/equal=abc", []).unwrap();
-    std::fs::write("test/complete_test/testfile", []).unwrap();
+    // On MSYS, the executable bit cannot be set manually, is set automatically
+    // based on the file content/type. So make it a shell script
+    std::fs::write("test/complete_test/testfile", "#!/bin/sh").unwrap();
     let testfile = CString::new("test/complete_test/testfile").unwrap();
     assert_eq!(unsafe { libc::chmod(testfile.as_ptr(), 0o700,) }, 0);
     std::fs::create_dir_all("test/complete_test/foo1").unwrap();
@@ -139,12 +141,16 @@ fn test_complete() {
     assert_eq!(completions.len(), 1);
     assert_eq!(completions[0].completion, L!("space"));
 
-    completions = do_complete(
-        L!(": test/complete_test/colon:"),
-        CompletionRequestOptions::default(),
-    );
-    assert_eq!(completions.len(), 1);
-    assert_eq!(completions[0].completion, L!("abc"));
+    #[cfg(not(cygwin))]
+    // Backslashes and colons are not legal filename characters on WIN32/CYGWIN
+    {
+        completions = do_complete(
+            L!(": test/complete_test/colon:"),
+            CompletionRequestOptions::default(),
+        );
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].completion, L!("abc"));
+    }
 
     macro_rules! unique_completion_applies_as {
         ( $cmdline:expr, $completion_result:expr, $applied:expr $(,)? ) => {
@@ -187,7 +193,8 @@ fn test_complete() {
         "test/complete_test/bracket[abc]",
         "echo (ls 'test/complete_test/bracket[abc]' ",
     );
-    #[cfg(not(windows))] // Square brackets are not legal path characters on WIN32/CYGWIN
+    #[cfg(not(cygwin))]
+    // Backslashes are not legal filename characters on WIN32/CYGWIN
     {
         unique_completion_applies_as!(
             r"touch test/complete_test/gnarlybracket\\[",
@@ -201,7 +208,8 @@ fn test_complete() {
         );
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(cygwin))]
+    // Colons are not legal filename characters on WIN32/CYGWIN
     {
         unique_completion_applies_as!(
             r"touch test/complete_test/colon",
@@ -529,7 +537,7 @@ fn test_autosuggest_suggest_special() {
     std::fs::create_dir_all("test/autosuggest_test/1foo bar").unwrap();
     std::fs::create_dir_all("test/autosuggest_test/2foo  bar").unwrap();
     // Cygwin disallows backslashes in filenames.
-    #[cfg(not(windows))]
+    #[cfg(not(cygwin))]
     std::fs::create_dir_all("test/autosuggest_test/3foo\\bar").unwrap();
     // a path with a single quote
     std::fs::create_dir_all("test/autosuggest_test/4foo'bar").unwrap();
@@ -549,9 +557,16 @@ fn test_autosuggest_suggest_special() {
     std::fs::create_dir_all("test/autosuggest_test/start/unique2/.hiddenDir/moreStuff").unwrap();
 
     // Ensure symlink don't cause us to chase endlessly.
-    std::fs::create_dir_all("test/autosuggest_test/has_loop/loopy").unwrap();
-    let _ = std::fs::remove_file("test/autosuggest_test/has_loop/loopy/loop");
-    std::os::unix::fs::symlink("../loopy", "test/autosuggest_test/has_loop/loopy/loop").unwrap();
+    // Symbolic link is complicated on Windows/Cygwin (see winsymlinks). The behavior
+    // depends on the env var CYGWIN (or MSYS). Currently, the default is to copy
+    // the target, which will fail with recursive symlinks
+    #[cfg(not(cygwin))]
+    {
+        std::fs::create_dir_all("test/autosuggest_test/has_loop/loopy").unwrap();
+        let _ = std::fs::remove_file("test/autosuggest_test/has_loop/loopy/loop");
+        std::os::unix::fs::symlink("../loopy", "test/autosuggest_test/has_loop/loopy/loop")
+            .unwrap();
+    }
 
     let wd = "test/autosuggest_test";
 
@@ -570,7 +585,8 @@ fn test_autosuggest_suggest_special() {
     perform_one_autosuggestion_cd_test!("cd test/autosuggest_test/2", "foo  bar/", &vars);
     perform_one_autosuggestion_cd_test!("cd \"test/autosuggest_test/2", "foo  bar/", &vars);
     perform_one_autosuggestion_cd_test!("cd 'test/autosuggest_test/2", "foo  bar/", &vars);
-    #[cfg(not(windows))]
+    #[cfg(not(cygwin))]
+    // Windows does not allow backslashes in filenames
     {
         perform_one_autosuggestion_cd_test!("cd test/autosuggest_test/3", "foo\\bar/", &vars);
         perform_one_autosuggestion_cd_test!("cd \"test/autosuggest_test/3", "foo\\bar/", &vars);
@@ -595,6 +611,8 @@ fn test_autosuggest_suggest_special() {
         &vars
     );
 
+    #[cfg(not(cygwin))]
+    // We skipped the creation of `loopy/loop` above
     perform_one_autosuggestion_cd_test!("cd test/autosuggest_test/has_loop/", "loopy/loop/", &vars);
 
     parser.pushd(wd);
@@ -607,7 +625,8 @@ fn test_autosuggest_suggest_special() {
     perform_one_autosuggestion_cd_test!("cd 2", "foo  bar/", &vars);
     perform_one_autosuggestion_cd_test!("cd \"2", "foo  bar/", &vars);
     perform_one_autosuggestion_cd_test!("cd '2", "foo  bar/", &vars);
-    #[cfg(not(windows))]
+    #[cfg(not(cygwin))]
+    // Windows does not allow backslashes in filenames
     {
         perform_one_autosuggestion_cd_test!("cd 3", "foo\\bar/", &vars);
         perform_one_autosuggestion_cd_test!("cd \"3", "foo\\bar/", &vars);
