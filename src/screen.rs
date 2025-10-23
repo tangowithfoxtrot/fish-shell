@@ -155,7 +155,7 @@ pub struct ScreenData {
     screen_width: Option<usize>,
 
     /// Virtual cursor position used for writing to `line_datas`,
-    /// and also the viewport final cursor position.
+    /// and also final cursor position from the start of rendered commandline.
     cursor: Cursor,
 
     /// Number of prompt lines rendered on the screen.
@@ -327,14 +327,11 @@ impl Screen {
         self.check_status();
 
         // Completely ignore impossibly small screens.
-        if screen_width < 4 {
+        if screen_width < 4 || screen_height == 0 {
             return;
         }
         let screen_width = usize::try_from(screen_width).unwrap();
-        if screen_height == 0 {
-            return;
-        }
-        let screen_height = usize::try_from(curr_termsize.height).unwrap();
+        let screen_height = usize::try_from(screen_height).unwrap();
 
         // Compute a layout.
         let layout = compute_layout(
@@ -358,7 +355,7 @@ impl Screen {
         self.desired.cursor.y = layout.left_prompt_lines - 1;
 
         self.desired.clear_lines();
-        self.desired.resize(self.desired.cursor.y);
+        self.desired.resize(layout.left_prompt_lines);
 
         // Append spaces for the left prompt.
         let prompt_offset = if pager.search_field_shown {
@@ -367,7 +364,7 @@ impl Screen {
             CharOffset::Pointer(0)
         };
         for _ in 0..layout.left_prompt_space {
-            let _ = self.desired_append_char(
+            self.desired_append_char(
                 prompt_offset,
                 usize::MAX,
                 ' ',
@@ -379,7 +376,7 @@ impl Screen {
         }
 
         // If the prompt doesn't occupy the full line, justify the command line to the end of the prompt.
-        let first_line_prompt_space = if layout.left_prompt_space == screen_width {
+        let commandline_indent = if layout.left_prompt_space == screen_width {
             0
         } else {
             layout.left_prompt_space
@@ -392,7 +389,7 @@ impl Screen {
 
         // Output the command line.
         let mut i = 0;
-        assert!((0..=effective_commandline.len()).contains(&cursor_pos));
+        assert!(cursor_pos <= effective_commandline.len());
         let scrolled_cursor = loop {
             // Grab the current cursor's x,y position if this character matches the cursor's offset.
             if i == cursor_pos {
@@ -443,7 +440,7 @@ impl Screen {
                 effective_commandline.as_char_slice()[i],
                 colors[i],
                 usize::try_from(indent[i]).unwrap(),
-                first_line_prompt_space,
+                commandline_indent,
                 wcwidth_rendered_min_0(effective_commandline.as_char_slice()[i]),
             ) {
                 break scrolled_cursor.unwrap();
@@ -452,12 +449,11 @@ impl Screen {
         };
 
         // Add an empty line if there are no lines or if the last line was soft wrapped (but not by autosuggestion).
-        if self.desired.line_datas.last().is_none_or(|line| {
-            line.len() == screen_width
-                && (commandline.is_empty()
-                    || autosuggestion.is_empty()
-                    || !explicit_after_suggestion.is_empty())
-        }) {
+        if self.desired.line_datas.last().unwrap().len() == screen_width
+            && (commandline.is_empty()
+                || autosuggestion.is_empty()
+                || !explicit_after_suggestion.is_empty())
+        {
             self.desired.add_line();
         }
 
@@ -498,10 +494,8 @@ impl Screen {
                     mut cursor,
                     scroll_amount,
                 } = scrolled_cursor;
-                if scroll_amount != 0 {
-                    if !is_final_rendering {
-                        self.desired.line_datas = self.desired.line_datas.split_off(scroll_amount);
-                    }
+                if scroll_amount != 0 && !is_final_rendering {
+                    self.desired.line_datas = self.desired.line_datas.split_off(scroll_amount);
                     cursor.y -= scroll_amount;
                 }
                 cursor
@@ -754,8 +748,9 @@ impl Screen {
     pub fn cursor_is_wrapped_to_own_line(&self) -> bool {
         // Don't consider dumb terminals to have wrapping for the purposes of this function.
         self.actual.cursor.x == 0
-            && self.actual.cursor.y != 0
+            && self.actual.cursor.y + 1 != self.actual.visible_prompt_lines
             && self.actual.cursor.y + 1 == self.actual.line_count()
+            && self.actual.line(self.actual.cursor.y - 1).is_soft_wrapped
             && !is_dumb()
     }
 
@@ -1325,7 +1320,7 @@ impl Screen {
         // Don't do it when running in midnight_commander because of
         // https://midnight-commander.org/ticket/4258.
         if !MIDNIGHT_COMMANDER_HACK.load() {
-            self.r#move(0, 0);
+            self.r#move(0, self.actual.cursor.y);
         }
 
         // Clear remaining lines (if any) if we haven't cleared the screen.

@@ -1,7 +1,7 @@
 #RUN: %fish %s
 #REQUIRES: command -v tmux
 
-set -g isolated_tmux_fish_extra_args -C '
+isolated-tmux-start -C '
     function fish_prompt
         if set -q transient
             printf "> "
@@ -12,8 +12,6 @@ set -g isolated_tmux_fish_extra_args -C '
     end
     bind ctrl-j "set transient true; commandline -f repaint execute"
 '
-
-isolated-tmux-start
 
 isolated-tmux send-keys 'echo foo' C-j
 tmux-sleep
@@ -28,8 +26,9 @@ isolated-tmux send-keys C-u '
     function fish_prompt
         printf "\$ "
     end
-' C-l
-isolated-tmux send-keys Enter Enter
+'
+tmux-sleep
+isolated-tmux send-keys C-l Enter Enter
 tmux-sleep
 isolated-tmux capture-pane -p
 # CHECK: $
@@ -45,8 +44,9 @@ isolated-tmux send-keys C-u C-l '
             printf "transient line%d\n" 1 2
         end
     end
-' C-l
-isolated-tmux send-keys Enter
+'
+tmux-sleep
+isolated-tmux send-keys C-l Enter
 tmux-sleep
 isolated-tmux capture-pane -p
 # CHECK: final line1
@@ -65,8 +65,9 @@ isolated-tmux send-keys C-u C-l '
             echo "1> "
         end
     end
-' C-l
-isolated-tmux send-keys 'echo foo' Enter
+'
+tmux-sleep
+isolated-tmux send-keys C-l 'echo foo' Enter
 tmux-sleep
 isolated-tmux capture-pane -p
 # CHECK: 2> echo foo
@@ -78,7 +79,7 @@ isolated-tmux capture-pane -p
 # final.
 isolated-tmux send-keys C-u C-l
 isolated-tmux send-keys 'echo foo \\' Enter
-isolated-tmux send-keys 'bar' Enter
+isolated-tmux send-keys bar Enter
 tmux-sleep
 isolated-tmux capture-pane -p
 # CHECK: 2> echo foo \
