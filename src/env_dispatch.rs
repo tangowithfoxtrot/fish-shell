@@ -148,8 +148,8 @@ fn handle_timezone(var_name: &wstr, vars: &EnvStack) {
         unsetenv_lock(var_name);
     }
 
-    extern "C" {
-        fn tzset();
+    unsafe extern "C" {
+        unsafe fn tzset();
     }
 
     unsafe {
@@ -459,7 +459,7 @@ fn init_terminal(vars: &EnvStack) {
     let term = vars.get(L!("TERM"));
     let term = term
         .as_ref()
-        .and_then(|v| v.as_list().get(0))
+        .and_then(|v| v.as_list().first())
         .map(|v| v.as_utfstr())
         .unwrap_or(L!(""));
 
