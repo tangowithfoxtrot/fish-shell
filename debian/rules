@@ -8,13 +8,15 @@ export DH_VERBOSE=1
 export DEB_BUILD_MAINT_OPTIONS=optimize=-lto
 
 %:
-	dh $@
+	dh $@ --buildsystem=cmake --builddirectory=build
 
 # Setting the build system is still required, because otherwise the GNUmakefile gets picked up
 override_dh_auto_configure:
 	ln -s cargo-vendor/vendor vendor
 	ln -s cargo-vendor/.cargo .cargo
-	dh_auto_configure --buildsystem=cmake -- -DCMAKE_BUILD_TYPE=RelWithDebInfo
+	dh_auto_configure -- -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+	  -DRust_CARGO=$$(command -v cargo-1.85 || command -v cargo) \
+	  -DRust_COMPILER=$$(command -v rustc-1.85 || command -v rustc)
 
 override_dh_clean:
 	dh_clean --exclude=Cargo.toml.orig
@@ -22,4 +24,4 @@ override_dh_clean:
 	-unlink vendor
 
 override_dh_auto_test:
-	make fish_run_tests
+	cd build && make fish_run_tests
