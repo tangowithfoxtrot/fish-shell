@@ -1,3 +1,4 @@
+# Version set by updatecli.d/docker.yml
 FROM alpine:3.22
 LABEL org.opencontainers.image.source=https://github.com/fish-shell/fish-shell
 

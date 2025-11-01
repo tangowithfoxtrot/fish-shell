@@ -38,13 +38,10 @@ fn embed_localizations(cache_dir: &Path) {
     match Command::new("msgfmt").arg("-h").output() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             rsconf::warn!(
-                "Cannot find msgfmt to build gettext message catalogs. Localization will not work."
-            );
-            rsconf::warn!(
-                "If you install it now you need to trigger a rebuild to get localization support."
-            );
-            rsconf::warn!(
-                "One way to achieve that is running `touch po` followed by the build command."
+                "Could not find msgfmt required to build message catalogs. \
+                 Localization will not work. \
+                 If you install gettext now, you need to trigger a rebuild to include localization support. \
+                 For example by running `touch po` followed by the build command."
             );
         }
         Err(e) => {
@@ -94,15 +91,23 @@ fn embed_localizations(cache_dir: &Path) {
                 // Generate the map file.
 
                 // Try to create new MO data and load it into `mo_data`.
+                let mut tmp_mo_file = None;
                 let output = {
                     let mut cmd = &mut Command::new("msgfmt");
                     if has_check_format {
                         cmd = cmd.arg("--check-format");
-                    }
-                    cmd.arg("--output-file=-")
-                        .arg(&po_file_path)
-                        .output()
-                        .unwrap()
+                    } else {
+                        tmp_mo_file = Some(cache_dir.join("messages.mo"));
+                    };
+                    cmd.arg(format!(
+                        "--output-file={}",
+                        tmp_mo_file
+                            .as_ref()
+                            .map_or("-", |path| path.to_str().unwrap())
+                    ))
+                    .arg(&po_file_path)
+                    .output()
+                    .unwrap()
                 };
                 if !output.status.success() {
                     panic!(
@@ -110,7 +115,8 @@ fn embed_localizations(cache_dir: &Path) {
                         String::from_utf8(output.stderr).unwrap()
                     );
                 }
-                let mo_data = output.stdout;
+                let mo_data =
+                    tmp_mo_file.map_or(output.stdout, |path| std::fs::read(path).unwrap());
 
                 // Extract map from MO data.
                 let language_localizations = parse_mo_file(&mo_data).unwrap();

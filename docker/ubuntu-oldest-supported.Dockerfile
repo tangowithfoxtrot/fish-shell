@@ -1,3 +1,4 @@
+# Version set by updatecli.d/docker.yml
 FROM ubuntu:22.04
 LABEL org.opencontainers.image.source=https://github.com/fish-shell/fish-shell
 
@@ -33,11 +34,9 @@ RUN groupadd -g 1000 fishuser \
 USER fishuser
 WORKDIR /home/fishuser
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup.sh \
+RUN curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs > /tmp/rustup.sh \
   && sh /tmp/rustup.sh -y --no-modify-path
 ENV PATH=/home/fishuser/.cargo/bin:$PATH
-
-RUN echo $PATH
 
 COPY fish_run_tests.sh /
 

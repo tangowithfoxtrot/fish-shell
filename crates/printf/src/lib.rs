@@ -6,7 +6,6 @@ mod fmt_fp;
 mod printf_impl;
 pub use printf_impl::{Error, FormatString, sprintf_locale};
 pub mod locale;
-pub use locale::{C_LOCALE, EN_US_LOCALE, Locale};
 
 #[cfg(test)]
 mod tests;
