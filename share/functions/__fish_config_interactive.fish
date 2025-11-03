@@ -136,7 +136,7 @@ end" >$__fish_config_dir/config.fish
         # Guidance from the VTE developers is to let them repaint.
         # Konsole reflows since version 21.04. Konsole added XTVERSION
         # in v22.03.80~7.
-        if string match -rq -- (status terminal) '^(?:VTE\b|Konsole |WezTerm )'
+        if string match -rq -- '^(?:VTE\b|Konsole |WezTerm )' (status terminal)
             or begin
                 set -q KONSOLE_VERSION
                 and test "$KONSOLE_VERSION" -ge 210400 2>/dev/null
@@ -164,6 +164,9 @@ end" >$__fish_config_dir/config.fish
             # end
             if set -q KONSOLE_VERSION
                 set host ''
+            end
+            if [ -n "$MSYSTEM" ] && string match -rq -- '^(Konsole|WezTerm) ' (status terminal)
+                return
             end
             if [ "$TERM" = dumb ]
                 return
