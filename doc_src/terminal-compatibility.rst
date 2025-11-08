@@ -177,7 +177,8 @@ Optional Commands
        and the second parameter is the column number.
        Both start at 1.
 
-       This is used by the :ref:`scrollback-push <special-input-functions-scrollback-push>` special input function,
+       This is used for truncating multiline autosuggestions at the screen's bottom edge,
+       by the :ref:`scrollback-push <special-input-functions-scrollback-push>` special input function,
        and inside terminals that implement the OSC 133 :ref:`click_events <term-compat-osc-133>` feature.
    * - ``\e[ \x20 q``
      - Se
@@ -285,3 +286,13 @@ Or add this to your ``config.fish``::
         commandline -f repaint
         functions --erase GNU-screen-workaround
     end
+
+Unicode Codepoints
+------------------
+
+By default, fish outputs the following non-ASCII characters::
+
+    × ► ¶ ⏎ • ● … μ – ’ ‘ “ ” ← → ↑ ↓
+
+as well as control pictures (U+2400 through U+241F),
+and locale-specific ones in :ref:`translated strings <variables-locale>`.

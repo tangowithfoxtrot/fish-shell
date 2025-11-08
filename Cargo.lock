@@ -164,6 +164,7 @@ dependencies = [
  "fish-gettext-maps",
  "fish-gettext-mo-file-parser",
  "fish-printf",
+ "fish-tempfile",
  "libc",
  "lru",
  "macro_rules_attribute",
@@ -228,6 +229,13 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "widestring",
+]
+
+[[package]]
+name = "fish-tempfile"
+version = "0.0.0"
+dependencies = [
+ "nix",
 ]
 
 [[package]]
