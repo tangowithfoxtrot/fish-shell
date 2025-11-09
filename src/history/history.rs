@@ -31,7 +31,6 @@ use std::{
     fs::File,
     io::{BufRead, Read, Write},
     mem::MaybeUninit,
-    num::NonZeroUsize,
     ops::ControlFlow,
     sync::{Arc, Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -50,7 +49,7 @@ use crate::{
     fds::wopen_cloexec,
     flog::{FLOG, FLOGF},
     fs::fsync,
-    history::file::{HistoryFileContents, append_history_item_to_buffer},
+    history::file::{HistoryFile, RawHistoryFile, append_history_item_to_buffer},
     io::IoStreams,
     operation_context::{EXPANSION_LIMIT_BACKGROUND, OperationContext},
     parse_constants::{ParseTreeFlags, StatementDecoration},
@@ -63,8 +62,6 @@ use crate::{
     wildcard::{ANY_STRING, wildcard_match},
     wutil::{FileId, INVALID_FILE_ID, file_id_for_file, wgettext_fmt, wrealpath, wstat, wunlink},
 };
-
-mod file;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchType {
@@ -103,24 +100,14 @@ pub enum SearchDirection {
     Backward,
 }
 
-use self::file::time_to_seconds;
-
-// Our history format is intended to be valid YAML. Here it is:
-//
-//   - cmd: ssh blah blah blah
-//     when: 2348237
-//     paths:
-//       - /path/to/something
-//       - /path/to/something_else
-//
-//   Newlines are replaced by \n. Backslashes are replaced by \\.
+use super::file::time_to_seconds;
 
 /// This is the history session ID we use by default if the user has not set env var fish_history.
 const DFLT_FISH_HISTORY_SESSION_ID: &wstr = L!("fish");
 
 /// When we rewrite the history, the number of items we keep.
 // FIXME: https://github.com/rust-lang/rust/issues/67441
-const HISTORY_SAVE_MAX: NonZeroUsize = NonZeroUsize::new(1024 * 256).unwrap();
+const HISTORY_SAVE_MAX: usize = 1024 * 256;
 
 /// Default buffer size for flushing to the history file.
 const HISTORY_OUTPUT_BUFFER_SIZE: usize = 64 * 1024;
@@ -193,7 +180,6 @@ impl LruCacheExt for LruCache<WString, HistoryItem> {
 }
 
 pub type PathList = Vec<WString>;
-pub type HistoryIdentifier = u64;
 
 #[derive(Clone, Debug)]
 pub struct HistoryItem {
@@ -203,8 +189,6 @@ pub struct HistoryItem {
     creation_timestamp: SystemTime,
     /// Paths that we require to be valid for this item to be autosuggested.
     required_paths: Vec<WString>,
-    /// Sometimes unique identifier used for hinting.
-    identifier: HistoryIdentifier,
     /// Whether to write this item to disk.
     persist_mode: PersistenceMode,
 }
@@ -215,14 +199,12 @@ impl HistoryItem {
     pub fn new(
         s: WString,
         when: SystemTime,              /*=0*/
-        ident: HistoryIdentifier,      /*=0*/
         persist_mode: PersistenceMode, /*=Disk*/
     ) -> Self {
         Self {
             contents: s,
             creation_timestamp: when,
             required_paths: vec![],
-            identifier: ident,
             persist_mode,
         }
     }
@@ -314,9 +296,6 @@ impl HistoryItem {
         if self.required_paths.len() < item.required_paths.len() {
             self.required_paths = item.required_paths.clone();
         }
-        if self.identifier < item.identifier {
-            self.identifier = item.identifier;
-        }
         true
     }
 }
@@ -341,8 +320,8 @@ struct HistoryImpl {
     /// Boolean describes if it should be deleted only in this session or in all
     /// (used in deduplication).
     deleted_items: HashMap<WString, bool>,
-    /// The buffer containing the history file contents.
-    file_contents: Option<HistoryFileContents>,
+    /// The history file contents.
+    file_contents: Option<HistoryFile>,
     /// The file ID of the history file.
     history_file_id: FileId, // INVALID_FILE_ID
     /// The boundary timestamp distinguishes old items from new items. Items whose timestamps are <=
@@ -350,14 +329,8 @@ struct HistoryImpl {
     /// ignored by this instance (unless they came from this instance). The timestamp may be adjusted
     /// by incorporate_external_changes().
     boundary_timestamp: SystemTime,
-    /// The most recent "unique" identifier for a history item.
-    last_identifier: HistoryIdentifier, // 0
     /// How many items we add until the next vacuum. Initially a random value.
     countdown_to_vacuum: Option<usize>,
-    /// Whether we've loaded old items.
-    loaded_old: bool, // false
-    /// List of old items, as offsets into out mmap data.
-    old_item_offsets: Vec<usize>,
     /// Thread pool for background operations.
     thread_pool: Arc<ThreadPool>,
 }
@@ -424,8 +397,6 @@ impl HistoryImpl {
     fn clear_file_state(&mut self) {
         // Erase everything we know about our file.
         self.file_contents = None;
-        self.loaded_old = false;
-        self.old_item_offsets.clear();
     }
 
     /// Returns a timestamp for new items - see the implementation for a subtlety.
@@ -447,49 +418,35 @@ impl HistoryImpl {
         when
     }
 
-    /// Returns a new item identifier, incrementing our counter.
-    fn next_identifier(&mut self) -> HistoryIdentifier {
-        self.last_identifier += 1;
-        self.last_identifier
-    }
-
-    /// Figure out the offsets of our file contents.
-    fn populate_from_file_contents(&mut self) {
-        self.old_item_offsets.clear();
-        if let Some(file_contents) = &self.file_contents {
-            let mut cursor = 0;
-            while let Some(offset) =
-                file_contents.offset_of_next_item(&mut cursor, Some(self.boundary_timestamp))
-            {
-                // Remember this item.
-                self.old_item_offsets.push(offset);
-            }
-        }
-
-        FLOGF!(history, "Loaded %u old items", self.old_item_offsets.len());
-    }
-
     /// Loads old items if necessary.
-    fn load_old_if_needed(&mut self) {
-        if self.loaded_old {
-            return;
-        }
-        self.loaded_old = true;
+    /// Return a reference to the loaded history file.
+    fn load_old_if_needed(&mut self) -> &HistoryFile {
+        if self.file_contents.is_some() {
+            return self.file_contents.as_ref().unwrap();
+        };
+        let Ok(Some(history_path)) = self.history_file_path() else {
+            return self.file_contents.insert(HistoryFile::create_empty());
+        };
 
         let _profiler = TimeProfiler::new("load_old");
-        if let Ok(Some(history_path)) = self.history_file_path() {
-            match lock_and_load(&history_path, HistoryFileContents::create) {
-                Ok((file_id, file_contents)) => {
-                    self.file_contents = Some(file_contents);
-                    self.history_file_id = file_id;
-                    let _profiler = TimeProfiler::new("populate_from_file_contents");
-                    self.populate_from_file_contents();
-                }
-                Err(e) => {
-                    FLOG!(history_file, "Error reading from history file:", e);
-                }
+        let file_contents = match lock_and_load(&history_path, RawHistoryFile::create) {
+            Ok((file_id, history_file)) => {
+                self.history_file_id = file_id;
+                let _profiler = TimeProfiler::new("populate_from_file_contents");
+                let file_contents = history_file.decode(Some(self.boundary_timestamp));
+                FLOGF!(
+                    history,
+                    "Loaded %u old items",
+                    file_contents.offsets().len()
+                );
+                file_contents
             }
-        }
+            Err(e) => {
+                FLOG!(history_file, "Error reading from history file:", e);
+                HistoryFile::create_empty()
+            }
+        };
+        self.file_contents.insert(file_contents)
     }
 
     /// Deletes duplicates in new_items.
@@ -545,13 +502,13 @@ impl HistoryImpl {
         // We are reading FROM existing_file and writing TO dst
 
         // Make an LRU cache to save only the last N elements.
-        let mut lru = LruCache::new(HISTORY_SAVE_MAX);
+        let mut lru = LruCache::new(HISTORY_SAVE_MAX.try_into().unwrap());
 
         // Read in existing items (which may have changed out from underneath us, so don't trust our
         // old file contents).
-        if let Ok(local_file) = HistoryFileContents::create(existing_file) {
-            let mut cursor = 0;
-            while let Some(offset) = local_file.offset_of_next_item(&mut cursor, None) {
+        let file_id = file_id_for_file(existing_file);
+        if let Ok(local_file) = RawHistoryFile::create(existing_file, file_id) {
+            for offset in local_file.offsets(None) {
                 // Try decoding an old item.
                 let Some(old_item) = local_file.decode_item(offset) else {
                     continue;
@@ -808,10 +765,7 @@ impl HistoryImpl {
             file_contents: None,
             history_file_id: INVALID_FILE_ID,
             boundary_timestamp: SystemTime::now(),
-            last_identifier: 0,
             countdown_to_vacuum: None,
-            loaded_old: false,
-            old_item_offsets: Vec::new(),
             // Up to 8 threads, no soft min.
             thread_pool: ThreadPool::new(0, 8),
         }
@@ -830,9 +784,9 @@ impl HistoryImpl {
             return false;
         }
 
-        if self.loaded_old {
+        if let Some(file_contents) = &self.file_contents {
             // If we've loaded old items, see if we have any offsets.
-            self.old_item_offsets.is_empty()
+            file_contents.is_empty()
         } else {
             // If we have not loaded old items, don't actually load them (which may be expensive); just
             // stat the file and see if it exists and is nonempty.
@@ -892,7 +846,7 @@ impl HistoryImpl {
         self.new_items.clear();
         self.deleted_items.clear();
         self.first_unwritten_new_item_index = 0;
-        self.old_item_offsets.clear();
+        self.file_contents = None;
         if let Ok(Some(filename)) = self.history_file_path() {
             wunlink(&filename);
         }
@@ -975,7 +929,7 @@ impl HistoryImpl {
             // Add this line if it doesn't contain anything we know we can't handle.
             if should_import_bash_history_line(&wide_line) {
                 self.add(
-                    HistoryItem::new(wide_line, when, 0, PersistenceMode::Disk),
+                    HistoryItem::new(wide_line, when, PersistenceMode::Disk),
                     /*pending=*/ false,
                     /*do_save=*/ false,
                 );
@@ -1032,9 +986,9 @@ impl HistoryImpl {
         }
 
         // Append old items.
-        self.load_old_if_needed();
-        for &offset in self.old_item_offsets.iter().rev() {
-            let Some(item) = self.file_contents.as_ref().unwrap().decode_item(offset) else {
+        let file_contents = self.load_old_if_needed();
+        for &offset in file_contents.offsets().iter().rev() {
+            let Some(item) = file_contents.decode_item(offset) else {
                 continue;
             };
             if seen.insert(item.str().to_owned()) {
@@ -1068,16 +1022,13 @@ impl HistoryImpl {
         result
     }
 
-    /// Sets the valid file paths for the history item with the given identifier.
-    fn set_valid_file_paths(&mut self, valid_file_paths: Vec<WString>, ident: HistoryIdentifier) {
-        // 0 identifier is used to mean "not necessary".
-        if ident == 0 {
-            return;
-        }
-
+    /// Sets the valid file paths for the history item matching the snapshotted item.
+    fn set_valid_file_paths(&mut self, valid_file_paths: Vec<WString>, snapshot: &HistoryItem) {
         // Look for an item with the given identifier. It is likely to be at the end of new_items.
         for item in self.new_items.iter_mut().rev() {
-            if item.identifier == ident {
+            if item.creation_timestamp == snapshot.creation_timestamp
+                && item.contents == snapshot.contents
+            {
                 // found it
                 item.required_paths = valid_file_paths;
                 break;
@@ -1110,18 +1061,17 @@ impl HistoryImpl {
 
         // Now look in our old items.
         idx -= resolved_new_item_count;
-        self.load_old_if_needed();
-        if let Some(file_contents) = &self.file_contents {
-            let old_item_count = self.old_item_offsets.len();
-            if idx < old_item_count {
-                // idx == 0 corresponds to last item in old_item_offsets.
-                let offset = self.old_item_offsets[old_item_count - idx - 1];
-                return file_contents.decode_item(offset).map(Cow::Owned);
-            }
+        let file_contents = self.load_old_if_needed();
+        let old_item_offsets = file_contents.offsets();
+        let old_item_count = old_item_offsets.len();
+        if idx < old_item_count {
+            // idx == 0 corresponds to last item in old_item_offsets.
+            let offset = old_item_offsets[old_item_count - idx - 1];
+            return file_contents.decode_item(offset).map(Cow::Owned);
         }
 
         // Index past the valid range, so return None.
-        return None;
+        None
     }
 
     /// Return the number of history entries.
@@ -1130,9 +1080,8 @@ impl HistoryImpl {
         if self.has_pending_item && new_item_count > 0 {
             new_item_count -= 1;
         }
-        self.load_old_if_needed();
-        let old_item_count = self.old_item_offsets.len();
-        return new_item_count + old_item_count;
+        let old_item_offsets = self.load_old_if_needed().offsets();
+        new_item_count + old_item_offsets.len()
     }
 }
 
@@ -1262,7 +1211,7 @@ impl History {
     pub fn add_commandline(&self, s: WString) {
         let mut imp = self.imp();
         let when = imp.timestamp_now();
-        let item = HistoryItem::new(s, when, 0, PersistenceMode::Disk);
+        let item = HistoryItem::new(s, when, PersistenceMode::Disk);
         imp.add(item, false, true)
     }
 
@@ -1355,8 +1304,7 @@ impl History {
 
         // Make our history item.
         let when = imp.timestamp_now();
-        let identifier = imp.next_identifier();
-        let item = HistoryItem::new(s.to_owned(), when, identifier, persist_mode);
+        let item = HistoryItem::new(s.to_owned(), when, persist_mode);
         let to_disk = persist_mode == PersistenceMode::Disk;
 
         if wants_file_detection {
@@ -1365,15 +1313,18 @@ impl History {
             // Add the item. Then check for which paths are valid on a background thread,
             // and unblock the item.
             // Don't hold the lock while we perform this file detection.
+            let snapshot_item = item.clone();
             imp.add(item, /*pending=*/ true, to_disk);
             let thread_pool = Arc::clone(&imp.thread_pool);
             drop(imp);
             let vars_snapshot = vars.snapshot();
             thread_pool.perform(move || {
                 // Don't hold the lock while we perform this file detection.
-                let validated_paths = expand_and_detect_paths(potential_paths, &vars_snapshot);
+                let valid_file_paths = expand_and_detect_paths(potential_paths, &vars_snapshot);
                 let mut imp = self.imp();
-                imp.set_valid_file_paths(validated_paths, identifier);
+                if !valid_file_paths.is_empty() {
+                    imp.set_valid_file_paths(valid_file_paths, &snapshot_item);
+                }
                 imp.enable_automatic_saving();
                 if to_disk {
                     imp.save_unless_disabled();
@@ -1993,7 +1944,7 @@ mod tests {
                 .collect();
 
             // Record this item.
-            let mut item = HistoryItem::new(value, SystemTime::now(), 0, PersistenceMode::Disk);
+            let mut item = HistoryItem::new(value, SystemTime::now(), PersistenceMode::Disk);
             item.set_required_paths(paths);
             before.push_back(item.clone());
             history.add(item, false);
@@ -2376,7 +2327,7 @@ mod tests {
         );
         history.resolve_pending();
 
-        const hist_size: usize = 9;
+        const HIST_SIZE: usize = 9;
         assert_eq!(history.size(), 9);
 
         // Expected sets of paths.
@@ -2395,9 +2346,9 @@ mod tests {
         let maxlap = 128;
         for _lap in 0..maxlap {
             let mut failures = 0;
-            for i in 1..=hist_size {
+            for i in 1..=HIST_SIZE {
                 if history.item_at_index(i).unwrap().get_required_paths()
-                    != expected_paths[hist_size - i]
+                    != expected_paths[HIST_SIZE - i]
                 {
                     failures += 1;
                 }
