@@ -6,69 +6,50 @@ if not command -qs man
 end
 
 function man
-    # Work around the "builtin" manpage that everything symlinks to,
-    # by prepending our fish datadir to man. This also ensures that man gives fish's
-    # man pages priority, without having to put fish's bin directories first in $PATH.
+    # If we have an embedded page, reuse a function that happens to do the
+    # right thing.
+    if not set -q argv[2] &&
+            status list-files "man/man1/$(__fish_canonicalize_builtin $argv).1" &>/dev/null
+        __fish_print_help $argv[1]
+        return
+    end
 
-    # Preserve the existing MANPATH, and default to the system path (the empty string).
     set -l manpath
-    if set -q MANPATH
-        set manpath $MANPATH
-    else if set -l p (command man -p 2>/dev/null)
-        # NetBSD's man uses "-p" to print the path.
-        # FreeBSD's man also has a "-p" option, but that requires an argument.
-        # Other mans (men?) don't seem to have it.
-        #
-        # Unfortunately NetBSD prints things like "/usr/share/man/man1",
-        # while not allowing them as $MANPATH components.
-        # What it needs is just "/usr/share/man".
-        #
-        # So we strip the last component.
-        # This leaves a few wrong directories, but that should be harmless.
-        set manpath (string replace -r '[^/]+$' '' $p)
-    else
-        set manpath ''
-    end
-    # Notice the shadowing local exported copy of the variable.
-    set -lx MANPATH $manpath
-
-    # Prepend fish's man directory if available.
     if not __fish_is_standalone
-        set -l fish_manpath $__fish_data_dir/man
-        if test -d $fish_manpath
-            set MANPATH $fish_manpath $MANPATH
-        end
-    end
+        and set -l fish_manpath (path filter -d $__fish_data_dir/man)
+        # Prepend fish's man directory if available.
 
-    if test (count $argv) -eq 1
-        # Some of these don't have their own page,
-        # and adding one would be awkward given that the filename
-        # isn't guaranteed to be allowed.
-        # So we override them with the good name.
-        switch $argv
-            case !
-                set argv not
-            case .
-                set argv source
-            case :
-                set argv true
-            case '['
-                set argv test
-            case '{'
-                set argv begin
-        end
-    end
+        # Work around the "builtin" manpage that everything symlinks to,
+        # by prepending our fish datadir to man. This also ensures that man gives fish's
+        # man pages priority, without having to put fish's bin directories first in $PATH.
 
-    if not set -q argv[2] && status list-files "man/man1/$argv[1].1" &>/dev/null
-        set -l basename $argv[1].1
-        function __fish_man -V basename -a man1
-            # mandoc man needs "-l" or it'll refuse to open a file
-            command man -l $man1/$basename
+        # Preserve the existing MANPATH, and default to the system path (the empty string).
+        set manpath $fish_manpath (
+            if set -q MANPATH
+                string join -- \n $MANPATH
+            else if set -l p (command man -p 2>/dev/null)
+                # NetBSD's man uses "-p" to print the path.
+                # FreeBSD's man also has a "-p" option, but that requires an argument.
+                # Other mans (men?) don't seem to have it.
+                #
+                # Unfortunately NetBSD prints things like "/usr/share/man/man1",
+                # while not allowing them as $MANPATH components.
+                # What it needs is just "/usr/share/man".
+                #
+                # So we strip the last component.
+                # This leaves a few wrong directories, but that should be harmless.
+                string replace -r '[^/]+$' '' $p
+            else
+                echo ''
+            end
+        )
+
+        if test (count $argv) -eq 1
+            set argv (__fish_canonicalize_builtin $argv)
         end
-        __fish_data_with_directory man/man1 \
-            (string escape --style=regex -- $basename) __fish_man
-        __fish_with_status functions --erase __fish_man
-    else
-        command man $argv
     end
+    set -q manpath[1]
+    and set -lx MANPATH $manpath
+
+    command man $argv
 end
