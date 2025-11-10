@@ -24,8 +24,8 @@ use crate::{
 /// History file types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryFileType {
-    Fish2_0, // old format with just timestamp and item
-    Fish1_x, // YAML-style format
+    Fish1_x, // old format with just timestamp and item
+    Fish2_0, // YAML-style format
 }
 
 /// A type wrapping up the logic around mmap and munmap.
@@ -121,7 +121,7 @@ pub struct RawHistoryFile {
 impl RawHistoryFile {
     /// Construct a history file contents from a [`File`] reference and its file id.
     pub fn create(history_file: &File, file_id: FileId) -> std::io::Result<Self> {
-        // Check that the file is seekable, and its size.
+        // Check the file size.
         let len: usize = match file_id.size.try_into() {
             Ok(len) => len,
             Err(err) => {

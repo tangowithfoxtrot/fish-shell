@@ -13,12 +13,12 @@ mkdir -p "$relnotes_tmp/fake-workspace" "$relnotes_tmp/out"
 version=$(sed 's,^fish \(\S*\) .*,\1,; 1q' "$workspace_root/CHANGELOG.rst")
 add_stats=false
 # Skip on shallow clone (CI) for now.
-if test -z "$CI" || git -C "$workspace_root" tag | grep -q .; then {
+if test -z "$CI" || [ "$(git -C "$workspace_root" tag | wc -l)" -gt 1 ]; then {
     previous_version=$(
         cd "$workspace_root"
         git for-each-ref --format='%(objecttype) %(refname:strip=2)' refs/tags |
             awk '/tag/ {print $2}' | sort --version-sort |
-            grep -vF "$(git describe)" | tail -1
+            grep -vxF "$(git describe)" | tail -1
     )
     minor_version=${version%.*}
     previous_minor_version=${previous_version%.*}
@@ -29,13 +29,18 @@ if test -z "$CI" || git -C "$workspace_root" tag | grep -q .; then {
 {
     sed -n 1,2p <"$workspace_root/CHANGELOG.rst"
     if $add_stats; then {
+        ExtractCommitters() {
+            git log "$1" --format="%aN"
+            trailers='Co-authored-by|Signed-off-by'
+            git log "$1" --format="%b" | sed -En "/^($trailers):\s*/{s///;s/\s*<.*//;p}"
+        }
         ListCommitters() {
             comm "$@" "$relnotes_tmp/committers-then" "$relnotes_tmp/committers-now"
         }
         (
             cd "$workspace_root"
-            git log "$previous_version" --format="%aN" | sort -u >"$relnotes_tmp/committers-then"
-            git log "$previous_version".. --format="%aN" | sort -u >"$relnotes_tmp/committers-now"
+            ExtractCommitters "$previous_version" | sort -u >"$relnotes_tmp/committers-then"
+            ExtractCommitters "$previous_version".. | sort -u >"$relnotes_tmp/committers-now"
             ListCommitters -13 >"$relnotes_tmp/committers-new"
             ListCommitters -12 >"$relnotes_tmp/committers-returning"
             num_commits=$(git log --no-merges --format=%H "$previous_version".. | wc -l)
@@ -84,7 +89,7 @@ if test -z "$CI" || git -C "$workspace_root" tag | grep -q .; then {
     echo 'The file downloaded from ``Source code (tar.gz)`` will not build correctly.'
     echo 'A GPG signature using the key published at '"${FISH_GPG_PUBLIC_KEY_URL:-???}"' is available as ``fish-'"$version"'.tar.xz.asc``.'
     echo
-    echo 'The files called ``fish-'"$version"'-linux-\*.tar.xz`` contain'
+    echo 'The files called ``fish-'"$version"'-linux-*.tar.xz`` contain'
     echo '`standalone fish binaries <https://github.com/fish-shell/fish-shell/?tab=readme-ov-file#building-fish-with-cargo>`__'
     echo 'for any Linux with the given CPU architecture.'
 } >"$relnotes_tmp/fake-workspace"/CHANGELOG.rst
