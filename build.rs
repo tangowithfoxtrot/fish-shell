@@ -92,7 +92,17 @@ fn detect_cfgs(target: &mut Target) {
             target.has_symbol("localeconv_l")
         }),
         ("have_pipe2", &|target| target.has_symbol("pipe2")),
-        ("have_posix_spawn", &|target| target.has_header("spawn.h")),
+        ("have_posix_spawn", &|target| {
+            if matches!(target_os().as_str(), "openbsd" | "android") {
+                // OpenBSD's posix_spawn returns status 127 instead of erroring with ENOEXEC when faced with a
+                // shebang-less script. Disable posix_spawn on OpenBSD.
+                //
+                // Android is broken for unclear reasons
+                false
+            } else {
+                target.has_header("spawn.h")
+            }
+        }),
         ("small_main_stack", &has_small_stack),
         ("use_prebuilt_docs", &|_| {
             env_var("FISH_USE_PREBUILT_DOCS").is_some_and(|v| v == "TRUE")
