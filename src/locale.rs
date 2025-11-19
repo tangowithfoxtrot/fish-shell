@@ -57,6 +57,7 @@ unsafe fn first_char(s: *const libc::c_char) -> Option<char> {
     unsafe {
         #[allow(unused_comparisons, clippy::absurd_extreme_comparisons)]
         if !s.is_null() && *s > 0 && *s <= 127 && *s.offset(1) == 0 {
+            #[allow(clippy::unnecessary_cast)]
             Some((*s as u8) as char)
         } else {
             None
@@ -105,7 +106,7 @@ unsafe fn lconv_to_locale(lconv: &libc::lconv) -> Locale {
 }
 
 /// Read the numeric locale, or None on any failure.
-#[cfg(localeconv_l)]
+#[cfg(have_localeconv_l)]
 unsafe fn read_locale() -> Option<Locale> {
     unsafe extern "C" {
         unsafe fn localeconv_l(loc: libc::locale_t) -> *const libc::lconv;
@@ -130,7 +131,7 @@ unsafe fn read_locale() -> Option<Locale> {
     result
 }
 
-#[cfg(not(localeconv_l))]
+#[cfg(not(have_localeconv_l))]
 unsafe fn read_locale() -> Option<Locale> {
     // Bleh, we have to go through localeconv, which races with setlocale.
     // TODO: There has to be a better way to do this.

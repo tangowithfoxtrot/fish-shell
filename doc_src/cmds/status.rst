@@ -30,7 +30,7 @@ Synopsis
     status test-feature FEATURE
     status build-info
     status get-file FILE
-    status list-files [PATH]
+    status list-files [PATH ...]
     status help-sections
     status terminal
     status test-terminal-feature FEATURE
@@ -118,7 +118,7 @@ The following operations (subcommands) are available:
     as well as the man pages and themes. Which files are included depends on build settings.
     Returns 0 if the file was included, 1 otherwise.
 
-**list-files** *FILE*
+**list-files** *FILE...*
     NOTE: this subcommand is mainly intended for fish's internal use; let us know if you want to use it elsewhere.
 
     This lists the files embedded in the fish binary at compile time. Only files where the path starts with the optional *FILE* argument are shown.
@@ -137,6 +137,13 @@ The following operations (subcommands) are available:
     Prints the name and version of the terminal fish is running inside (for example as reported via :ref:`XTVERSION <term-compat-xtversion>`).
     This is not available during early startup but only starting from when the first interactive prompt is shown, possibly via builtin :doc:`read <read>`,
     so before the first ``fish_prompt`` or ``fish_read`` :ref:`event <event>`.
+
+.. _status-terminal-os:
+
+**terminal-os**
+    Prints the name of the operating system (OS) the terminal is running on, as reported via :ref:`XTGETTCAP query-os-name <term-compat-xtgettcap>`.
+    Like :ref:`status terminal <status-terminal>`, this only works once the first interactive prompt is shown.
+    Returns 1 if the OS name is not available.
 
 .. _status-test-terminal-features:
 

@@ -73,37 +73,34 @@ fn main() {
 /// `Cargo.toml`) behind a feature we just enabled.
 ///
 /// [0]: https://github.com/rust-lang/cargo/issues/5499
-#[rustfmt::skip]
 fn detect_cfgs(target: &mut Target) {
     for (name, handler) in [
-        // Ignore the first entry, it just sets up the type inference. Model new entries after the
-        // second line.
+        // Ignore the first entry, it just sets up the type inference.
         ("", &(|_: &Target| false) as &dyn Fn(&Target) -> bool),
         ("apple", &detect_apple),
         ("bsd", &detect_bsd),
-        ("using_cmake", &|_| option_env!("FISH_CMAKE_BINARY_DIR").is_some()),
-        ("use_prebuilt_docs", &|_| env_var("FISH_USE_PREBUILT_DOCS").is_some_and(|v| v == "TRUE") ),
         ("cygwin", &detect_cygwin),
-        ("small_main_stack", &has_small_stack),
-        // See if libc supports the thread-safe localeconv_l(3) alternative to localeconv(3).
-        ("localeconv_l", &|target| {
-            target.has_symbol("localeconv_l")
-        }),
-        ("FISH_USE_POSIX_SPAWN", &|target| {
-            target.has_header("spawn.h")
-        }),
-        ("HAVE_PIPE2", &|target| {
-            target.has_symbol("pipe2")
-        }),
-        ("HAVE_EVENTFD", &|target| {
+        ("have_eventfd", &|target| {
             // FIXME: NetBSD 10 has eventfd, but the libc crate does not expose it.
-            if cfg!(target_os = "netbsd") {
-                 false
-             } else {
-                 target.has_header("sys/eventfd.h")
+            if target_os() == "netbsd" {
+                false
+            } else {
+                target.has_header("sys/eventfd.h")
             }
         }),
-        ("HAVE_WAITSTATUS_SIGNAL_RET", &|target| {
+        ("have_localeconv_l", &|target| {
+            target.has_symbol("localeconv_l")
+        }),
+        ("have_pipe2", &|target| target.has_symbol("pipe2")),
+        ("have_posix_spawn", &|target| target.has_header("spawn.h")),
+        ("small_main_stack", &has_small_stack),
+        ("use_prebuilt_docs", &|_| {
+            env_var("FISH_USE_PREBUILT_DOCS").is_some_and(|v| v == "TRUE")
+        }),
+        ("using_cmake", &|_| {
+            option_env!("FISH_CMAKE_BINARY_DIR").is_some()
+        }),
+        ("waitstatus_signal_ret", &|target| {
             target.r#if("WEXITSTATUS(0x007f) == 0x7f", &["sys/wait.h"])
         }),
     ] {
@@ -111,13 +108,17 @@ fn detect_cfgs(target: &mut Target) {
     }
 }
 
+// Target OS for compiling our crates, as opposed to the build script.
+fn target_os() -> String {
+    env_var("CARGO_CFG_TARGET_OS").unwrap()
+}
+
 fn detect_apple(_: &Target) -> bool {
-    cfg!(any(target_os = "ios", target_os = "macos"))
+    matches!(target_os().as_str(), "ios" | "macos")
 }
 
 fn detect_cygwin(_: &Target) -> bool {
-    // Cygwin target is usually cross-compiled.
-    env_var("CARGO_CFG_TARGET_OS").unwrap() == "cygwin"
+    target_os() == "cygwin"
 }
 
 /// Detect if we're being compiled for a BSD-derived OS, allowing targeting code conditionally with
@@ -127,20 +128,14 @@ fn detect_cygwin(_: &Target) -> bool {
 /// doesn't necessarily include less-popular forks nor does it group them into families more
 /// specific than "windows" vs "unix" so we can conditionally compile code for BSD systems.
 fn detect_bsd(_: &Target) -> bool {
-    // Instead of using `uname`, we can inspect the TARGET env variable set by Cargo. This lets us
-    // support cross-compilation scenarios.
-    let mut target = env_var("TARGET").unwrap();
-    if !target.chars().all(|c| c.is_ascii_lowercase()) {
-        target = target.to_ascii_lowercase();
+    let target_os = target_os();
+    let is_bsd = target_os.ends_with("bsd") || target_os == "dragonfly";
+    if matches!(
+        target_os.as_str(),
+        "dragonfly" | "freebsd" | "netbsd" | "openbsd"
+    ) {
+        assert!(is_bsd, "Target incorrectly detected as not BSD!");
     }
-    let is_bsd = target.ends_with("bsd") || target.ends_with("dragonfly");
-    #[cfg(any(
-        target_os = "dragonfly",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd",
-    ))]
-    assert!(is_bsd, "Target incorrectly detected as not BSD!");
     is_bsd
 }
 

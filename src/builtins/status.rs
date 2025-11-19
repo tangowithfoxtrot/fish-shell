@@ -8,7 +8,7 @@ use crate::proc::{
     JobControl, get_job_control_mode, get_login, is_interactive_session, set_job_control_mode,
 };
 use crate::reader::reader_in_interactive_read;
-use crate::tty_handoff::{get_scroll_content_up_capability, xtversion};
+use crate::tty_handoff::{TERMINAL_OS_NAME, get_scroll_content_up_capability, xtversion};
 use crate::wutil::{Error, waccess, wbasename, wdirname, wrealpath};
 use cfg_if::cfg_if;
 use libc::F_OK;
@@ -66,6 +66,7 @@ enum StatusCmd {
     STATUS_LIST_FILES,
     STATUS_HELP_SECTIONS,
     STATUS_TERMINAL,
+    STATUS_TERMINAL_OS,
     STATUS_TEST_TERMINAL_FEATURE,
 }
 
@@ -103,6 +104,7 @@ str_enum!(
     (STATUS_STACK_TRACE, "print-stack-trace"),
     (STATUS_STACK_TRACE, "stack-trace"),
     (STATUS_TERMINAL, "terminal"),
+    (STATUS_TERMINAL_OS, "terminal-os"),
     (STATUS_TEST_FEATURE, "test-feature"),
     (STATUS_TEST_TERMINAL_FEATURE, "test-terminal-feature"),
 );
@@ -517,18 +519,7 @@ pub fn status(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> B
                 }
             );
         }
-        c @ STATUS_LIST_FILES => {
-            if args.len() > 1 {
-                streams.err.append(wgettext_fmt!(
-                    BUILTIN_ERR_ARG_COUNT2,
-                    cmd,
-                    c.to_wstr(),
-                    1,
-                    args.len()
-                ));
-                return Err(STATUS_INVALID_ARGS);
-            }
-
+        STATUS_LIST_FILES => {
             cfg_if!(
                 if #[cfg(not(feature = "embed-data"))] {
                     streams
@@ -537,16 +528,24 @@ pub fn status(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> B
                     return Err(STATUS_CMD_ERROR);
                 } else {
                     use crate::util::wcsfilecmp_glob;
-
                     let mut paths = vec![];
-                    let arg = crate::common::wcs2bytes(args.first().unwrap_or(&L!("")));
-                    let arg = std::str::from_utf8(&arg).unwrap();
-                    let embedded_files = crate::autoload::Asset::iter().chain(Docs::iter());
-                    #[cfg(using_cmake)]
-                    let embedded_files = embedded_files.chain(CMakeBinaryDir::iter());
-                    for path in embedded_files {
-                        if arg.is_empty() || path.starts_with(arg) {
-                            paths.push(bytes2wcstring(path.as_bytes()));
+                    let mut add = |arg| {
+                        let arg = crate::common::wcs2bytes(arg);
+                        let arg = std::str::from_utf8(&arg).unwrap();
+                        let embedded_files = crate::autoload::Asset::iter().chain(Docs::iter());
+                        #[cfg(using_cmake)]
+                        let embedded_files = embedded_files.chain(CMakeBinaryDir::iter());
+                        for path in embedded_files {
+                            if arg.is_empty() || path.starts_with(arg) {
+                                paths.push(bytes2wcstring(path.as_bytes()));
+                            }
+                        }
+                    };
+                    if args.is_empty() {
+                            add(L!(""));
+                    } else {
+                        for arg in args {
+                            add(arg);
                         }
                     }
 
@@ -767,11 +766,13 @@ pub fn status(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> B
                 }
                 STATUS_TERMINAL => {
                     let xtversion = xtversion().unwrap_or_default();
-                    let first_line = &xtversion[..xtversion
-                        .chars()
-                        .position(|c| c == '\n')
-                        .unwrap_or(xtversion.len())];
-                    streams.out.appendln(first_line);
+                    streams.out.appendln(xtversion);
+                }
+                STATUS_TERMINAL_OS => {
+                    let Some(Some(terminal_os_name)) = TERMINAL_OS_NAME.get() else {
+                        return Err(STATUS_CMD_ERROR);
+                    };
+                    streams.out.appendln(first_line(terminal_os_name));
                 }
                 STATUS_SET_JOB_CONTROL
                 | STATUS_FEATURES
@@ -786,4 +787,8 @@ pub fn status(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> B
     };
 
     Ok(SUCCESS)
+}
+
+fn first_line(s: &wstr) -> &wstr {
+    &s[..s.chars().position(|c| c == '\n').unwrap_or(s.len())]
 }

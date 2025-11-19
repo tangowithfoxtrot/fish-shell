@@ -1,4 +1,4 @@
-fish ?.?.? (released ???)
+fish 4.3.0 (released ???)
 =========================
 
 Notable improvements and fixes
@@ -11,8 +11,19 @@ Interactive improvements
 ------------------------
 - When typing immediately after starting fish, the first prompt is now rendered correctly.
 
+Improved terminal support
+-------------------------
+- OSC 133 prompt markers now also mark the prompt end, which improves shell integration with terminals like iTerm2 (:issue:`11837`).
+- Operating-system-specific key bindings are now decided based on the :ref:`terminal's host OS <status-terminal-os>`.
+- New :ref:`feature flag <featureflags>` ``omit-term-workarounds`` can be turned on to prevent fish from trying to work around incompatible terminals.
+
 For distributors and developers
 -------------------------------
+- ``fish_key_reader`` and ``fish_indent`` are now hardlinks to ``fish``.
+
+Regression fixes:
+-----------------
+- (from 4.1.0) Crash on invalid colors variables (:issue:`12078`).
 
 fish 4.2.1 (released November 13, 2025)
 =======================================

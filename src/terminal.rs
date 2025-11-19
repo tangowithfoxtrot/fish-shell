@@ -9,6 +9,7 @@ use crate::text_face::{TextFace, TextStyling, UnderlineStyle};
 use crate::threads::MainThread;
 use crate::wchar::prelude::*;
 use bitflags::bitflags;
+use once_cell::sync::OnceCell;
 use std::cell::{RefCell, RefMut};
 use std::env;
 use std::ffi::{CStr, CString};
@@ -78,7 +79,7 @@ pub(crate) enum TerminalCommand<'a> {
     CursorRight,
     CursorMove(CardinalDirection, usize),
 
-    // Commands related to querying (used for backwards-incompatible features).
+    // Commands related to querying (used mainly for backwards-incompatible features).
     QueryPrimaryDeviceAttribute,
     QueryXtversion,
     QueryXtgettcap(&'static str),
@@ -103,8 +104,9 @@ pub(crate) enum TerminalCommand<'a> {
     // man pages (via "man_show_urls").
     Osc0WindowTitle(&'a [WString]),
     Osc1TabTitle(&'a [WString]),
-    Osc133CommandStart(&'a wstr),
     Osc133PromptStart,
+    Osc133PromptEnd,
+    Osc133CommandStart(&'a wstr),
     Osc133CommandFinished(libc::c_int),
 
     // Other terminal features
@@ -179,6 +181,7 @@ pub(crate) trait Output {
             Osc0WindowTitle(title) => osc_0_or_1_terminal_title(self, false, title),
             Osc1TabTitle(title) => osc_0_or_1_terminal_title(self, true, title),
             Osc133PromptStart => osc_133_prompt_start(self),
+            Osc133PromptEnd => osc_133_prompt_end(self),
             Osc133CommandStart(command) => osc_133_command_start(self, command),
             Osc133CommandFinished(s) => osc_133_command_finished(self, s),
             QueryCursorPosition => write(self, b"\x1b[6n"),
@@ -364,7 +367,11 @@ impl<'a> std::fmt::Display for DisplayAsHex<'a> {
 }
 
 fn query_kitty_progressive_enhancements(out: &mut impl Output) -> bool {
-    if std::env::var_os("TERM").is_some_and(|term| term.as_os_str().as_bytes() == b"st-256color") {
+    #[allow(unused_parens)]
+    if (
+        // TODO(term-workaround)
+        std::env::var_os("TERM").is_some_and(|term| term.as_os_str().as_bytes() == b"st-256color")
+    ) {
         return false;
     }
     out.write_bytes(b"\x1b[?u");
@@ -384,7 +391,20 @@ fn osc_133_prompt_start(out: &mut impl Output) -> bool {
     if !future_feature_flags::test(FeatureFlag::mark_prompt) {
         return false;
     }
-    write_to_output!(out, "\x1b]133;A;click_events=1\x07");
+    static TEST_BALLOON: OnceCell<()> = OnceCell::new();
+    if TEST_BALLOON.set(()).is_ok() {
+        write_to_output!(out, "\x1b]133;A;click_events=1\x1b\\");
+    } else {
+        write_to_output!(out, "\x1b]133;A;click_events=1\x07");
+    }
+    true
+}
+
+fn osc_133_prompt_end(out: &mut impl Output) -> bool {
+    if !future_feature_flags::test(FeatureFlag::mark_prompt) {
+        return false;
+    }
+    write_to_output!(out, "\x1b]133;B\x07");
     true
 }
 

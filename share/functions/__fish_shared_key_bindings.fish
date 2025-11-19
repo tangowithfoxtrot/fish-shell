@@ -19,13 +19,8 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
     bind --preset $argv left backward-char
 
     # Ctrl-left/right - these also work in vim.
-    if test (__fish_uname) = Darwin
-        bind --preset $argv ctrl-right forward-token
-        bind --preset $argv ctrl-left backward-token
-    else
-        bind --preset $argv ctrl-right forward-word
-        bind --preset $argv ctrl-left backward-word
-    end
+    __fish_per_os_bind --preset $argv ctrl-right forward-token forward-word
+    __fish_per_os_bind --preset $argv ctrl-left backward-token backward-word
 
     bind --preset $argv pageup beginning-of-history
     bind --preset $argv pagedown end-of-history
@@ -52,26 +47,18 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
     bind --preset $argv alt-b prevd-or-backward-word
     bind --preset $argv alt-f nextd-or-forward-word
 
-    set -l alt_right_aliases alt-right \e\[1\;9C # iTerm2 < 3.5.12
-    set -l alt_left_aliases alt-left \e\[1\;9D # iTerm2 < 3.5.12
-    if test (__fish_uname) = Darwin
-        for alt_right in $alt_right_aliases
-            bind --preset $argv $alt_right nextd-or-forward-word
-        end
-        for alt_left in $alt_left_aliases
-            bind --preset $argv $alt_left prevd-or-backward-word
-        end
-    else
-        for alt_right in $alt_right_aliases
-            bind --preset $argv $alt_right nextd-or-forward-token
-        end
-        for alt_left in $alt_left_aliases
-            bind --preset $argv $alt_left prevd-or-backward-token
-        end
+    for alt_right in alt-right \e\[1\;9C # TODO(terminal-workaround) iTerm2 < 3.5.12
+        __fish_per_os_bind --preset $argv $alt_right \
+            nextd-or-forward-word nextd-or-forward-token
+    end
+    for alt_left in alt-left \e\[1\;9D # TODO(terminal-workaround) iTerm2 < 3.5.12
+        __fish_per_os_bind --preset $argv $alt_left \
+            prevd-or-backward-word prevd-or-backward-token
     end
 
     bind --preset $argv alt-up history-token-search-backward
     bind --preset $argv alt-down history-token-search-forward
+    # TODO(terminal-workaround)
     bind --preset $argv \e\[1\;9A history-token-search-backward # iTerm2 < 3.5.12
     bind --preset $argv \e\[1\;9B history-token-search-forward # iTerm2 < 3.5.12
     # Bash compatibility

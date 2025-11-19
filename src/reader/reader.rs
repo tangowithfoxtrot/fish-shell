@@ -75,8 +75,7 @@ use crate::fallback::fish_wcwidth;
 use crate::fd_readable_set::poll_fd_readable;
 use crate::fds::{AutoCloseFd, make_fd_blocking, wopen_cloexec};
 use crate::flog::{FLOG, FLOGF};
-use crate::future_feature_flags;
-use crate::future_feature_flags::FeatureFlag;
+use crate::future_feature_flags::{self, FeatureFlag};
 use crate::global_safety::RelaxedAtomicBool;
 use crate::highlight::{
     HighlightRole, HighlightSpec, autosuggest_validate_from_history, highlight_shell,
@@ -91,8 +90,8 @@ use crate::input_common::InputEventQueue;
 use crate::input_common::InputEventQueuer;
 use crate::input_common::QueryResponse;
 use crate::input_common::{
-    CharEvent, CharInputStyle, CursorPositionQuery, ImplicitEvent, InputData, QueryResultEvent,
-    ReadlineCmd, TerminalQuery, stop_query,
+    CharEvent, CharInputStyle, CursorPositionQuery, ImplicitEvent, InputData, LONG_READ_TIMEOUT,
+    QueryResultEvent, ReadlineCmd, TerminalQuery, stop_query,
 };
 use crate::io::IoChain;
 use crate::key::ViewportPosition;
@@ -144,6 +143,7 @@ use crate::tokenizer::{
     Tokenizer, tok_command,
 };
 use crate::tty_handoff::SCROLL_CONTENT_UP_TERMINFO_CODE;
+use crate::tty_handoff::XTGETTCAP_QUERY_OS_NAME;
 use crate::tty_handoff::{
     TtyHandoff, get_tty_protocols_active, initialize_tty_protocols, safe_deactivate_tty_protocols,
 };
@@ -238,21 +238,23 @@ fn redirect_tty_after_sighup() {
 }
 
 fn querying_allowed(vars: &dyn Environment) -> bool {
-    future_feature_flags::test(FeatureFlag::query_term) &&
-    !is_dumb() && vars.get(MIDNIGHT_COMMANDER_SID).is_none()
-        // Could use /dev/tty in future.
-        && isatty(STDOUT_FILENO)
+    future_feature_flags::test(FeatureFlag::query_term)
+        && !is_dumb()
+        && {
+            // TODO(term-workaround)
+            vars.get(MIDNIGHT_COMMANDER_SID).is_none()
+        }
+        && {
+            // Could use /dev/tty in future.
+            isatty(STDOUT_FILENO)
+        }
 }
 
 pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> InputEventQueue {
     assert!(isatty(inputfd));
     reader_interactive_init();
 
-    const INITIAL_QUERY_TIMEOUT_SECONDS: u64 = 2;
-    let mut input_queue = InputEventQueue::new(
-        inputfd,
-        Some(Duration::from_secs(INITIAL_QUERY_TIMEOUT_SECONDS)),
-    );
+    let mut input_queue = InputEventQueue::new(inputfd, Some(LONG_READ_TIMEOUT));
 
     let _init_tty_metadata = ScopeGuard::new((), |()| {
         initialize_tty_protocols(vars);
@@ -295,7 +297,7 @@ pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> InputEventQueue 
                          This %s process will no longer wait for outstanding queries, \
                          which disables some optional features.",
                         program,
-                        INITIAL_QUERY_TIMEOUT_SECONDS,
+                        LONG_READ_TIMEOUT.as_secs(),
                         program
                     ),
                 );
@@ -2712,6 +2714,7 @@ fn send_xtgettcap_query(out: &mut impl Output, cap: &'static str) {
 }
 
 fn query_capabilities_via_dcs(out: &mut impl Output, vars: &dyn Environment) {
+    // TODO(term-workaround)
     if vars.get_unless_empty(L!("STY")).is_some()
         || vars.get_unless_empty(L!("TERM")).is_some_and(|term| {
             let term = &term.as_list()[0];
@@ -2722,6 +2725,7 @@ fn query_capabilities_via_dcs(out: &mut impl Output, vars: &dyn Environment) {
     }
     out.write_command(DecsetAlternateScreenBuffer); // enable alternative screen buffer
     send_xtgettcap_query(out, SCROLL_CONTENT_UP_TERMINFO_CODE);
+    send_xtgettcap_query(out, XTGETTCAP_QUERY_OS_NAME);
     out.write_command(DecrstAlternateScreenBuffer); // disable alternative screen buffer
 }
 

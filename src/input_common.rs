@@ -5,14 +5,15 @@ use crate::common::{
 use crate::env::{EnvStack, Environment};
 use crate::fd_readable_set::{FdReadableSet, Timeout};
 use crate::flog::{FLOG, FloggableDebug, FloggableDisplay};
+use crate::future_feature_flags::{FeatureFlag, test as feature_test};
 use crate::key::{
     self, Key, Modifiers, ViewportPosition, alt, canonicalize_control_char,
     canonicalize_keyed_control_char, char_to_symbol, function_key, shift,
 };
 use crate::reader::reader_test_and_clear_interrupted;
 use crate::tty_handoff::{
-    SCROLL_CONTENT_UP_TERMINFO_CODE, XTVERSION, maybe_set_kitty_keyboard_capability,
-    maybe_set_scroll_content_up_capability,
+    SCROLL_CONTENT_UP_TERMINFO_CODE, TERMINAL_OS_NAME, XTGETTCAP_QUERY_OS_NAME, XTVERSION,
+    maybe_set_kitty_keyboard_capability, maybe_set_scroll_content_up_capability,
 };
 use crate::universal_notifier::default_notifier;
 use crate::wchar::{encode_byte_to_char, prelude::*};
@@ -723,6 +724,8 @@ pub enum TerminalQuery {
     CursorPosition(CursorPositionQuery),
 }
 
+pub const LONG_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// A trait which knows how to produce a stream of input events.
 /// Note this is conceptually a "base class" with override points.
 pub trait InputEventQueuer {
@@ -887,22 +890,39 @@ pub trait InputEventQueuer {
         }
     }
 
-    fn try_readb(&mut self, buffer: &mut Vec<u8>) -> Option<u8> {
+    fn read_sequence_byte(&mut self, buffer: &mut Vec<u8>) -> Option<u8> {
         let fd = self.get_in_fd();
+        let strict = feature_test(FeatureFlag::omit_term_workarounds);
+        let historical_millis = |ms| {
+            if strict {
+                LONG_READ_TIMEOUT
+            } else {
+                Duration::from_millis(ms)
+            }
+        };
         if !check_fd_readable(
             fd,
-            Duration::from_millis(if self.paste_is_buffering() || self.is_blocked_querying() {
-                300
+            if self.paste_is_buffering() || self.is_blocked_querying() {
+                historical_millis(300)
             } else if buffer == b"\x1b" {
-                1 // distinguish legacy escape
+                Duration::from_millis(1) // distinguish legacy escape
             } else {
-                30
-            }),
+                historical_millis(30)
+            },
         ) {
             FLOG!(
                 reader,
                 format!("Incomplete escape sequence: {}", DisplayBytes(buffer))
             );
+            if strict {
+                FLOG!(
+                    error,
+                    format!(
+                        "Incomplete escape sequence seen (logging because omit-term-workarounds is on): {}",
+                        DisplayBytes(buffer)
+                    )
+                );
+            }
             return None;
         }
         let next = readb(fd)?;
@@ -917,7 +937,7 @@ pub trait InputEventQueuer {
     ) -> Option<KeyEvent> {
         assert!(buffer.len() <= 2);
         let recursive_invocation = buffer.len() == 2;
-        let Some(next) = self.try_readb(buffer) else {
+        let Some(next) = self.read_sequence_byte(buffer) else {
             return Some(KeyEvent::from_raw(key::Escape));
         };
         let invalid = KeyEvent::from_raw(key::Invalid);
@@ -962,10 +982,10 @@ pub trait InputEventQueuer {
     fn parse_csi(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
         // The maximum number of CSI parameters is defined by NPAR, nominally 16.
         let mut params = [[0_u32; 4]; 16];
-        let Some(mut c) = self.try_readb(buffer) else {
+        let Some(mut c) = self.read_sequence_byte(buffer) else {
             return Some(KeyEvent::from(alt('[')));
         };
-        let mut next_char = |zelf: &mut Self| zelf.try_readb(buffer).unwrap_or(0xff);
+        let mut next_char = |zelf: &mut Self| zelf.read_sequence_byte(buffer).unwrap_or(0xff);
         let private_mode;
         if matches!(c, b'?' | b'<' | b'=' | b'>') {
             // private mode
@@ -1253,12 +1273,12 @@ pub trait InputEventQueuer {
 
     fn parse_ss3(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
         let mut raw_mask = 0;
-        let Some(mut code) = self.try_readb(buffer) else {
+        let Some(mut code) = self.read_sequence_byte(buffer) else {
             return Some(KeyEvent::from(alt('O')));
         };
         while code.is_ascii_digit() {
             raw_mask = raw_mask * 10 + u32::from(code - b'0');
-            code = self.try_readb(buffer).unwrap_or(0xff);
+            code = self.read_sequence_byte(buffer).unwrap_or(0xff);
         }
         let (modifiers, _caps_lock) = parse_mask(raw_mask.saturating_sub(1));
         #[rustfmt::skip]
@@ -1301,7 +1321,7 @@ pub trait InputEventQueuer {
     fn read_until_sequence_terminator(&mut self, buffer: &mut Vec<u8>) -> Option<()> {
         let mut escape = false;
         loop {
-            let b = self.try_readb(buffer)?;
+            let b = self.read_sequence_byte(buffer)?;
             if escape && b == b'\\' {
                 break;
             }
@@ -1331,7 +1351,7 @@ pub trait InputEventQueuer {
 
     fn parse_dcs(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
         assert!(buffer.len() == 2);
-        let Some(success) = self.try_readb(buffer) else {
+        let Some(success) = self.read_sequence_byte(buffer) else {
             return Some(KeyEvent::from(alt('P')));
         };
         let success = match success {
@@ -1343,10 +1363,10 @@ pub trait InputEventQueuer {
             }
             _ => return None,
         };
-        if self.try_readb(buffer)? != b'+' {
+        if self.read_sequence_byte(buffer)? != b'+' {
             return None;
         }
-        if self.try_readb(buffer)? != b'r' {
+        if self.read_sequence_byte(buffer)? != b'r' {
             return None;
         }
         self.read_until_sequence_terminator(buffer)?;
@@ -1366,7 +1386,7 @@ pub trait InputEventQueuer {
         let mut buffer = buffer.splitn(2, |&c| c == b'=');
         let key = buffer.next().unwrap();
         let key = parse_hex(key)?;
-        if let Some(value) = buffer.next() {
+        let value = if let Some(value) = buffer.next() {
             let value = parse_hex(value)?;
             FLOG!(
                 reader,
@@ -1376,14 +1396,20 @@ pub trait InputEventQueuer {
                     bytes2wcstring(&value)
                 )
             );
+            Some(value)
         } else {
             FLOG!(
                 reader,
                 format!("Received XTGETTCAP response: {}", bytes2wcstring(&key))
             );
-        }
+            None
+        };
         if key == SCROLL_CONTENT_UP_TERMINFO_CODE.as_bytes() {
             maybe_set_scroll_content_up_capability();
+        } else if key == XTGETTCAP_QUERY_OS_NAME.as_bytes() {
+            if let Some(value) = value {
+                TERMINAL_OS_NAME.get_or_init(|| Some(bytes2wcstring(&value)));
+            }
         }
         return None;
     }
