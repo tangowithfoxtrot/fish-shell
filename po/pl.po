@@ -702,10 +702,6 @@ msgid "%s: expected a numeric value"
 msgstr "%s: oczekiwano wartości liczbowej"
 
 #, c-format
-msgid "%s: fish was not built with embedded files"
-msgstr ""
-
-#, c-format
 msgid "%s: function name required"
 msgstr ""
 
@@ -1185,9 +1181,6 @@ msgstr ""
 msgid "Invalid arguments"
 msgstr ""
 
-msgid "Invalid code points not yet supported by printf"
-msgstr ""
-
 msgid "Invalid index value"
 msgstr ""
 
@@ -1288,6 +1281,10 @@ msgid "Not a function"
 msgstr ""
 
 msgid "Not a number"
+msgstr ""
+
+#, c-format
+msgid "Not a valid Unicode character: %s"
 msgstr ""
 
 msgid "Notifications about universal variable changes"
@@ -1634,10 +1631,6 @@ msgid "Unexpected end of string, square brackets do not match"
 msgstr ""
 
 msgid "Unexpected token"
-msgstr ""
-
-#, c-format
-msgid "Unicode character out of range: \\%c%0*x"
 msgstr ""
 
 msgid "Unknown"

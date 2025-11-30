@@ -837,10 +837,6 @@ msgid "%s: expected a numeric value"
 msgstr "%s : valeur numérique attendue"
 
 #, c-format
-msgid "%s: fish was not built with embedded files"
-msgstr "%s : fish n’a pas été compilé avec les fichiers embarqués"
-
-#, c-format
 msgid "%s: function name required"
 msgstr ""
 
@@ -1320,9 +1316,6 @@ msgstr ""
 msgid "Invalid arguments"
 msgstr ""
 
-msgid "Invalid code points not yet supported by printf"
-msgstr ""
-
 msgid "Invalid index value"
 msgstr ""
 
@@ -1423,6 +1416,10 @@ msgid "Not a function"
 msgstr "Pas une fonction"
 
 msgid "Not a number"
+msgstr ""
+
+#, c-format
+msgid "Not a valid Unicode character: %s"
 msgstr ""
 
 msgid "Notifications about universal variable changes"
@@ -1770,10 +1767,6 @@ msgstr "Fin de chaîne inattendue, les crochets ne sont pas refermés"
 
 msgid "Unexpected token"
 msgstr ""
-
-#, c-format
-msgid "Unicode character out of range: \\%c%0*x"
-msgstr "Caractère Unicode hors limite: \\%c%0*x"
 
 msgid "Unknown"
 msgstr "Inconnu"
