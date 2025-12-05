@@ -7,14 +7,11 @@ Notable improvements and fixes
 Deprecations and removed features
 ---------------------------------
 
-Scripting improvements
-----------------------
-- ``math`` gained a new ``logb`` function.
-
 Interactive improvements
 ------------------------
 - When typing immediately after starting fish, the first prompt is now rendered correctly.
 - Completion accuracy was improved for file paths containing ``=`` or ``:`` (:issue:`5363`).
+- Prefix-matching completions are now shown even if they don't have the case typed by the user (:issue:`7944`).
 
 Improved terminal support
 -------------------------
