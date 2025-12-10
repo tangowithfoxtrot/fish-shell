@@ -11,9 +11,11 @@ use std::{
 
 use crate::{
     ast::unescape_keyword,
+    autoload::AutoloadResult,
     common::charptr2wcstring,
     reader::{get_quote, is_backslashed},
     util::wcsfilecmp,
+    wcstringutil::{string_suffixes_string_case_insensitive, strip_executable_suffix},
     wutil::{LocalizableString, localizable_string},
 };
 use bitflags::bitflags;
@@ -449,7 +451,7 @@ static COMPLETION_TOMBSTONES: Mutex<BTreeSet<WString>> = Mutex::new(BTreeSet::ne
 
 /// Completion "wrapper" support. The map goes from wrapping-command to wrapped-command-list.
 type WrapperMap = HashMap<WString, Vec<WString>>;
-static wrapper_map: Lazy<Mutex<WrapperMap>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static WRAPPER_MAP: Lazy<Mutex<WrapperMap>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Clear the [`CompleteFlags::AUTO_SPACE`] flag, and set [`CompleteFlags::NO_SPACE`] appropriately
 /// depending on the suffix of the string.
@@ -988,16 +990,26 @@ impl<'ctx> Completer<'ctx> {
             return;
         }
 
-        let lookup_cmd: WString = [
-            L!("functions -q __fish_describe_command && __fish_describe_command "),
-            &escape(cmd),
-        ]
-        .into_iter()
-        .collect();
+        // On Cygwin, if `cmd` contains part of the `.exe` extension (e.g. `lsmod.e`), we are unlikely
+        // to find a description since they are usually associated to the POSIX name (`lsmod`). So we also
+        // need to search for the stripped command (`lsmod`), and later associate the description to
+        // the missing part of the extension (`xe`)
+        let no_exe = strip_partial_executable_suffix(cmd);
 
         // First locate a list of possible descriptions using a single call to apropos or a direct
         // search if we know the location of the whatis database. This can take some time on slower
         // systems with a large set of manuals, but it should be ok since apropos is only called once.
+        // For Cygwin, also try to find the exact match for the non-exe name
+        let lookup_cmd = sprintf!(
+            "functions -q __fish_describe_command &&{ __fish_describe_command %s %s}",
+            &escape(cmd),
+            &no_exe
+                .map(|(cmd_sans_exe, _)| {
+                    sprintf!("; __fish_describe_command --exact %s", escape(cmd_sans_exe))
+                })
+                .unwrap_or_default()[..]
+        );
+
         let mut list = vec![];
         let _ = exec_subshell(
             &lookup_cmd,
@@ -1011,17 +1023,12 @@ impl<'ctx> Completer<'ctx> {
         let mut lookup = BTreeMap::new();
         // A typical entry is the command name, followed by a tab, followed by a description.
         for elstr in &mut list {
-            // Skip keys that are too short.
-            if elstr.len() < cmd.len() {
-                continue;
-            }
-
-            // Skip cases without a tab, or without a description, or bizarre cases where the tab is
-            // part of the command.
+            // Skip cases without a tab, or without a description
+            // Bizarre cases where the tab is part of the command will be filtered later.
             let Some(tab_idx) = elstr.find_char('\t') else {
                 continue;
             };
-            if tab_idx + 1 >= elstr.len() || tab_idx < cmd.len() {
+            if tab_idx + 1 >= elstr.len() {
                 continue;
             }
 
@@ -1033,8 +1040,16 @@ impl<'ctx> Completer<'ctx> {
             //  val = A description
             // Note an empty key is common and natural, if 'cmd' were already valid.
             let parts = elstr.as_mut_utfstr().split_at_mut(tab_idx);
-            let key = &parts.0[cmd.len()..tab_idx];
-            let (_, val) = parts.1.split_at_mut(1);
+            let key = if parts.0.len() >= cmd.len() {
+                &parts.0[cmd.len()..]
+            } else if let Some((_, comp)) = no_exe.filter(|(stripped, _)| stripped == parts.0) {
+                // On Cygwin, `cmd` might be `lsmod.e`, then key needs to be `xe`, while
+                // elstr is `lsmod\t...` (i.e. parts.0 is `lsmod`)
+                comp
+            } else {
+                continue;
+            };
+            let val = &mut parts.1[1..];
 
             // And once again I make sure the first character is uppercased because I like it that
             // way, and I get to decide these things.
@@ -1257,7 +1272,15 @@ impl<'ctx> Completer<'ctx> {
             .iter()
             .filter_map(|(idx, completion)| {
                 let r#match = if idx.is_path { &path } else { &cmd };
-                if wildcard_match(r#match, &idx.name, false) {
+                let has_match = wildcard_match(r#match, &idx.name, false)
+                    || (
+                        // On cygwin, if we didn't have a completion for "foo.exe",
+                        // check if there is one for "foo"
+                        !idx.is_path
+                            && strip_executable_suffix(r#match)
+                                .is_some_and(|stripped| wildcard_match(stripped, &idx.name, false))
+                    );
+                if has_match {
                     // Copy all of their options into our list. Oof, this is a lot of copying.
                     let mut options = completion.get_options().to_vec();
                     // We have to copy them in reverse order to preserve legacy behavior (#9221).
@@ -2328,6 +2351,7 @@ pub fn complete_remove_all(cmd: WString, cmd_is_path: bool, explicit: bool) {
         is_path: cmd_is_path,
     };
     let removed = completion_map.remove(&idx).is_some();
+    WRAPPER_MAP.lock().unwrap().remove(&idx.name);
     if explicit && !removed && !idx.is_path {
         COMPLETION_TOMBSTONES.lock().unwrap().insert(idx.name);
     }
@@ -2417,6 +2441,26 @@ fn completion2string(index: &CompletionEntryIndex, o: &CompleteEntryOpt) -> WStr
     out
 }
 
+/// If the cmd contains a partial executable extension, return the stripped
+/// command and missing part of the full extension.
+/// E.g. `cmd.e` -> `Some(("cmd", "xe"))``
+fn strip_partial_executable_suffix(cmd: &wstr) -> Option<(&wstr, &wstr)> {
+    if !cfg!(cygwin) {
+        return None;
+    }
+
+    [
+        // (<cmd suffix>, <completion for full ".exe">)
+        (L!(".exe"), L!("")),
+        (L!(".ex"), L!("e")),
+        (L!(".e"), L!("xe")),
+        (L!("."), L!("exe")),
+    ]
+    .into_iter()
+    .find(|(ext, _)| string_suffixes_string_case_insensitive(ext, cmd))
+    .map(|(ext, comp)| (&cmd[0..cmd.len() - ext.len()], comp))
+}
+
 /// Load command-specific completions for the specified command.
 /// Returns `true` if something new was loaded, `false` if not.
 pub fn complete_load(cmd: &wstr, parser: &Parser) -> bool {
@@ -2441,13 +2485,22 @@ pub fn complete_load(cmd: &wstr, parser: &Parser) -> bool {
         .lock()
         .expect("mutex poisoned")
         .resolve_command(cmd, EnvStack::globals());
-    if let Some(path_to_load) = path_to_load {
-        Autoload::perform_autoload(&path_to_load, parser);
-        completion_autoloader
-            .lock()
-            .expect("mutex poisoned")
-            .mark_autoload_finished(cmd);
-        loaded_new = true;
+    match path_to_load {
+        AutoloadResult::Path(path_to_load) => {
+            Autoload::perform_autoload(&path_to_load, parser);
+            completion_autoloader
+                .lock()
+                .expect("mutex poisoned")
+                .mark_autoload_finished(cmd);
+            loaded_new = true;
+        }
+        AutoloadResult::None => {
+            // On Cygwin, if we failed to find a completion for "foo.exe", try "foo"
+            if let Some(stripped) = strip_executable_suffix(cmd) {
+                loaded_new = complete_load(stripped, parser);
+            }
+        }
+        AutoloadResult::Loaded | AutoloadResult::Pending => {}
     }
     loaded_new
 }
@@ -2474,7 +2527,7 @@ pub fn complete_print(cmd: &wstr) -> WString {
     }
 
     // Append wraps.
-    let wrappers = wrapper_map.lock().expect("poisoned mutex");
+    let wrappers = WRAPPER_MAP.lock().expect("poisoned mutex");
     for (src, targets) in wrappers.iter() {
         if !cmd.is_empty() && src != cmd {
             continue;
@@ -2518,7 +2571,7 @@ pub fn complete_add_wrapper(command: WString, new_target: WString) -> bool {
         return false;
     }
 
-    let mut wrappers = wrapper_map.lock().expect("poisoned mutex");
+    let mut wrappers = WRAPPER_MAP.lock().expect("poisoned mutex");
     let targets = wrappers.entry(command).or_default();
     // If it's already present, we do nothing.
     if !targets.contains(&new_target) {
@@ -2534,7 +2587,7 @@ pub fn complete_remove_wrapper(command: WString, target_to_remove: &wstr) -> boo
         return false;
     }
 
-    let mut wrappers = wrapper_map.lock().expect("poisoned mutex");
+    let mut wrappers = WRAPPER_MAP.lock().expect("poisoned mutex");
     let mut result = false;
     for targets in wrappers.values_mut() {
         if let Some(pos) = targets.iter().position(|t| t == target_to_remove) {
@@ -2548,7 +2601,7 @@ pub fn complete_remove_wrapper(command: WString, target_to_remove: &wstr) -> boo
 
 /// Returns a list of wrap targets for a given command.
 pub fn complete_wrap_map() -> MutexGuard<'static, HashMap<WString, Vec<WString>>> {
-    wrapper_map.lock().unwrap()
+    WRAPPER_MAP.lock().unwrap()
 }
 
 /// Returns a list of wrap targets for a given command.
@@ -2557,7 +2610,7 @@ pub fn complete_get_wrap_targets(command: &wstr) -> Vec<WString> {
         return vec![];
     }
 
-    let wrappers = wrapper_map.lock().expect("poisoned mutex");
+    let wrappers = WRAPPER_MAP.lock().expect("poisoned mutex");
     wrappers.get(command).cloned().unwrap_or_default()
 }
 
