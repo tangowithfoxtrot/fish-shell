@@ -325,13 +325,16 @@ pub enum ImplicitEvent {
     FocusOut,
     /// Mouse left click.
     MouseLeft(ViewportPosition),
+    /// Terminal color theme change (light/dark mode).
+    NewColorTheme,
     /// Window height changed.
-    WindowHeight,
+    NewWindowHeight,
 }
 
 #[derive(Debug, Clone)]
 pub enum QueryResponse {
     PrimaryDeviceAttribute,
+    BackgroundColor(xterm_color::Color),
     CursorPosition(ViewportPosition),
 }
 
@@ -697,6 +700,11 @@ impl InputData {
     }
 }
 
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct BackgroundColorQuery {
+    pub result: Option<xterm_color::Color>,
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub enum CursorPositionQueryReason {
     NewPrompt,
@@ -718,10 +726,16 @@ impl CursorPositionQuery {
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct RecurrentQuery {
+    pub background_color: Option<BackgroundColorQuery>,
+    pub cursor_position: Option<CursorPositionQuery>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub enum TerminalQuery {
     Initial,
-    CursorPosition(CursorPositionQuery),
+    Recurrent(RecurrentQuery),
 }
 
 pub const LONG_READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -914,7 +928,7 @@ pub trait InputEventQueuer {
                 reader,
                 format!("Incomplete escape sequence: {}", DisplayBytes(buffer))
             );
-            if strict {
+            if buffer != b"\x1b" && strict {
                 FLOG!(
                     error,
                     format!(
@@ -963,9 +977,16 @@ pub trait InputEventQueuer {
             // potential SS3
             return Some(self.parse_ss3(buffer).unwrap_or(invalid));
         }
-        if !recursive_invocation && next == b'P' {
-            // potential DCS
-            return Some(self.parse_dcs(buffer).unwrap_or(invalid));
+        if !recursive_invocation {
+            if next == b']' {
+                // OSC
+                self.parse_osc(buffer);
+                return Some(invalid);
+            }
+            if next == b'P' {
+                // potential DCS
+                return Some(self.parse_dcs(buffer).unwrap_or(invalid));
+            }
         }
         match canonicalize_control_char(next) {
             Some(mut key) => {
@@ -1142,9 +1163,7 @@ pub trait InputEventQueuer {
                 };
                 FLOG!(reader, "Received cursor position report y:", y, "x:", x);
                 let cursor_pos = ViewportPosition { x, y };
-                self.push_front(CharEvent::QueryResult(QueryResultEvent::Response(
-                    QueryResponse::CursorPosition(cursor_pos),
-                )));
+                self.push_query_response(QueryResponse::CursorPosition(cursor_pos));
                 return None;
             }
             b'S' => masked_key(function_key(4)),
@@ -1196,9 +1215,16 @@ pub trait InputEventQueuer {
             },
             b'c' if private_mode == Some(b'?') => {
                 FLOG!(reader, "Received Primary Device Attribute response");
-                self.push_front(CharEvent::QueryResult(QueryResultEvent::Response(
-                    QueryResponse::PrimaryDeviceAttribute,
-                )));
+                self.push_query_response(QueryResponse::PrimaryDeviceAttribute);
+                return None;
+            }
+            b'n' if private_mode == Some(b'?') && params[0] == [997, 0, 0, 0] => {
+                match params[1] {
+                    [1, 0, 0, 0] | [2, 0, 0, 0] => (),
+                    _ => return None,
+                };
+                FLOG!(reader, "Received color theme change");
+                self.push_front(CharEvent::Implicit(ImplicitEvent::NewColorTheme));
                 return None;
             }
             b'u' => {
@@ -1349,8 +1375,20 @@ pub trait InputEventQueuer {
         None
     }
 
+    fn parse_osc(&mut self, buffer: &mut Vec<u8>) -> Option<()> {
+        let osc_prefix = b"\x1b]";
+        assert!(buffer == osc_prefix);
+        self.read_until_sequence_terminator(buffer)?;
+        let buffer = &buffer[osc_prefix.len()..];
+        let buffer = buffer.strip_prefix(b"11;")?;
+        let c = xterm_color::Color::parse(buffer).ok()?;
+        FLOG!(reader, format!("Received background color {c:?}"));
+        self.push_query_response(QueryResponse::BackgroundColor(c));
+        None
+    }
+
     fn parse_dcs(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
-        assert!(buffer.len() == 2);
+        assert!(buffer == b"\x1bP");
         let Some(success) = self.read_sequence_byte(buffer) else {
             return Some(KeyEvent::from(alt('P')));
         };
@@ -1499,6 +1537,10 @@ pub trait InputEventQueuer {
     /// will be the next character returned by readch.
     fn push_front(&mut self, ch: CharEvent) {
         self.get_input_data_mut().queue.push_front(ch);
+    }
+
+    fn push_query_response(&mut self, response: QueryResponse) {
+        self.push_front(CharEvent::QueryResult(QueryResultEvent::Response(response)));
     }
 
     /// Find the first sequence of non-char events, and promote them to the front.
@@ -1710,15 +1752,20 @@ fn parse_hex(hex: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let mut result = vec![0; hex.len() / 2];
+    parse_hex_into(&mut result, hex)?;
+    Some(result)
+}
+fn parse_hex_into(out: &mut [u8], hex: &[u8]) -> Option<()> {
+    assert!(out.len() * 2 == hex.len());
     let mut i = 0;
     while i < hex.len() {
         let d1 = char::from(hex[i]).to_digit(16)?;
         let d2 = char::from(hex[i + 1]).to_digit(16)?;
         let decoded = u8::try_from(16 * d1 + d2).unwrap();
-        result[i / 2] = decoded;
+        out[i / 2] = decoded;
         i += 2;
     }
-    Some(result)
+    Some(())
 }
 
 #[cfg(test)]
