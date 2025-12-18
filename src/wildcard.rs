@@ -1,5 +1,6 @@
 // Enumeration of all wildcard types.
 
+use fish_common::char_offset;
 use libc::X_OK;
 use once_cell::sync::Lazy;
 use std::cmp::Ordering;
@@ -7,12 +8,11 @@ use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
 
 use crate::common::{
-    UnescapeFlags, UnescapeStringStyle, WILDCARD_RESERVED_BASE, WSL, char_offset,
+    UnescapeFlags, UnescapeStringStyle, WILDCARD_RESERVED_BASE, WSL,
     is_windows_subsystem_for_linux, unescape_string,
 };
 use crate::complete::{CompleteFlags, Completion, CompletionReceiver, PROG_COMPLETE_SEP};
 use crate::expand::ExpandFlags;
-use crate::fallback::wcscasecmp;
 use crate::future_feature_flags::FeatureFlag;
 use crate::future_feature_flags::feature_test;
 use crate::wchar::prelude::*;
@@ -22,6 +22,7 @@ use crate::wcstringutil::{
 };
 use crate::wutil::dir_iter::DirEntryType;
 use crate::wutil::{dir_iter::DirEntry, lwstat, waccess};
+use fish_fallback::wcscasecmp;
 
 localizable_consts!(
     COMPLETE_EXEC_DESC "command"

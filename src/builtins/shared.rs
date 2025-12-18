@@ -5,9 +5,9 @@ use crate::parse_constants::UNKNOWN_BUILTIN_ERR_MSG;
 use crate::parse_util::parse_util_argument_is_help;
 use crate::parser::{BlockType, LoopStatus};
 use crate::proc::{Pid, ProcStatus, no_exec};
-use crate::wchar::L;
 use crate::{builtins::*, wutil};
 use errno::errno;
+use fish_wchar::L;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -66,6 +66,9 @@ localizable_consts!(
 
     pub BUILTIN_ERR_INVALID_SUBCMD
     "%s: %s: invalid subcommand\n"
+
+    pub BUILTIN_ERR_INVALID_SUBSUBCMD
+    "%s %s: %s: invalid subcommand\n"
 
     /// Error messages for unexpected args.
     pub BUILTIN_ERR_ARG_COUNT0
@@ -734,8 +737,8 @@ impl HelpOnlyCmdOpts {
         let cmd = args[0];
         let print_hints = true;
 
-        const shortopts: &wstr = L!("+h");
-        const longopts: &[WOption] = &[wopt(L!("help"), ArgType::NoArgument, 'h')];
+        let shortopts: &wstr = L!("+h");
+        let longopts: &[WOption] = &[wopt(L!("help"), ArgType::NoArgument, 'h')];
 
         let mut print_help = false;
         let mut w = WGetopter::new(shortopts, longopts, args);

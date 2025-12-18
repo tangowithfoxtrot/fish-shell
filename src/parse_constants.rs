@@ -1,8 +1,8 @@
 //! Constants used in the programmatic representation of fish code.
 
-use crate::fallback::{fish_wcswidth, fish_wcwidth};
 use crate::wchar::prelude::*;
 use bitflags::bitflags;
+use fish_fallback::{fish_wcswidth, fish_wcwidth};
 
 pub type SourceOffset = u32;
 
@@ -340,6 +340,10 @@ impl ParseError {
             .position(|c| *c == '\n')
             .map(|pos| pos + last_char_in_range)
             .unwrap_or(src.len());
+        // We can only report squiggles on one line
+        if start + len > line_end {
+            len = line_end - start;
+        }
 
         assert!(line_end >= line_start);
         assert!(start >= line_start);

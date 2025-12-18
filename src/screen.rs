@@ -26,7 +26,6 @@ use crate::common::{
     has_working_tty_timestamps, shell_modes, wcs2bytes, write_loop,
 };
 use crate::env::Environment;
-use crate::fallback::fish_wcwidth;
 use crate::flog::{flog, flogf};
 use crate::global_safety::RelaxedAtomicBool;
 use crate::highlight::{HighlightColorResolver, HighlightRole, HighlightSpec};
@@ -39,6 +38,7 @@ use crate::termsize::Termsize;
 use crate::wchar::prelude::*;
 use crate::wcstringutil::{fish_wcwidth_visible, string_prefixes_string};
 use crate::wutil::fstat;
+use fish_fallback::fish_wcwidth;
 
 #[derive(Copy, Clone, Default)]
 pub enum CharOffset {
@@ -642,7 +642,7 @@ impl Screen {
                 );
                 0
             })
-            .max(self.actual.visible_prompt_lines - 1)
+            .max(self.actual.visible_prompt_lines.saturating_sub(1))
             .min(self.actual.line_count() - 1);
         let line = self.actual.line(y);
         let x = viewport_position.x.max(line.indentation);

@@ -9,8 +9,8 @@ use crate::builtins::shared::{
 };
 use crate::common::{
     EXPAND_RESERVED_BASE, EXPAND_RESERVED_END, EscapeFlags, EscapeStringStyle, UnescapeFlags,
-    UnescapeStringStyle, char_offset, charptr2wcstring, escape, escape_string,
-    escape_string_for_double_quotes, unescape_string, valid_var_name_char, wcs2zstring,
+    UnescapeStringStyle, charptr2wcstring, escape, escape_string, escape_string_for_double_quotes,
+    unescape_string, valid_var_name_char, wcs2zstring,
 };
 use crate::complete::{CompleteFlags, Completion, CompletionList, CompletionReceiver};
 use crate::env::{EnvVar, Environment};
@@ -30,6 +30,7 @@ use crate::wildcard::{ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE, WildcardResult
 use crate::wildcard::{wildcard_expand_string, wildcard_has_internal};
 use crate::wutil::{Options, normalize_path, wcstoi_partial};
 use bitflags::bitflags;
+use fish_common::char_offset;
 use std::mem::MaybeUninit;
 
 bitflags! {
@@ -1394,6 +1395,8 @@ impl<'a, 'b, 'c> Expander<'a, 'b, 'c> {
         mut input: WString,
         out: &mut CompletionReceiver,
     ) -> ExpandResult {
+        remove_internal_separator(&mut input, self.flags.contains(ExpandFlags::SKIP_WILDCARDS));
+
         expand_home_directory(&mut input, self.ctx.vars());
         if !feature_test(FeatureFlag::RemovePercentSelf) {
             expand_percent_self(&mut input);
@@ -1406,15 +1409,11 @@ impl<'a, 'b, 'c> Expander<'a, 'b, 'c> {
 
     fn stage_wildcards(
         &mut self,
-        mut path_to_expand: WString,
+        path_to_expand: WString,
         out: &mut CompletionReceiver,
     ) -> ExpandResult {
         let mut result = ExpandResult::ok();
 
-        remove_internal_separator(
-            &mut path_to_expand,
-            self.flags.contains(ExpandFlags::SKIP_WILDCARDS),
-        );
         let has_wildcard = wildcard_has_internal(&path_to_expand); // e.g. ANY_STRING
         let for_completions = self.flags.contains(ExpandFlags::FOR_COMPLETIONS);
         let skip_wildcards = self.flags.contains(ExpandFlags::SKIP_WILDCARDS);
