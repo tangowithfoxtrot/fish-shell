@@ -31,8 +31,8 @@ use std::{
 };
 
 use crate::{
-    wchar::prelude::*,
-    wutil::{Error as wcstodError, wcstod::wcstod_underscores, wgettext},
+    prelude::*,
+    wutil::{Error as wcstodError, wcstod::wcstod_underscores},
 };
 
 #[derive(Clone, Copy)]
@@ -346,7 +346,7 @@ impl<'s> State<'s> {
     }
 
     pub fn eval(&mut self) -> f64 {
-        return self.expr();
+        self.expr()
     }
 
     fn set_error(&mut self, kind: ErrorKind, pos_len: Option<(usize, usize)>) {
@@ -385,11 +385,11 @@ impl<'s> State<'s> {
                 Ok(num) => Some((consumed, Some(Token::Number(num)))),
                 Err(wcstodError::InvalidChar) => {
                     self.set_error(ErrorKind::Unknown, Some((self.pos + consumed, 1)));
-                    return Some((consumed, Some(Token::Error)));
+                    Some((consumed, Some(Token::Error)))
                 }
                 Err(wcstodError::Overflow) => {
                     self.set_error(ErrorKind::NumberTooLarge, Some((self.pos, consumed)));
-                    return Some((consumed, Some(Token::Error)));
+                    Some((consumed, Some(Token::Error)))
                 }
                 Err(wcstodError::Empty) => {
                     // We have a matches! above, this can't be?
@@ -562,7 +562,7 @@ impl<'s> State<'s> {
                     // a closing parenthesis should be more obvious.
                     //
                     // Vararg functions need at least one argument.
-                    let err = if f.arity().map(|arity| i < arity).unwrap_or(i == 0) {
+                    let err = if f.arity().map_or(i == 0, |arity| i < arity) {
                         ErrorKind::TooFewArgs
                     } else {
                         ErrorKind::TooManyArgs

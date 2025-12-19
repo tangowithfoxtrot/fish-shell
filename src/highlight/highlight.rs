@@ -266,7 +266,7 @@ fn command_is_valid(
     }
 
     // Return what we got.
-    return is_valid;
+    is_valid
 }
 
 fn has_expand_reserved(s: &wstr) -> bool {
@@ -344,9 +344,7 @@ pub fn autosuggest_validate_from_history(
             // Check the directory target, respecting CDPATH.
             // Permit the autosuggestion if the path is valid and not our directory.
             let path = path_get_cdpath(&cd_dir, working_directory, ctx.vars());
-            return path
-                .map(|p| !paths_are_same_file(working_directory, &p))
-                .unwrap_or(false);
+            return path.is_some_and(|p| !paths_are_same_file(working_directory, &p));
         }
     }
 
@@ -1085,9 +1083,9 @@ impl<'s> Highlighter<'s> {
 fn has_cmdsub(src: &wstr) -> bool {
     let mut cursor = 0;
     match parse_util_locate_cmdsubst_range(src, &mut cursor, true, None, None) {
-        MaybeParentheses::Error => return false,
-        MaybeParentheses::None => return false,
-        MaybeParentheses::CommandSubstitution(_) => return true,
+        MaybeParentheses::Error => false,
+        MaybeParentheses::None => false,
+        MaybeParentheses::CommandSubstitution(_) => true,
     }
 }
 
@@ -1280,9 +1278,9 @@ mod tests {
     use crate::future_feature_flags::{self, FeatureFlag};
     use crate::highlight::parse_text_face_for_highlight;
     use crate::operation_context::{EXPANSION_LIMIT_BACKGROUND, OperationContext};
+    use crate::prelude::*;
     use crate::tests::prelude::*;
     use crate::text_face::UnderlineStyle;
-    use crate::wchar::prelude::*;
     use libc::PATH_MAX;
 
     // Helper to return a string whose length greatly exceeds PATH_MAX.

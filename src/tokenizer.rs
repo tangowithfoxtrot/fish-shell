@@ -6,9 +6,9 @@ use crate::common::valid_var_name_char;
 use crate::future_feature_flags::{FeatureFlag, feature_test};
 use crate::parse_constants::SOURCE_OFFSET_INVALID;
 use crate::parser_keywords::parser_keywords_is_subcommand;
+use crate::prelude::*;
 use crate::reader::is_backslashed;
 use crate::redirection::RedirectionMode;
-use crate::wchar::prelude::*;
 use libc::{STDIN_FILENO, STDOUT_FILENO};
 use nix::fcntl::OFlag;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Range};
@@ -900,8 +900,7 @@ fn tok_is_string_character(c: char, next: Option<char>) -> bool {
         '&' => {
             if feature_test(FeatureFlag::AmpersandNoBgInToken) {
                 // Unlike in other shells, '&' is not special if followed by a string character.
-                next.map(|nc| tok_is_string_character(nc, None))
-                    .unwrap_or(false)
+                next.is_some_and(|nc| tok_is_string_character(nc, None))
             } else {
                 false
             }
@@ -1411,8 +1410,8 @@ mod tests {
         MoveWordStateMachine, MoveWordStyle, PipeOrRedir, TokFlags, TokenType, Tokenizer,
         TokenizerError,
     };
+    use crate::prelude::*;
     use crate::redirection::RedirectionMode;
-    use crate::wchar::prelude::*;
     use libc::{STDERR_FILENO, STDOUT_FILENO};
     use std::collections::HashSet;
 

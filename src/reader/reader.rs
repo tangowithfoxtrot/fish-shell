@@ -112,6 +112,7 @@ use crate::parse_util::{
     parse_util_lineno, parse_util_locate_cmdsubst_range, parse_util_token_extent,
 };
 use crate::parser::{BlockType, EvalRes, Parser};
+use crate::prelude::*;
 use crate::proc::{
     have_proc_stat, hup_jobs, is_interactive_session, job_reap, jobs_requiring_warning_on_exit,
     print_exit_warning_for_jobs, proc_update_jiffies,
@@ -147,7 +148,6 @@ use crate::tty_handoff::XTGETTCAP_QUERY_OS_NAME;
 use crate::tty_handoff::{
     TtyHandoff, get_tty_protocols_active, initialize_tty_protocols, safe_deactivate_tty_protocols,
 };
-use crate::wchar::prelude::*;
 use crate::wcstringutil::CaseSensitivity;
 use crate::wcstringutil::string_prefixes_string_maybe_case_insensitive;
 use crate::wcstringutil::{
@@ -1087,8 +1087,7 @@ pub fn reader_change_cursor_end_mode(end_mode: CursorEndMode) {
 fn check_bool_var(vars: &dyn Environment, name: &wstr, default: bool) -> bool {
     vars.get(name)
         .map(|v| v.as_string())
-        .map(|v| v != L!("0"))
-        .unwrap_or(default)
+        .map_or(default, |v| v != L!("0"))
 }
 
 /// Enable or disable autosuggestions based on the associated variable.
@@ -2268,7 +2267,7 @@ impl ReaderData {
             }
             tmp_r_pos += 1;
         }
-        return false;
+        false
     }
 
     fn jump_and_remember_last_jump(
@@ -2332,7 +2331,7 @@ impl ReaderData {
                     }
                     tmp_pos += 1;
                 }
-                return false;
+                false
             }
         }
     }
@@ -4986,7 +4985,7 @@ fn get_autosuggestion_performer(
                     parse_util_process_extent(&command_line, cursor_pos, Some(&mut tokens));
                     range_of_line_at_cursor(
                         &command_line,
-                        tokens.first().map(|tok| tok.offset()).unwrap_or(cursor_pos),
+                        tokens.first().map_or(cursor_pos, |tok| tok.offset()),
                     ) == range
                 };
                 if !cursor_line_has_process_start {
@@ -6282,14 +6281,12 @@ fn replace_line_at_cursor(
         .as_char_slice()
         .iter()
         .rposition(|&c| c == '\n')
-        .map(|newline| newline + 1)
-        .unwrap_or(0);
+        .map_or(0, |newline| newline + 1);
     let end = text[cursor..]
         .as_char_slice()
         .iter()
         .position(|&c| c == '\n')
-        .map(|pos| cursor + pos)
-        .unwrap_or(text.len());
+        .map_or(text.len(), |pos| cursor + pos);
     *inout_cursor_pos = start + replacement.len();
     text[..start].to_owned() + replacement + &text[end..]
 }
@@ -6892,8 +6889,8 @@ mod tests {
     use super::{combine_command_and_autosuggestion, completion_apply_to_command_line};
     use crate::complete::CompleteFlags;
     use crate::operation_context::{OperationContext, no_cancel};
+    use crate::prelude::*;
     use crate::tests::prelude::*;
-    use crate::wchar::prelude::*;
 
     #[test]
     fn test_autosuggestion_combining() {

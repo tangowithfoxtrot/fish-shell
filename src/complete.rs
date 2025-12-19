@@ -35,8 +35,8 @@ use crate::{
     parser::{Block, Parser},
     parser_keywords::parser_keywords_is_subcommand,
     path::{path_get_path, path_try_get_path},
+    prelude::*,
     tokenizer::{Tok, TokFlags, TokenType, Tokenizer, variable_assignment_equals_pos},
-    wchar::prelude::*,
     wcstringutil::{
         StringFuzzyMatch, string_fuzzy_match_string, string_prefixes_string,
         string_prefixes_string_case_insensitive,
@@ -48,10 +48,10 @@ use crate::{
     ast::unescape_keyword,
     autoload::AutoloadResult,
     common::charptr2wcstring,
+    localization::{LocalizableString, localizable_string},
     reader::{get_quote, is_backslashed},
     util::wcsfilecmp,
     wcstringutil::{string_suffixes_string_case_insensitive, strip_executable_suffix},
-    wutil::{LocalizableString, localizable_string},
 };
 use bitflags::bitflags;
 use fish_wchar::WExt;
@@ -282,7 +282,7 @@ impl CompletionReceiver {
             return false;
         }
         self.completions.push(comp.into());
-        return true;
+        true
     }
 
     /// Adds a completion with the given string, and default other properties. Returns `true` on
@@ -1650,9 +1650,7 @@ impl<'ctx> Completer<'ctx> {
             comp.prepend_token_prefix(prefix_with_sep);
             comp.r#match.from_separator = true;
         }
-        if !self.completions.extend(local_completions) {
-            return;
-        }
+        let _ = self.completions.extend(local_completions);
     }
 
     /// Complete the specified string as an environment variable.
@@ -2637,9 +2635,9 @@ mod tests {
     use crate::operation_context::{
         EXPANSION_LIMIT_BACKGROUND, EXPANSION_LIMIT_DEFAULT, OperationContext, no_cancel,
     };
+    use crate::prelude::*;
     use crate::reader::completion_apply_to_command_line;
     use crate::tests::prelude::*;
-    use crate::wchar::prelude::*;
     use crate::wcstringutil::join_strings;
     use std::collections::HashMap;
     use std::ffi::CString;

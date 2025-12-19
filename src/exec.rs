@@ -33,6 +33,7 @@ use crate::io::{
 use crate::nix::{getpid, isatty};
 use crate::null_terminated_array::OwningNullTerminatedArray;
 use crate::parser::{Block, BlockId, BlockType, EvalRes, Parser};
+use crate::prelude::*;
 use crate::proc::Pid;
 use crate::proc::{
     InternalProc, Job, JobGroupRef, ProcStatus, Process, ProcessType, hup_jobs,
@@ -43,7 +44,6 @@ use crate::redirection::{Dup2List, dup2_list_resolve_chain};
 use crate::threads::{ThreadPool, is_forked_child};
 use crate::trace::trace_if_enabled_with_args;
 use crate::tty_handoff::TtyHandoff;
-use crate::wchar::prelude::*;
 use crate::wutil::{fish_wcstol, perror};
 use errno::{errno, set_errno};
 use fish_wchar::ToWString;
@@ -1445,7 +1445,7 @@ fn populate_subshell_output(lst: &mut Vec<WString>, buffer: &SeparatedBuffer, sp
                 let stop = data[cursor..].iter().position(|c| *c == b'\n');
                 let hit_separator = stop.is_some();
                 // If it's not found, just use the end.
-                let stop = stop.map(|rel| cursor + rel).unwrap_or(data.len());
+                let stop = stop.map_or(data.len(), |rel| cursor + rel);
                 // Stop now points at the first character we do not want to copy.
                 lst.push(bytes2wcstring(&data[cursor..stop]));
 

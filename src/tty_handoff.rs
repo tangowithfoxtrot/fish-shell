@@ -7,6 +7,7 @@ use crate::env_dispatch::MIDNIGHT_COMMANDER_SID;
 use crate::flog::{flog, flogf};
 use crate::global_safety::RelaxedAtomicBool;
 use crate::job_group::JobGroup;
+use crate::prelude::*;
 use crate::proc::JobGroupRef;
 use crate::terminal::TerminalCommand::{
     self, ApplicationKeypadModeDisable, ApplicationKeypadModeEnable, DecrstBracketedPaste,
@@ -16,7 +17,6 @@ use crate::terminal::TerminalCommand::{
 };
 use crate::terminal::{Output, Outputter};
 use crate::threads::assert_is_main_thread;
-use crate::wchar::prelude::*;
 use crate::wutil::{perror, wcstoi};
 use fish_wchar::ToWString;
 use libc::{EINVAL, ENOTTY, EPERM, STDIN_FILENO, WNOHANG};
@@ -370,7 +370,6 @@ impl TtyHandoff {
     }
 
     /// Mark terminal modes as enabled.
-    /// Return true if something was written to the tty.
     pub fn enable_tty_protocols(&mut self) {
         if self.tty_protocols_applied {
             return; // Already enabled.
@@ -380,7 +379,6 @@ impl TtyHandoff {
     }
 
     /// Mark terminal modes as disabled.
-    /// Return true if something was written to the tty.
     pub fn disable_tty_protocols(&mut self) {
         if !self.tty_protocols_applied {
             return; // Already disabled.
@@ -399,8 +397,6 @@ impl TtyHandoff {
     }
 
     /// Reclaim the tty if we transferred it.
-    /// Returns true if data was written to the tty, as part of
-    /// re-enabling terminal protocols.
     pub fn reclaim(mut self) {
         self.reclaim_impl()
     }

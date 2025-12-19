@@ -12,6 +12,7 @@ use crate::parse_util::{
     parse_util_detect_errors, parse_util_get_offset_from_line, parse_util_job_extent,
     parse_util_lineno, parse_util_process_extent, parse_util_token_extent,
 };
+use crate::prelude::*;
 use crate::proc::is_interactive_session;
 use crate::reader::{
     commandline_get_state, commandline_set_buffer, commandline_set_search_field,
@@ -19,7 +20,6 @@ use crate::reader::{
 };
 use crate::tokenizer::TOK_ACCEPT_UNFINISHED;
 use crate::tokenizer::{TokenType, Tokenizer};
-use crate::wchar::prelude::*;
 use crate::wcstringutil::join_strings;
 use std::ops::Range;
 
@@ -130,7 +130,7 @@ fn strip_dollar_prefixes(insert_mode: AppendMode, prefix: &wstr, insert: &wstr) 
         }
     }
     stripped.push_utfstr(&source[have..]);
-    return Some(stripped);
+    Some(stripped)
 }
 
 /// Output the specified selection.
@@ -189,11 +189,9 @@ fn write_part(
                         // Maybe hit expansion limit, forward the unexpanded string.
                         args.push(Completion::from_completion(token_text.to_owned()));
                     }
-                    ExpandResultCode::cancel => {
-                        return;
-                    }
+                    ExpandResultCode::cancel => {}
                     ExpandResultCode::ok => (),
-                };
+                }
             }
             TokenOutputMode::Raw => {
                 args.push(Completion::from_completion(token_text.to_owned()));

@@ -4,8 +4,8 @@ use crate::{
     common::{EscapeFlags, EscapeStringStyle, escape_string},
     flog::FloggableDebug,
     future_feature_flags::{FeatureFlag, test as feature_test},
+    prelude::*,
     reader::safe_get_terminal_mode_on_startup,
-    wchar::prelude::*,
     wutil::fish_wcstoul,
 };
 use fish_fallback::fish_wcwidth;
@@ -209,7 +209,7 @@ pub(crate) fn canonicalize_unkeyed_control_char(c: u8) -> char {
     // Represent Ctrl-symbol combinations in "upper-case", as they are
     // traditionally-rendered.
     assert!(c < 32);
-    return char::from(c - 1 + b'A');
+    char::from(c - 1 + b'A')
 }
 
 pub(crate) fn canonicalize_key(mut key: Key) -> Result<Key, WString> {
@@ -461,7 +461,7 @@ pub fn char_to_symbol(c: char, is_first_in_token: bool) -> WString {
 #[cfg(test)]
 mod tests {
     use crate::key::{self, Key, ctrl, function_key, parse_keys};
-    use crate::wchar::prelude::*;
+    use crate::prelude::*;
 
     #[test]
     fn test_parse_key() {

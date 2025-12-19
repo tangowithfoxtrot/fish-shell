@@ -24,11 +24,11 @@ use crate::highlight::{HighlightRole, HighlightSpec, colorize, highlight_shell};
 use crate::operation_context::OperationContext;
 use crate::parse_constants::{ParseTokenType, ParseTreeFlags, SourceRange};
 use crate::parse_util::{SPACES_PER_INDENT, apply_indents, parse_util_compute_indents};
+use crate::prelude::*;
 use crate::print_help::print_help;
 use crate::threads;
 use crate::tokenizer::{TOK_SHOW_BLANK_LINES, TOK_SHOW_COMMENTS, TokenType, Tokenizer};
 use crate::topic_monitor::topic_monitor_init;
-use crate::wchar::prelude::*;
 use crate::wcstringutil::count_preceding_backslashes;
 use crate::wgetopt::{ArgType, WGetopter, WOption, wopt};
 use crate::wutil::fish_iswalnum;
@@ -894,7 +894,7 @@ fn throwing_main() -> i32 {
     unsafe {
         set_libc_locales(/*log_ok=*/ false)
     };
-    crate::wutil::gettext::initialize_gettext();
+    crate::localization::initialize_gettext();
     env_init(None, true, false);
 
     // Only set these here so you can't set them via the builtin.

@@ -4,10 +4,10 @@ use crate::common::ToCString;
 use crate::common::{self, EscapeStringStyle, escape_string, wcs2bytes, wcs2bytes_appending};
 use crate::flogf;
 use crate::future_feature_flags::{self, FeatureFlag};
+use crate::prelude::*;
 use crate::screen::{is_dumb, only_grayscale};
 use crate::text_face::{TextFace, TextStyling, UnderlineStyle};
 use crate::threads::MainThread;
-use crate::wchar::prelude::*;
 use bitflags::bitflags;
 use once_cell::sync::OnceCell;
 use std::cell::{RefCell, RefMut};
@@ -929,8 +929,7 @@ fn get_num_cap(db: &terminfo::Database, code: &str) -> Option<usize> {
 /// Panics if the given code string does not contain exactly two bytes.
 fn get_flag_cap(db: &terminfo::Database, code: &str) -> bool {
     db.raw(code)
-        .map(|cap| matches!(cap, terminfo::Value::True))
-        .unwrap_or(false)
+        .is_some_and(|cap| matches!(cap, terminfo::Value::True))
 }
 
 /// Covers over tparm() with one parameter.

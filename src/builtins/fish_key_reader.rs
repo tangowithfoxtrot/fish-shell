@@ -23,6 +23,7 @@ use crate::{
     key::{Key, char_to_symbol},
     nix::isatty,
     panic::panic_handler,
+    prelude::*,
     print_help::print_help,
     proc::set_interactive_session,
     reader::{
@@ -31,7 +32,6 @@ use crate::{
     threads,
     topic_monitor::topic_monitor_init,
     tty_handoff::TtyHandoff,
-    wchar::prelude::*,
     wgetopt::{ArgType, WGetopter, WOption, wopt},
 };
 
@@ -279,7 +279,7 @@ fn throwing_main() -> i32 {
     set_interactive_session(true);
     topic_monitor_init();
     threads::init();
-    crate::wutil::gettext::initialize_gettext();
+    crate::localization::initialize_gettext();
     env_init(None, true, false);
     reader_init(false);
     if let Some(features_var) = EnvStack::globals().get(L!("fish_features")) {

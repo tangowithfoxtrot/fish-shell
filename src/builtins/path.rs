@@ -991,13 +991,13 @@ pub fn path(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> Bui
         return Ok(SUCCESS);
     }
     let args = &mut args[1..];
-    return subcmd(parser, streams, args);
+    subcmd(parser, streams, args)
 }
 
 #[cfg(test)]
 mod tests {
     use super::find_extension;
-    use crate::wchar::prelude::*;
+    use crate::prelude::*;
 
     #[test]
     fn test_find_extension() {

@@ -12,7 +12,7 @@ use crate::global_safety::RelaxedAtomicBool;
 use crate::parse_tree::NodeRef;
 use crate::parser::Parser;
 use crate::parser_keywords::parser_keywords_is_reserved;
-use crate::wchar::prelude::*;
+use crate::prelude::*;
 use crate::wutil::dir_iter::DirIter;
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -318,7 +318,7 @@ pub fn copy(name: &wstr, new_name: WString, parser: &Parser) -> bool {
     // Note this will NOT overwrite an existing function with the new name.
     // TODO: rationalize if this behavior is desired.
     funcset.funcs.entry(new_name).or_insert(Arc::new(new_props));
-    return true;
+    true
 }
 
 /// Returns all function names.
@@ -404,9 +404,7 @@ impl FunctionProperties {
 
     /// If this function is a copy, return the original 1-based line number. Otherwise, return 0.
     pub fn copy_definition_lineno(&self) -> u32 {
-        self.copy_definition_lineno
-            .map(|val| val.get())
-            .unwrap_or(0)
+        self.copy_definition_lineno.map_or(0, |val| val.get())
     }
 
     /// Return a definition of the function, annotated with properties like event handlers and wrap

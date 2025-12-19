@@ -52,16 +52,17 @@ use crate::{
     fs::fsync,
     history::file::{HistoryFile, RawHistoryFile, append_history_item_to_buffer},
     io::IoStreams,
+    localization::wgettext_fmt,
     operation_context::{EXPANSION_LIMIT_BACKGROUND, OperationContext},
     parse_constants::{ParseTreeFlags, StatementDecoration},
     parse_util::{parse_util_detect_errors, parse_util_unescape_wildcards},
     path::{path_get_config, path_get_data, path_is_valid},
+    prelude::*,
     threads::assert_is_background_thread,
     util::find_subslice,
-    wchar::prelude::*,
     wcstringutil::subsequence_in_string,
     wildcard::{ANY_STRING, wildcard_match},
-    wutil::{FileId, INVALID_FILE_ID, file_id_for_file, wgettext_fmt, wrealpath, wstat, wunlink},
+    wutil::{FileId, INVALID_FILE_ID, file_id_for_file, wrealpath, wstat, wunlink},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1086,7 +1087,7 @@ impl HistoryImpl {
 
 fn string_could_be_path(potential_path: &wstr) -> bool {
     // Assume that things with leading dashes aren't paths.
-    return !(potential_path.is_empty() || potential_path.starts_with('-'));
+    !(potential_path.is_empty() || potential_path.starts_with('-'))
 }
 
 /// Perform a search of `hist` for `search_string`. Invoke a function `func` for each match. If
@@ -1778,8 +1779,8 @@ mod tests {
     use crate::env::{EnvMode, EnvStack};
     use crate::fs::{LockedFile, WriteMethod};
     use crate::path::path_get_data;
+    use crate::prelude::*;
     use crate::tests::prelude::*;
-    use crate::wchar::prelude::*;
     use crate::wcstringutil::{string_prefixes_string, string_prefixes_string_case_insensitive};
     use fish_build_helper::workspace_root;
     use rand::Rng;

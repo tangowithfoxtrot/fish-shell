@@ -14,12 +14,12 @@ use crate::io::IoChain;
 use crate::job_group::{JobGroup, MaybeJobId};
 use crate::parse_tree::NodeRef;
 use crate::parser::{Block, Parser};
+use crate::prelude::*;
 use crate::reader::{fish_is_unwinding_for_exit, reader_schedule_prompt_repaint};
 use crate::redirection::RedirectionSpecList;
 use crate::signal::{Signal, signal_set_handlers_once};
 use crate::topic_monitor::{GenerationsList, Topic, topic_monitor_principal};
 use crate::wait_handle::{InternalJobId, WaitHandle, WaitHandleRef, WaitHandleStore};
-use crate::wchar::prelude::*;
 use crate::wutil::{wbasename, wperror};
 use cfg_if::cfg_if;
 use fish_wchar::ToWString;
@@ -126,17 +126,17 @@ impl ProcStatus {
 
     /// Encode a return value `ret` and signal `sig` into a status value like waitpid() does.
     const fn w_exitcode(ret: i32, sig: i32) -> i32 {
-        cfg_if!(
+        cfg_if! {
             if #[cfg(waitstatus_signal_ret)] {
                 // It's encoded signal and then status
                 // The return status is in the lower byte.
-                return (sig << 8) | ret;
+                (sig << 8) | ret
             } else {
                 // The status is encoded in the upper byte.
                 // This should be W_EXITCODE(ret, sig) but that's not available everywhere.
-                return (ret << 8) | sig;
+                (ret << 8) | sig
             }
-        );
+        }
     }
 
     /// Construct from a status returned from a waitpid call.
@@ -1452,7 +1452,7 @@ fn summary_command(j: &Job, p: Option<&Process>) -> WString {
             if j.external_procs().count() > 1 {
                 // I don't think it's safe to blindly unwrap here because even though we exited with
                 // a signal, the job could have contained a fish function?
-                let pid = p.pid().map(|p| p.to_string()).unwrap_or("-".to_string());
+                let pid = p.pid().map_or("-".to_string(), |p| p.to_string());
                 buffer += &sprintf!(" %s", pid)[..];
 
                 buffer.push(' ');

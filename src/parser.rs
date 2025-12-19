@@ -27,11 +27,11 @@ use crate::parse_constants::{
 use crate::parse_execution::{EndExecutionReason, ExecutionContext};
 use crate::parse_tree::NodeRef;
 use crate::parse_tree::{LineCounter, ParsedSourceRef, parse_source};
+use crate::prelude::*;
 use crate::proc::{JobGroupRef, JobList, JobRef, Pid, ProcStatus, job_reap};
 use crate::signal::{Signal, signal_check_cancel, signal_clear_cancel};
 use crate::util::get_time;
 use crate::wait_handle::WaitHandleStore;
-use crate::wchar::prelude::*;
 use crate::wutil::perror;
 use crate::{flog, flogf, function};
 use fish_wchar::WExt;
@@ -815,7 +815,7 @@ impl Parser {
 
     /// Returns the current line number, indexed from 1, or zero if not sourced.
     pub fn get_lineno_for_display(&self) -> u32 {
-        self.get_lineno().map(|val| val.get()).unwrap_or(0)
+        self.get_lineno().map_or(0, |val| val.get())
     }
 
     /// Return whether we are currently evaluating a "block" such as an if statement.
@@ -1383,7 +1383,7 @@ fn append_block_description_to_stack_trace(parser: &Parser, b: &Block, trace: &m
         if let Some(file) = b.src_filename.as_ref() {
             trace.push_utfstr(&sprintf!(
                 "\tcalled on line %d of file %s\n",
-                b.src_lineno.map(|n| n.get()).unwrap_or(0),
+                b.src_lineno.map_or(0, |n| n.get()),
                 user_presentable_path(file, parser.vars())
             ));
         } else if parser.libdata().within_fish_init {
@@ -1448,10 +1448,10 @@ mod tests {
     };
     use crate::parse_tree::{LineCounter, parse_source};
     use crate::parse_util::{parse_util_detect_errors, parse_util_detect_errors_in_argument};
+    use crate::prelude::*;
     use crate::reader::{fake_scoped_reader, reader_reset_interrupted};
     use crate::signal::{signal_clear_cancel, signal_reset_handlers, signal_set_handlers};
     use crate::tests::prelude::*;
-    use crate::wchar::prelude::*;
     use crate::wcstringutil::join_strings;
     use libc::SIGINT;
     use std::time::Duration;

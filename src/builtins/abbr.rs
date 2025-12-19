@@ -90,8 +90,7 @@ impl Options {
         if self
             .set_cursor_marker
             .as_ref()
-            .map(|m| m.is_empty())
-            .unwrap_or(false)
+            .is_some_and(|m| m.is_empty())
         {
             streams.err.append(wgettext_fmt!(
                 "%s: --set-cursor argument cannot be empty\n",
@@ -100,7 +99,7 @@ impl Options {
             return false;
         }
 
-        return true;
+        true
     }
 }
 
@@ -175,7 +174,7 @@ fn abbr_show(streams: &mut IoStreams) -> BuiltinResult {
         }
     });
 
-    return Ok(SUCCESS);
+    Ok(SUCCESS)
 }
 
 // Print the list of abbreviation names.
@@ -198,7 +197,7 @@ fn abbr_list(opts: &Options, streams: &mut IoStreams) -> BuiltinResult {
         }
     });
 
-    return Ok(SUCCESS);
+    Ok(SUCCESS)
 }
 
 // Rename an abbreviation, deleting any existing one with the given name.
@@ -299,7 +298,7 @@ fn abbr_query(opts: &Options) -> BuiltinResult {
                 return Ok(SUCCESS);
             }
         }
-        return Err(STATUS_CMD_ERROR);
+        Err(STATUS_CMD_ERROR)
     })
 }
 
@@ -437,7 +436,7 @@ fn abbr_add(opts: &Options, streams: &mut IoStreams) -> BuiltinResult {
         })
     });
 
-    return Ok(SUCCESS);
+    Ok(SUCCESS)
 }
 
 // Erase the named abbreviations.

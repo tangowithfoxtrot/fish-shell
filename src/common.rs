@@ -9,9 +9,9 @@ use crate::global_safety::AtomicRef;
 use crate::global_safety::RelaxedAtomicBool;
 use crate::key;
 use crate::parse_util::parse_util_escape_string_with_quote;
+use crate::prelude::*;
 use crate::terminal::Output;
 use crate::termsize::Termsize;
-use crate::wchar::prelude::*;
 use crate::wcstringutil::wcs2bytes_callback;
 use crate::wildcard::{ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE};
 use crate::wutil::fish_iswalnum;
@@ -607,7 +607,7 @@ fn unescape_string_internal(input: &wstr, flags: UnescapeFlags) -> Option<WStrin
                             // HACK: To reduce accidental use of brace expansion, treat a brace
                             // with zero or one items as literal input. See #4632. (The hack is
                             // doing it here and like this.)
-                            if vars_or_seps.last().map(|i| *i < brace).unwrap_or(true) {
+                            if vars_or_seps.last().is_none_or(|i| *i < brace) {
                                 result.as_char_slice_mut()[brace] = '{';
                                 // We also need to turn all spaces back.
                                 for i in brace + 1..result.len() {
@@ -1807,7 +1807,7 @@ pub const fn assert_sync<T: Sync>() {}
 /// # Examples
 ///
 /// ```
-/// use fish::wchar::prelude::*;
+/// use fish::prelude::*;
 /// use fish::assert_sorted_by_name;
 ///
 /// const COLORS: &[(&wstr, u32)] = &[
@@ -1823,7 +1823,7 @@ pub const fn assert_sync<T: Sync>() {}
 /// While this example would fail to compile:
 ///
 /// ```compile_fail
-/// use fish::wchar::prelude::*;
+/// use fish::prelude::*;
 /// use fish::assert_sorted_by_name;
 ///
 /// const COLORS: &[(&wstr, u32)] = &[

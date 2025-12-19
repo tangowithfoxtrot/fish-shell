@@ -13,18 +13,19 @@ use crate::event::Event;
 use crate::flog::flog;
 use crate::global_safety::RelaxedAtomicBool;
 use crate::input::{FISH_BIND_MODE_VAR, init_input};
+use crate::localization::wgettext;
 use crate::nix::{geteuid, getpid};
 use crate::null_terminated_array::OwningNullTerminatedArray;
 use crate::path::{
     path_emit_config_directory_messages, path_get_cache, path_get_config, path_get_data,
     path_make_canonical, paths_are_same_file,
 };
+use crate::prelude::*;
 use crate::proc::is_interactive_session;
 use crate::termsize;
 use crate::universal_notifier::default_notifier;
-use crate::wchar::prelude::*;
 use crate::wcstringutil::join_strings;
-use crate::wutil::{fish_wcstol, wgetcwd, wgettext};
+use crate::wutil::{fish_wcstol, wgetcwd};
 
 use libc::{c_int, uid_t};
 use once_cell::sync::{Lazy, OnceCell};
@@ -828,8 +829,8 @@ pub fn env_init(paths: Option<&ConfigPaths>, do_uvars: bool, default_paths: bool
 #[cfg(test)]
 mod tests {
     use super::{EnvMode, EnvStack, Environment};
+    use crate::prelude::*;
     use crate::tests::prelude::*;
-    use crate::wchar::prelude::*;
 
     #[test]
     #[serial]

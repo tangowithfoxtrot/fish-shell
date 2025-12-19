@@ -5,6 +5,7 @@ use crate::env::{EnvMode, EnvStack, Environment, setenv_lock, unsetenv_lock};
 use crate::flog::flog;
 use crate::input_common::{update_wait_on_escape_ms, update_wait_on_sequence_key_ms};
 use crate::locale::{invalidate_numeric_locale, set_libc_locales};
+use crate::prelude::*;
 use crate::reader::{
     reader_change_cursor_end_mode, reader_change_cursor_selection_mode, reader_change_history,
     reader_schedule_prompt_repaint, reader_set_autosuggestion_enabled, reader_set_transient_prompt,
@@ -15,7 +16,6 @@ use crate::screen::{
 use crate::terminal::ColorSupport;
 use crate::terminal::use_terminfo;
 use crate::tty_handoff::xtversion;
-use crate::wchar::prelude::*;
 use crate::wcstringutil::string_prefixes_string;
 use crate::wutil::fish_wcstoi;
 use crate::{function, terminal};
@@ -173,8 +173,7 @@ pub fn guess_emoji_width(vars: &EnvStack) {
 
     let term_program = vars
         .get(L!("TERM_PROGRAM"))
-        .map(|v| v.as_string())
-        .unwrap_or_else(WString::new);
+        .map_or_else(WString::new, |v| v.as_string());
 
     // TODO(term-workaround)
     if xtversion().unwrap_or(L!("")).starts_with(L!("iTerm2 ")) {
@@ -257,8 +256,7 @@ fn handle_fish_cursor_selection_mode_change(vars: &EnvStack) {
         .get(L!("fish_cursor_selection_mode"))
         .as_ref()
         .map(|v| v.as_string())
-        .map(|v| v == "inclusive")
-        .unwrap_or(false);
+        .is_some_and(|v| v == "inclusive");
     let mode = if inclusive {
         CursorSelectionMode::Inclusive
     } else {
@@ -275,8 +273,7 @@ fn handle_fish_cursor_end_mode_change(vars: &EnvStack) {
         .get(L!("fish_cursor_end_mode"))
         .as_ref()
         .map(|v| v.as_string())
-        .map(|v| v == "inclusive")
-        .unwrap_or(false);
+        .is_some_and(|v| v == "inclusive");
     let mode = if inclusive {
         CursorEndMode::Inclusive
     } else {
@@ -540,7 +537,7 @@ fn init_locale(vars: &EnvStack) {
     invalidate_numeric_locale();
 
     #[cfg(feature = "localize-messages")]
-    crate::wutil::gettext::update_from_env(vars);
+    crate::localization::update_from_env(vars);
 }
 
 pub fn use_posix_spawn() -> bool {
