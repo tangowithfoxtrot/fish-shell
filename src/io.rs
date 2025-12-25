@@ -13,7 +13,7 @@ use crate::redirection::{RedirectionMode, RedirectionSpecList};
 use crate::signal::SigChecker;
 use crate::terminal::Output;
 use crate::topic_monitor::Topic;
-use crate::wutil::{perror, perror_io, wdirname, wstat, wwrite_to_fd};
+use crate::wutil::{perror, perror_io, unescape_bytes_and_write_to_fd, wdirname, wstat};
 use errno::Errno;
 use libc::{EAGAIN, EINTR, ENOENT, ENOTDIR, EPIPE, EWOULDBLOCK, STDOUT_FILENO};
 use nix::fcntl::OFlag;
@@ -709,15 +709,6 @@ impl OutputStream {
     pub fn append_char(&mut self, c: char) -> bool {
         self.append(wstr::from_char_slice(&[c]))
     }
-    pub fn append1(&mut self, c: char) -> bool {
-        self.append_char(c)
-    }
-    pub fn push_back(&mut self, c: char) -> bool {
-        self.append_char(c)
-    }
-    pub fn push(&mut self, c: char) -> bool {
-        self.append(wstr::from_char_slice(&[c]))
-    }
 
     pub fn append_narrow(&mut self, s: &str) -> bool {
         self.append(bytes2wcstring(s.as_bytes()))
@@ -771,7 +762,7 @@ impl FdOutputStream {
         if self.errored {
             return false;
         }
-        if wwrite_to_fd(s, self.fd).is_none() {
+        if unescape_bytes_and_write_to_fd(s, self.fd).is_none() {
             // Some of our builtins emit multiple screens worth of data sent to a pager (the primary
             // example being the `history` builtin) and receiving SIGINT should be considered normal and
             // non-exceptional (user request to abort via Ctrl-C), meaning we shouldn't print an error.
