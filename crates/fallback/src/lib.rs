@@ -116,21 +116,36 @@ pub fn wcscasecmp(lhs: &wstr, rhs: &wstr) -> cmp::Ordering {
 }
 
 /// Compare two wide strings in a case-insensitive fashion
-pub fn wcscasecmp_fuzzy(lhs: &wstr, rhs: &wstr, canonicalize: fn(char) -> char) -> cmp::Ordering {
-    use std::char::ToLowercase;
-    use widestring::utfstr::CharsUtf32;
+pub fn wcscasecmp_fuzzy(
+    lhs: &wstr,
+    rhs: &wstr,
+    extra_canonicalization: fn(char) -> char,
+) -> cmp::Ordering {
+    lowercase(lhs.chars())
+        .map(extra_canonicalization)
+        .cmp(lowercase(rhs.chars()).map(extra_canonicalization))
+}
 
-    /// This struct streams the underlying lowercase chars of a `UTF32String` without allocating.
-    ///
-    /// `char::to_lowercase()` returns an iterator of chars and we sometimes need to cmp the last
-    /// char of one char's `to_lowercase()` with the first char of the other char's
-    /// `to_lowercase()`. This makes that possible.
-    struct ToLowerBuffer<'a, Canonicalize: Fn(char) -> char> {
+pub fn lowercase(chars: impl Iterator<Item = char>) -> impl Iterator<Item = char> {
+    lowercase_impl(chars, |c| c.to_lowercase())
+}
+pub fn lowercase_rev(chars: impl DoubleEndedIterator<Item = char>) -> impl Iterator<Item = char> {
+    lowercase_impl(chars.rev(), |c| c.to_lowercase().rev())
+}
+fn lowercase_impl<ToLowercase: Iterator<Item = char>>(
+    chars: impl Iterator<Item = char>,
+    to_lowercase: fn(char) -> ToLowercase,
+) -> impl Iterator<Item = char> {
+    /// This struct streams the underlying lowercase chars of a string without allocating.
+    struct ToLowerBuffer<Chars: Iterator<Item = char>, ToLowercase: Iterator<Item = char>> {
+        to_lowercase: fn(char) -> ToLowercase,
         current: ToLowercase,
-        chars: std::iter::Map<CharsUtf32<'a>, Canonicalize>,
+        chars: Chars,
     }
 
-    impl<'a, Canonicalize: Fn(char) -> char> Iterator for ToLowerBuffer<'a, Canonicalize> {
+    impl<Chars: Iterator<Item = char>, ToLowercase: Iterator<Item = char>> Iterator
+        for ToLowerBuffer<Chars, ToLowercase>
+    {
         type Item = char;
 
         fn next(&mut self) -> Option<Self::Item> {
@@ -138,31 +153,31 @@ pub fn wcscasecmp_fuzzy(lhs: &wstr, rhs: &wstr, canonicalize: fn(char) -> char) 
                 return Some(c);
             }
 
-            self.current = self.chars.next()?.to_lowercase();
+            self.current = (self.to_lowercase)(self.chars.next()?);
             self.current.next()
         }
     }
 
-    impl<'a, Canonicalize: Fn(char) -> char> ToLowerBuffer<'a, Canonicalize> {
-        pub fn new(mut chars: std::iter::Map<CharsUtf32<'a>, Canonicalize>) -> Self {
+    impl<Chars: Iterator<Item = char>, ToLowercase: Iterator<Item = char>>
+        ToLowerBuffer<Chars, ToLowercase>
+    {
+        pub fn new(mut chars: Chars, to_lowercase: fn(char) -> ToLowercase) -> Self {
             Self {
+                to_lowercase,
                 current: chars.next().map_or_else(
                     || {
-                        let mut empty = 'a'.to_lowercase();
+                        let mut empty = to_lowercase('a');
                         let _ = empty.next();
                         debug_assert!(empty.next().is_none());
                         empty
                     },
-                    |c| c.to_lowercase(),
+                    to_lowercase,
                 ),
                 chars,
             }
         }
     }
-
-    let lhs = ToLowerBuffer::new(lhs.chars().map(canonicalize));
-    let rhs = ToLowerBuffer::new(rhs.chars().map(canonicalize));
-    lhs.cmp(rhs)
+    ToLowerBuffer::new(chars, to_lowercase)
 }
 
 #[cfg(test)]
