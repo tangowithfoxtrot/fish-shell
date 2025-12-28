@@ -18,15 +18,18 @@ fi
 [ -n "$version" ]
 
 for tool in \
+    cmake \
     bundle \
     diff \
     gh \
     gpg \
     jq \
+    ninja \
     ruby \
     tar \
     timeout \
     uv \
+    xz \
 ; do
     if ! command -v "$tool" >/dev/null; then
         echo >&2 "$0: missing command: $1"
@@ -83,9 +86,10 @@ sed -i \
 CommitVersion() {
     sed -i "s/^version = \".*\"/version = \"$1\"/g" Cargo.toml
     cargo fetch --offline
-    # debchange is a Debian script to manage the Debian changelog, but
-    # it's too annoying to install everywhere. Just do it by hand.
-    cat - contrib/debian/changelog > contrib/debian/changelog.new <<EOF
+    if [ "$1" = "$version" ]; then
+        # debchange is a Debian script to manage the Debian changelog, but
+        # it's too annoying to install everywhere. Just do it by hand.
+        cat - contrib/debian/changelog > contrib/debian/changelog.new <<EOF
 fish (${version}-1) stable; urgency=medium
 
   * Release of new version $version.
@@ -95,8 +99,10 @@ fish (${version}-1) stable; urgency=medium
  -- $committer  $(date -R)
 
 EOF
-    mv contrib/debian/changelog.new contrib/debian/changelog
-    git add CHANGELOG.rst Cargo.toml Cargo.lock contrib/debian/changelog
+        mv contrib/debian/changelog.new contrib/debian/changelog
+        git add contrib/debian/changelog
+    fi
+    git add CHANGELOG.rst Cargo.toml Cargo.lock
     git commit -m "$2
 
 Created by ./build_tools/release.sh $version"
@@ -134,7 +140,7 @@ fish_tar_xz=fish-$version.tar.xz
 (
     local_tarball=$tmpdir/local-tarball
     mkdir "$local_tarball"
-    FISH_ARTEFACT_PATH=$local_tarball uv run ./build_tools/make_tarball.sh
+    FISH_ARTEFACT_PATH=$local_tarball ./build_tools/make_tarball.sh
     cd "$local_tarball"
     tar xf "$fish_tar_xz"
 )
@@ -162,9 +168,16 @@ actual_tag_oid=$(git ls-remote "$remote" |
     gh release upload "$version" "$fish_tar_xz.asc"
 )
 
+(
+    cd "$tmpdir/local-tarball/fish-$version"
+    uv --no-managed-python venv
+    . .venv/bin/activate
+    cmake -GNinja -DCMAKE_BUILD_TYPE=Debug .
+    ninja doc
+)
 CopyDocs() {
     rm -rf "$fish_site/site/docs/$1"
-    cp -r "$tmpdir/fish-$version/user_doc/html" "$fish_site/site/docs/$1"
+    cp -r "$tmpdir/local-tarball/fish-$version/user_doc/html" "$fish_site/site/docs/$1"
     git -C $fish_site add "site/docs/$1"
 }
 minor_version=${version%.*}
@@ -286,6 +299,8 @@ milestone_number() {
 gh_api_repo milestones/"$(milestone_number "$milestone_version")" \
     --method PATCH --raw-field state=closed
 
+next_minor_version=$(echo "$minor_version" |
+    awk -F. '{ printf "%s.%s", $1, $2+1 }')
 if [ -z "$(milestone_number "$next_minor_version")" ]; then
     gh_api_repo milestones --method POST \
         --raw-field title="fish $next_minor_version"

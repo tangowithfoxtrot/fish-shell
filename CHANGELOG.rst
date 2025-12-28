@@ -1,27 +1,22 @@
-fish 4.3.0 (released ???)
+fish ?.?.? (released ???)
 =========================
+
+fish 4.3.0 (released December 28, 2025)
+=======================================
 
 Deprecations and removed features
 ---------------------------------
-- fish no longer sets :ref:`universal variables <variables-universal>` by default.
+- fish no longer sets :ref:`universal variables <variables-universal>` by default, making the configuration easier to understand.
   Specifically, the ``fish_color_*``, ``fish_pager_color_*`` and ``fish_key_bindings`` variables are now set in the global scope by default.
   After upgrading to 4.3.0, fish will (once and never again) migrate these universals to globals set at startup in the
   ``~/.config/fish/conf.d/fish_frozen_theme.fish`` and
   ``~/.config/fish/conf.d/fish_frozen_key_bindings.fish`` files.
-  We suggest that you delete those files and :ref:`set your theme <syntax-highlighting>` in your ``~/.config/fish/config.fish`` file.
+  We suggest that you delete those files and :ref:`set your theme <syntax-highlighting>` in ``~/.config/fish/config.fish``.
 
-  - You can still configure fish to propagate theme changes; see :ref:`here <syntax-highlighting-instant-update>` for an example.
+  - You can still configure fish to propagate theme changes instantly; see :ref:`here <syntax-highlighting-instant-update>` for an example.
   - You can still opt into storing color variables in the universal scope
-    (via the deprecated ``fish_config theme save``) instead.
-    It's no longer the recommended approach because
-
-    1. it is at odds with dynamic theme switching based on the terminal's color theme (see below).
-    2. universal variables as a source of truth are easy to misunderstand,
-       compared to configuration files like ``config.fish``.
-- Erasing a color variable (e.g. by running ``set --erase fish_color_command``)
-  no longer prevents fish from overwriting it with the default theme's version.
-  To set a color to its fallback value (which is :envvar:`fish_color_normal` for most colors),
-  set it to an empty list (``set fish_color_command``) or an equivalent (``set fish_color_command normal``).
+    via ``fish_config theme save`` though unlike ``fish_config theme choose``,
+    it does not support dynamic theme switching based on the terminal's color theme (see below).
 - In addition to setting the variables which are explicitly defined in the given theme,
   ``fish_config theme choose`` now clears only color variables that were set by earlier invocations of a ``fish_config theme choose`` command
   (which is how fish's default theme is set).
@@ -71,6 +66,7 @@ Regression fixes:
 - (from 4.2.0) Incorrect emoji width computation on macOS.
 - (from 4.2.0) Mouse clicks and :kbd:`ctrl-l` edge cases in multiline command lines (:issue:`12121`).
 - (from 4.2.0) Completions for Git remote names on some non-glibc systems.
+- (from 4.2.0) Expansion of ``~$USER``.
 
 fish 4.2.1 (released November 13, 2025)
 =======================================
