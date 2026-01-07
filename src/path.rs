@@ -3,18 +3,18 @@
 //! path-related issues.
 
 use crate::common::{wcs2osstring, wcs2zstring};
-use crate::env::{EnvMode, EnvStack, Environment, FALLBACK_PATH};
+use crate::env::{EnvMode, EnvSetMode, EnvStack, Environment, FALLBACK_PATH};
 use crate::expand::{HOME_DIRECTORY, expand_tilde};
 use crate::flog::{flog, flogf};
 use crate::prelude::*;
 use crate::wutil::{normalize_path, path_normalize_for_cd, waccess, wdirname, wstat};
 use errno::{Errno, errno, set_errno};
 use libc::{EACCES, ENOENT, ENOTDIR, F_OK, X_OK};
-use once_cell::sync::Lazy;
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::mem::MaybeUninit;
 use std::os::unix::prelude::*;
+use std::sync::LazyLock;
 
 /// Returns the user configuration directory for fish. If the directory or one of its parents
 /// doesn't exist, they are first created.
@@ -24,7 +24,7 @@ use std::os::unix::prelude::*;
 pub fn path_get_config() -> Option<WString> {
     let dir = get_config_directory();
     if dir.success() {
-        Some(dir.path.to_owned())
+        Some(dir.path.clone())
     } else {
         None
     }
@@ -40,7 +40,7 @@ pub fn path_get_config() -> Option<WString> {
 pub fn path_get_data() -> Option<WString> {
     let dir = get_data_directory();
     if dir.success() {
-        Some(dir.path.to_owned())
+        Some(dir.path.clone())
     } else {
         None
     }
@@ -57,7 +57,7 @@ pub fn path_get_data() -> Option<WString> {
 pub fn path_get_cache() -> Option<WString> {
     let dir = get_cache_directory();
     if dir.success() {
-        Some(dir.path.to_owned())
+        Some(dir.path.clone())
     } else {
         None
     }
@@ -134,15 +134,13 @@ fn maybe_issue_path_warning(
     vars: &EnvStack,
 ) {
     let warning_var_name = L!("_FISH_WARNED_").to_owned() + which_dir;
-    if vars
-        .getf(&warning_var_name, EnvMode::GLOBAL | EnvMode::EXPORT)
-        .is_some()
-    {
+    let global_exported_mode = EnvMode::GLOBAL | EnvMode::EXPORT;
+    if vars.getf(&warning_var_name, global_exported_mode).is_some() {
         return;
     }
     vars.set_one(
         &warning_var_name,
-        EnvMode::GLOBAL | EnvMode::EXPORT,
+        EnvSetMode::new_at_early_startup(global_exported_mode),
         L!("1").to_owned(),
     );
 
@@ -731,20 +729,20 @@ pub fn path_remoteness(path: &wstr) -> DirRemoteness {
 }
 
 fn get_data_directory() -> &'static BaseDirectory {
-    static DIR: Lazy<BaseDirectory> =
-        Lazy::new(|| make_base_directory(L!("XDG_DATA_HOME"), L!("/.local/share/fish")));
+    static DIR: LazyLock<BaseDirectory> =
+        LazyLock::new(|| make_base_directory(L!("XDG_DATA_HOME"), L!("/.local/share/fish")));
     &DIR
 }
 
 fn get_cache_directory() -> &'static BaseDirectory {
-    static DIR: Lazy<BaseDirectory> =
-        Lazy::new(|| make_base_directory(L!("XDG_CACHE_HOME"), L!("/.cache/fish")));
+    static DIR: LazyLock<BaseDirectory> =
+        LazyLock::new(|| make_base_directory(L!("XDG_CACHE_HOME"), L!("/.cache/fish")));
     &DIR
 }
 
 fn get_config_directory() -> &'static BaseDirectory {
-    static DIR: Lazy<BaseDirectory> =
-        Lazy::new(|| make_base_directory(L!("XDG_CONFIG_HOME"), L!("/.config/fish")));
+    static DIR: LazyLock<BaseDirectory> =
+        LazyLock::new(|| make_base_directory(L!("XDG_CONFIG_HOME"), L!("/.config/fish")));
     &DIR
 }
 

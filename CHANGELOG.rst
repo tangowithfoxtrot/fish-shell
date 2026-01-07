@@ -1,6 +1,59 @@
 fish ?.?.? (released ???)
 =========================
 
+Deprecations and removed features
+---------------------------------
+
+Scripting improvements
+----------------------
+
+Interactive improvements
+------------------------
+
+New or improved bindings
+------------------------
+
+Improved terminal support
+-------------------------
+
+For distributors and developers
+-------------------------------
+- The CMake option ``WITH_GETTEXT`` has been renamed to ``WITH_MESSAGE_LOCALIZATION``, to reflect that it toggles localization independently of the backend used in the implementation.
+
+Regression fixes:
+-----------------
+
+fish 4.3.3 (released January 07, 2026)
+======================================
+
+This release fixes the following problems identified in fish 4.3.0:
+
+- Selecting a completion could insert only part of the token (:issue:`12249`).
+- Glitch with soft-wrapped autosuggestions and :doc:`fish_right_prompt <cmds/fish_right_prompt>` (:issue:`12255`).
+- Spurious echo in tmux when typing a command really fast (:issue:`12261`).
+- ``tomorrow`` theme always using the light variant (:issue:`12266`).
+- ``fish_config theme choose`` sometimes not shadowing themes set by e.g. webconfig (:issue:`12278`).
+- The sample prompts and themes are correctly installed (:issue:`12241`).
+- Last line of command output could be hidden when missing newline (:issue:`12246`).
+
+Other improvements include:
+
+- The ``abbr``, ``bind``, ``complete``, ``functions``, ``history`` and ``type`` commands now support a ``--color`` option to control syntax highlighting in their output. Valid values are ``auto`` (default), ``always``, or ``never``.
+- Existing file paths in redirection targets such as ``> file.txt`` are now highlighted using :envvar:`fish_color_valid_path`, indicating that ``file.txt`` will be clobbered (:issue:`12260`).
+
+fish 4.3.2 (released December 30, 2025)
+=======================================
+
+This release fixes the following problems identified in 4.3.0:
+
+- Pre-built macOS packages failed to start due to a ``Malformed Mach-O file`` error (:issue:`12224`).
+- ``extra_functionsdir`` (usually ``vendor_functions.d``) and friends were not used (:issue:`12226`).
+- Sample config file ``~/.config/fish/config.fish/`` and config directories ``~/.config/fish/conf.d/``, ``~/.config/fish/completions/`` and ``~/.config/fish/functions/`` were recreated on every startup instead of only the first time fish runs on a system (:issue:`12230`).
+- Spurious echo of ``^[[I`` in some scenarios (:issue:`12232`).
+- Infinite prompt redraw loop on some prompts (:issue:`12233`).
+- The removal of pre-built HTML docs from tarballs revealed that cross compilation is broken because we use ``${CMAKE_BINARY_DIR}/fish_indent`` for building HTML docs.
+  As a workaround, the new CMake build option ``FISH_INDENT_FOR_BUILDING_DOCS`` can be set to the path of a runnable ``fish_indent`` binary.
+
 fish 4.3.1 (released December 28, 2025)
 =======================================
 
@@ -13,7 +66,7 @@ fish 4.3.0 (released December 28, 2025)
 
 Deprecations and removed features
 ---------------------------------
-- fish no longer sets :ref:`universal variables <variables-universal>` by default, making the configuration easier to understand.
+- fish no longer sets user-facing :ref:`universal variables <variables-universal>` by default, making the configuration easier to understand.
   Specifically, the ``fish_color_*``, ``fish_pager_color_*`` and ``fish_key_bindings`` variables are now set in the global scope by default.
   After upgrading to 4.3.0, fish will (once and never again) migrate these universals to globals set at startup in the
   ``~/.config/fish/conf.d/fish_frozen_theme.fish`` and
@@ -40,7 +93,7 @@ Interactive improvements
 - Completion accuracy was improved for file paths containing ``=`` or ``:`` (:issue:`5363`).
 - Prefix-matching completions are now shown even if they don't match the case typed by the user (:issue:`7944`).
 - On Cygwin/MSYS, command name completion will favor the non-exe name (``foo``) unless the user started typing the extension.
-- When using the exe name (``foo.exe``), fish will use to the description and completions for ``foo`` if there are none for ``foo.exe``.
+- When using the exe name (``foo.exe``), fish will use the description and completions for ``foo`` if there are none for ``foo.exe``.
 - Autosuggestions now also show soft-wrapped portions (:issue:`12045`).
 
 New or improved bindings
@@ -55,8 +108,6 @@ Improved terminal support
 - The working directory is now reported on every fresh prompt (via OSC 7), fixing scenarios where a child process (like ``ssh``) left behind a stale working directory (:issue:`12191`).
 - OSC 133 prompt markers now also mark the prompt end, which improves shell integration with terminals like iTerm2 (:issue:`11837`).
 - Operating-system-specific key bindings are now decided based on the :ref:`terminal's host OS <status-terminal-os>`.
-- Focus reporting is enabled unconditionally, not just inside tmux.
-  To use it, define functions that handle the ``fish_focus_in`` or ``fish_focus_out`` :ref:`events <event>`.
 - New :ref:`feature flag <featureflags>` ``omit-term-workarounds`` can be turned on to prevent fish from trying to work around some incompatible terminals.
 
 For distributors and developers

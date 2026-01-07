@@ -1,7 +1,9 @@
 use crate::builtins::shared::{STATUS_CMD_ERROR, STATUS_CMD_OK, STATUS_READ_TOO_MUCH};
 use crate::common::{EMPTY_STRING, bytes2wcstring, wcs2bytes};
 use crate::fd_monitor::{Callback, FdMonitor, FdMonitorItemId};
-use crate::fds::{PIPE_ERROR, make_autoclose_pipes, make_fd_nonblocking, wopen_cloexec};
+use crate::fds::{
+    BorrowedFdFile, PIPE_ERROR, make_autoclose_pipes, make_fd_nonblocking, wopen_cloexec,
+};
 use crate::flog::{flog, flogf, should_flog};
 use crate::nix::isatty;
 use crate::path::path_apply_working_directory;
@@ -16,11 +18,10 @@ use errno::Errno;
 use libc::{EAGAIN, EINTR, ENOENT, ENOTDIR, EPIPE, EWOULDBLOCK, STDOUT_FILENO};
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
-use once_cell::sync::Lazy;
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
 /// separated_buffer_t represents a buffer of output from commands, prepared to be turned into a
 /// variable. For example, command substitutions output into one of these. Most commands just
@@ -859,9 +860,9 @@ pub struct IoStreams<'a> {
     pub out: &'a mut OutputStream,
     pub err: &'a mut OutputStream,
 
-    // fd representing stdin. This is not closed by the destructor.
-    // Note: if stdin is explicitly closed by `<&-` then this is -1!
-    pub stdin_fd: RawFd,
+    // File representing stdin.
+    // Note: if stdin is explicitly closed by `<&-` then this is None!
+    pub stdin_file: Option<BorrowedFdFile>,
 
     // Whether stdin is "directly redirected," meaning it is the recipient of a pipe (foo | cmd) or
     // direct redirection (cmd < foo.txt). An "indirect redirection" would be e.g.
@@ -896,7 +897,7 @@ impl<'a> IoStreams<'a> {
         IoStreams {
             out,
             err,
-            stdin_fd: -1,
+            stdin_file: None,
             stdin_is_directly_redirected: false,
             out_is_piped: false,
             err_is_piped: false,
@@ -906,8 +907,22 @@ impl<'a> IoStreams<'a> {
             job_group: None,
         }
     }
+
     pub fn out_is_terminal(&self) -> bool {
         !self.out_is_redirected && isatty(STDOUT_FILENO)
+    }
+
+    /// Return the fd for stdin, or -1 if stdin is closed.
+    pub fn stdin_fd(&self) -> RawFd {
+        self.stdin_file.as_ref().map_or(-1, |f| f.as_raw_fd())
+    }
+
+    /// Return whether stdin is closed.
+    /// This is "closed in the fish sense" - i.e. `<&-` has been used.
+    /// This does not handle the case where a closed stdin was inherited - in that case
+    /// we'll have an stdin_fd of 0 and we'll just get syscall errors when we try to use it.
+    pub fn is_stdin_closed(&self) -> bool {
+        self.stdin_file.is_none()
     }
 }
 
@@ -919,7 +934,7 @@ const NOCLOB_ERROR: &wstr = L!("The file '%s' already exists");
 const OPEN_MASK: Mode = Mode::from_bits_truncate(0o666);
 
 /// Provide the fd monitor used for background fillthread operations.
-static FD_MONITOR: Lazy<FdMonitor> = Lazy::new(FdMonitor::new);
+static FD_MONITOR: LazyLock<FdMonitor> = LazyLock::new(FdMonitor::new);
 
 pub fn fd_monitor() -> &'static FdMonitor {
     &FD_MONITOR

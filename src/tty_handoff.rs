@@ -20,19 +20,21 @@ use crate::threads::assert_is_main_thread;
 use crate::wutil::{perror, wcstoi};
 use fish_wchar::ToWString;
 use libc::{EINVAL, ENOTTY, EPERM, STDIN_FILENO, WNOHANG};
-use once_cell::sync::OnceCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicBool, AtomicPtr, Ordering},
+};
 
 /// Whether kitty keyboard protocol support is present in the TTY.
-static KITTY_KEYBOARD_SUPPORTED: OnceCell<bool> = OnceCell::new();
+static KITTY_KEYBOARD_SUPPORTED: OnceLock<bool> = OnceLock::new();
 
 /// Set that the TTY supports the kitty keyboard protocol.
 pub fn maybe_set_kitty_keyboard_capability() {
     KITTY_KEYBOARD_SUPPORTED.get_or_init(|| true);
 }
 
-pub(crate) static SCROLL_CONTENT_UP_SUPPORTED: OnceCell<bool> = OnceCell::new();
+pub(crate) static SCROLL_CONTENT_UP_SUPPORTED: OnceLock<bool> = OnceLock::new();
 pub(crate) const SCROLL_CONTENT_UP_TERMINFO_CODE: &str = "indn";
 
 // Get the support capability for kitty keyboard protocol.
@@ -47,10 +49,10 @@ pub fn maybe_set_scroll_content_up_capability() {
     });
 }
 
-pub static TERMINAL_OS_NAME: OnceCell<Option<WString>> = OnceCell::new();
+pub static TERMINAL_OS_NAME: OnceLock<Option<WString>> = OnceLock::new();
 pub(crate) const XTGETTCAP_QUERY_OS_NAME: &str = "query-os-name";
 
-pub static XTVERSION: OnceCell<WString> = OnceCell::new();
+pub static XTVERSION: OnceLock<WString> = OnceLock::new();
 
 pub fn xtversion() -> Option<&'static wstr> {
     XTVERSION.get().as_ref().map(|s| s.as_utfstr())
@@ -64,6 +66,8 @@ pub enum TtyQuirks {
     PreCsiMidnightCommander,
     // Running in iTerm2 before 3.5.12, which causes issues when using the kitty keyboard protocol.
     PreKittyIterm2,
+    // Whether we are running under tmux.
+    Tmux((u32, u32)),
     // Whether we are running under WezTerm.
     Wezterm,
 }
@@ -78,6 +82,8 @@ impl TtyQuirks {
             PreCsiMidnightCommander
         } else if get_iterm2_version(xtversion).is_some_and(|v| v < (3, 5, 12)) {
             PreKittyIterm2
+        } else if let Some(version) = get_tmux_version(xtversion) {
+            Tmux(version)
         } else if xtversion.starts_with(L!("WezTerm ")) {
             Wezterm
         } else {
@@ -172,16 +178,22 @@ impl TtyQuirks {
 
     // Return the protocols set to enable or disable TTY protocols.
     fn get_protocols(self) -> TtyProtocolsSet {
-        let on_chain = vec![
-            DecsetFocusReporting,
-            DecsetBracketedPaste,
-            DecsetColorThemeReporting,
-        ];
-        let off_chain = vec![
-            DecrstFocusReporting,
-            DecrstBracketedPaste,
-            DecrstColorThemeReporting,
-        ];
+        let mut on_chain = vec![];
+        let mut off_chain = vec![];
+
+        // Enable focus reporting under tmux
+        if matches!(self, TtyQuirks::Tmux(_)) {
+            on_chain.push(DecsetFocusReporting);
+            off_chain.push(DecrstFocusReporting);
+        }
+        on_chain.push(DecsetBracketedPaste);
+        off_chain.push(DecrstBracketedPaste);
+        if !matches!(
+            self, TtyQuirks::Tmux(version) if version < (3, 7)
+        ) {
+            on_chain.push(DecsetColorThemeReporting);
+            off_chain.push(DecrstColorThemeReporting);
+        }
 
         let on_chain = || on_chain.clone().into_iter();
         let off_chain = || off_chain.clone().into_iter();
@@ -345,14 +357,12 @@ pub struct TtyHandoff {
     // The job group which owns the tty, or empty if none.
     owner: Option<JobGroupRef>,
     // Whether terminal protocols were initially enabled.
-    // reclaim() restores the state to this.
+    // Restored on drop.
     tty_protocols_initial: bool,
     // The state of terminal protocols that we set.
     // Note we track this separately from TTY_PROTOCOLS_ACTIVE. We undo the changes
     // we make.
     tty_protocols_applied: bool,
-    // Whether reclaim was called, restoring the tty to its pre-scoped value.
-    reclaimed: bool,
     // Called after writing to the TTY.
     on_write: fn(),
 }
@@ -364,7 +374,6 @@ impl TtyHandoff {
             owner: None,
             tty_protocols_initial: protocols_active,
             tty_protocols_applied: protocols_active,
-            reclaimed: false,
             on_write,
         }
     }
@@ -393,40 +402,6 @@ impl TtyHandoff {
         assert!(self.owner.is_none(), "Terminal already transferred");
         if Self::try_transfer(jg) {
             self.owner = Some(jg.clone());
-        }
-    }
-
-    /// Reclaim the tty if we transferred it.
-    pub fn reclaim(mut self) {
-        self.reclaim_impl()
-    }
-
-    /// Release the tty, meaning no longer restore anything in Drop - similar to `mem::forget`.
-    pub fn release(mut self) {
-        self.reclaimed = true;
-    }
-
-    /// Implementation of reclaim, factored out for use in Drop.
-    fn reclaim_impl(&mut self) {
-        assert!(!self.reclaimed, "Terminal already reclaimed");
-        self.reclaimed = true;
-        if self.owner.is_some() {
-            flog!(proc_pgroup, "fish reclaiming terminal");
-            if unsafe { libc::tcsetpgrp(STDIN_FILENO, libc::getpgrp()) } == -1 {
-                flog!(
-                    warning,
-                    "Could not return shell to foreground:",
-                    errno::errno()
-                );
-                perror("tcsetpgrp");
-            }
-            self.owner = None;
-        }
-        // Restore the terminal protocols. Note this does nothing if they were unchanged.
-        if self.tty_protocols_initial {
-            self.enable_tty_protocols();
-        } else {
-            self.disable_tty_protocols();
         }
     }
 
@@ -587,11 +562,25 @@ impl TtyHandoff {
     }
 }
 
-/// The destructor will assert if reclaim() has not been called.
 impl Drop for TtyHandoff {
     fn drop(&mut self) {
-        if !self.reclaimed {
-            self.reclaim_impl();
+        if self.owner.is_some() {
+            flog!(proc_pgroup, "fish reclaiming terminal");
+            if unsafe { libc::tcsetpgrp(STDIN_FILENO, libc::getpgrp()) } == -1 {
+                flog!(
+                    warning,
+                    "Could not return shell to foreground:",
+                    errno::errno()
+                );
+                perror("tcsetpgrp");
+            }
+            self.owner = None;
+        }
+        // Restore the terminal protocols. Note this does nothing if they were unchanged.
+        if self.tty_protocols_initial {
+            self.enable_tty_protocols();
+        } else {
+            self.disable_tty_protocols();
         }
     }
 }
@@ -600,15 +589,24 @@ impl Drop for TtyHandoff {
 fn get_iterm2_version(xtversion: &wstr) -> Option<(u32, u32, u32)> {
     // TODO split_once
     let mut xtversion = xtversion.split(' ');
-    let name = xtversion.next().unwrap();
-    let version = xtversion.next()?;
-    if name != "iTerm2" {
+    if xtversion.next().unwrap() != "iTerm2" {
         return None;
     }
-    let mut parts = version.split('.');
+    let mut version = xtversion.next()?.split('.');
     Some((
-        wcstoi(parts.next()?).ok()?,
-        wcstoi(parts.next()?).ok()?,
-        wcstoi(parts.next()?).ok()?,
+        wcstoi(version.next()?).ok()?,
+        wcstoi(version.next()?).ok()?,
+        wcstoi(version.next()?).ok()?,
     ))
+}
+
+// If we are running under iTerm2, get the version as a tuple of (major, minor, patch).
+fn get_tmux_version(xtversion: &wstr) -> Option<(u32, u32)> {
+    // TODO split_once
+    let mut xtversion = xtversion.split(' ');
+    if xtversion.next().unwrap() != "tmux" {
+        return None;
+    }
+    let mut version = xtversion.next()?.split('.');
+    Some((wcstoi(version.next()?).ok()?, wcstoi(version.next()?).ok()?))
 }

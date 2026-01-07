@@ -2,10 +2,10 @@
 
 use fish_common::char_offset;
 use libc::X_OK;
-use once_cell::sync::Lazy;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
+use std::sync::LazyLock;
 
 use crate::common::{
     UnescapeFlags, UnescapeStringStyle, WILDCARD_RESERVED_BASE, WSL,
@@ -375,12 +375,12 @@ fn wildcard_test_flags_then_complete(
 
     // regular file *excludes* broken links - we have no use for them as commands.
     let is_regular_file = entry.check_type().is_some_and(|x| x == DirEntryType::Reg);
-    let is_executable = Lazy::new(|| is_regular_file && waccess(filepath, X_OK) == 0);
+    let is_executable = LazyLock::new(|| is_regular_file && waccess(filepath, X_OK) == 0);
     if executables_only && !*is_executable {
         return false;
     }
 
-    let filepath_stat = Lazy::new(|| lwstat(filepath));
+    let filepath_stat = LazyLock::new(|| lwstat(filepath));
 
     // For executables on Cygwin, prefer the name without the .exe, to match
     // better with Unix names, but only if there isn't also a file without that
@@ -500,7 +500,7 @@ mod expander {
                 working_directory,
                 completion_set: resolved_completions
                     .iter()
-                    .map(|c| c.completion.to_owned())
+                    .map(|c| c.completion.clone())
                     .collect(),
                 visited_files: HashSet::new(),
                 flags,
@@ -809,7 +809,6 @@ mod expander {
                 let Some(m) = string_fuzzy_match_string(wc_segment, &entry.name, false) else {
                     continue;
                 };
-                // The first port had !n.is_samecase_exact
                 if m.is_samecase_exact() {
                     continue;
                 }
@@ -944,7 +943,7 @@ mod expander {
                         break;
                     } else if entry.is_dir() && unique_entry.is_empty() {
                         // first candidate
-                        unique_entry = entry.name.to_owned();
+                        unique_entry = entry.name.clone();
                     } else {
                         // We either have two or more candidates, or the child is not a directory. We're
                         // done.
@@ -1002,8 +1001,7 @@ mod expander {
                 // Note that prepend_token_prefix is a no-op unless COMPLETE_REPLACES_TOKEN is set
                 let after = self.resolved_completions.len();
                 for c in self.resolved_completions[before..after].iter_mut() {
-                    if info.has_fuzzy_ancestor && !(c.flags.contains(CompleteFlags::REPLACES_TOKEN))
-                    {
+                    if info.has_fuzzy_ancestor && !c.replaces_token() {
                         c.flags |= CompleteFlags::REPLACES_TOKEN;
                         c.prepend_token_prefix(wildcard);
                     }

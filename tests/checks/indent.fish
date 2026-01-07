@@ -513,6 +513,28 @@ echo 'time {
 # CHECK: {{^    }}echo hi
 # CHECK: {{^}}{{[}]}}
 
+echo 'if {
+    true
+}
+    echo ok
+end' | $fish_indent
+# CHECK: if {
+# CHECK: {{^        }}true
+# CHECK: {{^    }}{{[}]}}
+# CHECK: {{^    }}echo ok
+# CHECK: {{^}}end
+
+echo 'while {
+    true
+}
+    echo ok
+end' | $fish_indent
+# CHECK: while {
+# CHECK: {{^        }}true
+# CHECK: {{^    }}{{[}]}}
+# CHECK: {{^    }}echo ok
+# CHECK: {{^}}end
+
 echo 'echo x{a,
   b}y' | $fish_indent
 # CHECK: echo x{a,
@@ -652,3 +674,13 @@ cat $tmpdir/indent_test.fish
 # See that the builtin can be redirected
 printf %s\n a b c | builtin fish_indent | grep b
 # CHECK: b
+
+# Regression test that fish_indent doesn't panic with closed stdin.
+fish_indent <&-
+# CHECKERR: fish_indent: stdin is closed
+
+function __fish_print_help
+    echo Help using PATH[1]=$PATH[1]
+end
+PATH=hello fish_indent --help
+# CHECK: Help using PATH[1]=hello

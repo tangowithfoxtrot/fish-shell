@@ -162,7 +162,7 @@ echo (_ file)
 
 set --erase LC_MESSAGES
 status language
-# CHECK: Active languages (source: LANGUAGE variable): zh_TW
+# CHECK: 使用的語言（來源：LANGUAGE variable）： zh_TW
 echo (_ file)
 # CHECK: 檔案
 
@@ -177,7 +177,8 @@ status language set asdf
 # CHECKERR: No catalogs available for language specifiers: asdf
 
 # This will have to be changed if we add catalogs for languages used here.
-status language set zh_HK it_IT
+status language set zh_HK it_IT zh_HK
+# CHECKERR: Language specifiers appear repeatedly: zh_HK
 # CHECKERR: No catalogs available for language specifiers: zh_HK it_IT
 
 status language set de de

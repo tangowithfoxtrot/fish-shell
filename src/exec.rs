@@ -11,11 +11,12 @@ use crate::common::{
     ScopeGuard, bytes2wcstring, exit_without_destructors, truncate_at_nul, wcs2bytes, wcs2zstring,
     write_loop,
 };
-use crate::env::{EnvMode, EnvStack, Environment, READ_BYTE_LIMIT, Statuses};
+use crate::env::{EnvMode, EnvSetMode, EnvStack, Environment, READ_BYTE_LIMIT, Statuses};
 #[cfg(have_posix_spawn)]
 use crate::env_dispatch::use_posix_spawn;
-use crate::fds::make_fd_blocking;
-use crate::fds::{PIPE_ERROR, make_autoclose_pipes, open_cloexec};
+use crate::fds::{
+    BorrowedFdFile, PIPE_ERROR, make_autoclose_pipes, make_fd_blocking, open_cloexec,
+};
 use crate::flog::{flog, flogf};
 use crate::fork_exec::PATH_BSHELL;
 use crate::fork_exec::blocked_signals_for_job;
@@ -32,7 +33,7 @@ use crate::io::{
 };
 use crate::nix::{getpid, isatty};
 use crate::null_terminated_array::OwningNullTerminatedArray;
-use crate::parser::{Block, BlockId, BlockType, EvalRes, Parser};
+use crate::parser::{Block, BlockId, BlockType, EvalRes, Parser, ParserEnvSetMode};
 use crate::prelude::*;
 use crate::proc::Pid;
 use crate::proc::{
@@ -57,7 +58,7 @@ use std::ffi::CStr;
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::num::NonZeroU32;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::slice;
 use std::sync::{
     Arc, OnceLock,
@@ -96,14 +97,14 @@ pub fn exec_job(parser: &Parser, job: &Job, block_io: IoChain) -> bool {
 
         // Apply foo=bar variable assignments
         for assignment in &job.processes()[0].variable_assignments {
-            parser.vars().set(
+            parser.set_var(
                 &assignment.variable_name,
-                EnvMode::LOCAL | EnvMode::EXPORT,
+                ParserEnvSetMode::new(EnvMode::LOCAL | EnvMode::EXPORT),
                 assignment.values.clone(),
             );
         }
 
-        internal_exec(parser.vars(), job, block_io);
+        internal_exec(parser.vars(), parser.is_repainting(), job, block_io);
         // internal_exec only returns if it failed to set up redirections.
         // In case of an successful exec, this code is not reached.
         let status = if job.flags().negate { 0 } else { 1 };
@@ -234,11 +235,13 @@ pub fn exec_job(parser: &Parser, job: &Job, block_io: IoChain) -> bool {
     // a pgroup, so error out before setting last_pid.
     if !job.is_foreground() {
         if let Some(last_pid) = job.get_last_pid() {
-            parser
-                .vars()
-                .set_one(L!("last_pid"), EnvMode::GLOBAL, last_pid.to_wstring());
+            parser.set_one(
+                L!("last_pid"),
+                ParserEnvSetMode::new(EnvMode::GLOBAL),
+                last_pid.to_wstring(),
+            );
         } else {
-            parser.vars().set_empty(L!("last_pid"), EnvMode::GLOBAL);
+            parser.set_empty(L!("last_pid"), ParserEnvSetMode::new(EnvMode::GLOBAL));
         }
     }
 
@@ -249,7 +252,6 @@ pub fn exec_job(parser: &Parser, job: &Job, block_io: IoChain) -> bool {
     if job.is_stopped() {
         handoff.save_tty_modes();
     }
-    handoff.reclaim();
     true
 }
 
@@ -325,8 +327,8 @@ fn exit_code_from_exec_error(err: libc::c_int) -> libc::c_int {
             STATUS_NOT_EXECUTABLE
         }
         #[cfg(apple)]
-        libc::EBADARCH => {
-            // This is for e.g. running ARM app on Intel Mac.
+        libc::EBADARCH | libc::EBADMACHO => {
+            // This is for e.g. running ARM app on Intel Mac or a bad Mach-O executable
             STATUS_NOT_EXECUTABLE
         }
         _ => {
@@ -479,7 +481,7 @@ fn can_use_posix_spawn_for_job(job: &Job, dup2s: &Dup2List) -> bool {
     !wants_terminal
 }
 
-fn internal_exec(vars: &EnvStack, j: &Job, block_io: IoChain) {
+fn internal_exec(vars: &EnvStack, is_repainting: bool, j: &Job, block_io: IoChain) {
     // Do a regular launch -  but without forking first...
     let mut all_ios = block_io;
     if !all_ios.append_from_specs(j.processes()[0].redirection_specs(), &vars.get_pwd_slash()) {
@@ -508,7 +510,8 @@ fn internal_exec(vars: &EnvStack, j: &Job, block_io: IoChain) {
     {
         // Decrement SHLVL as we're removing ourselves from the shell "stack".
         if is_interactive_session() {
-            let shlvl_var = vars.getf(L!("SHLVL"), EnvMode::GLOBAL | EnvMode::EXPORT);
+            let global_exported_mode = EnvMode::GLOBAL | EnvMode::EXPORT;
+            let shlvl_var = vars.getf(L!("SHLVL"), global_exported_mode);
             let mut shlvl_str = L!("0").to_owned();
             if let Some(shlvl_var) = shlvl_var {
                 if let Ok(shlvl) = fish_wcstol(&shlvl_var.as_string()) {
@@ -517,7 +520,11 @@ fn internal_exec(vars: &EnvStack, j: &Job, block_io: IoChain) {
                     }
                 }
             }
-            vars.set_one(L!("SHLVL"), EnvMode::GLOBAL | EnvMode::EXPORT, shlvl_str);
+            vars.set_one(
+                L!("SHLVL"),
+                EnvSetMode::new(global_exported_mode, is_repainting),
+                shlvl_str,
+            );
         }
 
         // launch_process _never_ returns.
@@ -957,15 +964,17 @@ fn function_prepare_environment(
     // 2. inherited variables
     // 3. argv
 
+    let mode = parser.convert_env_set_mode(ParserEnvSetMode::user(EnvMode::LOCAL));
+
     let mut overwrite_argv = false;
     for (idx, named_arg) in props.named_arguments.iter().enumerate() {
         if named_arg == L!("argv") {
             overwrite_argv = true
         };
         if idx < argv.len() {
-            vars.set_one(named_arg, EnvMode::LOCAL | EnvMode::USER, argv[idx].clone());
+            vars.set_one(named_arg, mode, argv[idx].clone());
         } else {
-            vars.set_empty(named_arg, EnvMode::LOCAL | EnvMode::USER);
+            vars.set_empty(named_arg, mode);
         }
     }
 
@@ -973,11 +982,11 @@ fn function_prepare_environment(
         if key == L!("argv") {
             overwrite_argv = true
         };
-        vars.set(key, EnvMode::LOCAL | EnvMode::USER, value.clone());
+        vars.set(key, mode, value.clone());
     }
 
     if !overwrite_argv {
-        vars.set_argv(argv);
+        vars.set_argv(argv, mode.is_repainting);
     }
     fb
 }
@@ -1151,23 +1160,28 @@ fn get_performer_for_builtin(p: &Process, j: &Job, io_chain: &IoChain) -> Box<Pr
             let err_io = io_chain.io_for_fd(STDERR_FILENO);
 
             // Figure out what fd to use for the builtin's stdin.
-            let mut local_builtin_stdin = STDIN_FILENO;
+            let mut local_builtin_stdin = Some(BorrowedFdFile::stdin());
             if let Some(inp) = io_chain.io_for_fd(STDIN_FILENO) {
+                // An fd of -1 is treated as closing stdin.
                 // Ignore fd redirections from an fd other than the
                 // standard ones. e.g. in source <&3 don't actually read from fd 3,
                 // which is internal to fish. We still respect this redirection in
                 // that we pass it on as a block IO to the code that source runs,
                 // and therefore this is not an error.
-                let ignore_redirect = inp.io_mode() == IoMode::Fd && inp.source_fd() >= 3;
-                if !ignore_redirect {
-                    local_builtin_stdin = inp.source_fd();
+                let fd = inp.source_fd();
+                let ignore_redirect = fd >= 3 && inp.io_mode() == IoMode::Fd;
+                if fd == -1 {
+                    local_builtin_stdin = None;
+                } else if !ignore_redirect {
+                    // Safety: the fd may in principal be closed, but this only panics on negative values.
+                    local_builtin_stdin = Some(unsafe { BorrowedFdFile::from_raw_fd(fd) });
                 }
             }
 
             // Populate our IoStreams. This is a bag of information for the builtin.
             let mut streams = IoStreams::new(output_stream, errput_stream, &io_chain);
             streams.job_group = job_group;
-            streams.stdin_fd = local_builtin_stdin;
+            streams.stdin_file = local_builtin_stdin;
             streams.stdin_is_directly_redirected = stdin_is_directly_redirected;
             streams.out_is_redirected = out_io.is_some();
             streams.err_is_redirected = err_io.is_some();
@@ -1308,9 +1322,9 @@ fn exec_process_in_job(
         }
     });
     for assignment in &p.variable_assignments {
-        parser.vars().set(
+        parser.set_var(
             &assignment.variable_name,
-            EnvMode::LOCAL | EnvMode::EXPORT,
+            ParserEnvSetMode::new(EnvMode::LOCAL | EnvMode::EXPORT),
             assignment.values.clone(),
         );
     }

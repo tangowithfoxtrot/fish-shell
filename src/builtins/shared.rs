@@ -1,5 +1,6 @@
 use super::prelude::*;
 use crate::common::{Named, bytes2wcstring, escape, get_by_sorted_name};
+use crate::fds::BorrowedFdFile;
 use crate::io::OutputStream;
 use crate::parse_constants::UNKNOWN_BUILTIN_ERR_MSG;
 use crate::parse_util::parse_util_argument_is_help;
@@ -8,10 +9,7 @@ use crate::proc::{Pid, ProcStatus, no_exec};
 use crate::{builtins::*, wutil};
 use errno::errno;
 use fish_wchar::L;
-
-use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-use std::os::fd::FromRawFd;
 
 pub type BuiltinCmd = fn(&Parser, &mut IoStreams, &mut [&wstr]) -> BuiltinResult;
 
@@ -814,25 +812,26 @@ impl<'args> InputValue<'args> {
 
 /// A helper type for extracting arguments from either argv or stdin.
 pub struct Arguments<'args, 'iter> {
-    /// The list of arguments passed to the string builtin.
-    args: &'iter [&'args wstr],
-    /// If using argv, index of the next argument to return.
-    argidx: &'iter mut usize,
     split_behavior: SplitBehavior,
-    /// Buffer to store what we read with the BufReader
-    /// Is only here to avoid allocating every time
-    buffer: Vec<u8>,
-    /// If not using argv, we read with a buffer
-    reader: Option<BufReader<File>>,
+    source: ArgvSource<'args, 'iter>,
 }
 
-impl Drop for Arguments<'_, '_> {
-    fn drop(&mut self) {
-        if let Some(r) = self.reader.take() {
-            // we should not close stdin
-            std::mem::forget(r.into_inner());
-        }
-    }
+/// Either the arguments from argv, or from stdin.
+enum ArgvSource<'args, 'iter> {
+    /// Read arguments from argv.
+    Args {
+        // The list of arguments passed to the builtin.
+        args: &'iter [&'args wstr],
+        // Index of the next argument to return.
+        argidx: &'iter mut usize,
+    },
+    /// Read arguments from stdin (possibly redirected).
+    Stdin {
+        /// Reused storage for reading.
+        buffer: Vec<u8>,
+        /// The reader to read from.
+        reader: BufReader<BorrowedFdFile>,
+    },
 }
 
 impl<'args, 'iter> Arguments<'args, 'iter> {
@@ -842,20 +841,21 @@ impl<'args, 'iter> Arguments<'args, 'iter> {
         streams: &mut IoStreams,
         chunk_size: usize,
     ) -> Self {
-        let reader = streams.stdin_is_directly_redirected.then(|| {
-            let stdin_fd = streams.stdin_fd;
-            assert!(stdin_fd >= 0, "should have a valid fd");
-            // safety: this should be a valid fd, and already open
-            let fd = unsafe { File::from_raw_fd(stdin_fd) };
-            BufReader::with_capacity(chunk_size, fd)
-        });
-
+        let source: ArgvSource = if !streams.stdin_is_directly_redirected {
+            ArgvSource::Args { args, argidx }
+        } else {
+            let stdin_file = streams
+                .stdin_file
+                .clone()
+                .expect("should have stdin if redirected");
+            ArgvSource::Stdin {
+                buffer: Vec::new(),
+                reader: BufReader::with_capacity(chunk_size, stdin_file),
+            }
+        };
         Arguments {
-            args,
-            argidx,
             split_behavior: SplitBehavior::Newline,
-            buffer: Vec::new(),
-            reader,
+            source,
         }
     }
 
@@ -864,9 +864,23 @@ impl<'args, 'iter> Arguments<'args, 'iter> {
         self
     }
 
+    /// Return the next argument by reading from argv ArgvSource.
+    fn get_arg_argv(&mut self) -> Option<InputValue<'args>> {
+        let ArgvSource::Args { args, argidx } = &mut self.source else {
+            panic!("Not reading from argv")
+        };
+        let arg = args.get(**argidx)?;
+        **argidx += 1;
+        let retval = InputValue::new(Cow::Borrowed(arg), /*want_newline=*/ true);
+        Some(retval)
+    }
+
+    /// Return the next argument by reading from stdin ArgvSource.
     fn get_arg_stdin(&mut self) -> Option<InputValue<'args>> {
         use SplitBehavior::*;
-        let reader = self.reader.as_mut().unwrap();
+        let ArgvSource::Stdin { reader, buffer } = &mut self.source else {
+            panic!("Not reading from stdin")
+        };
 
         if self.split_behavior == InferNull {
             // we must determine if the first `PATH_MAX` bytes contains a null.
@@ -882,9 +896,9 @@ impl<'args, 'iter> Arguments<'args, 'iter> {
 
         // NOTE: C++ wrongly commented that read_blocked retries for EAGAIN
         let num_bytes: usize = match self.split_behavior {
-            Newline => reader.read_until(b'\n', &mut self.buffer),
-            Null => reader.read_until(b'\0', &mut self.buffer),
-            Never => reader.read_to_end(&mut self.buffer),
+            Newline => reader.read_until(b'\n', buffer),
+            Null => reader.read_until(b'\0', buffer),
+            Never => reader.read_to_end(buffer),
             _ => unreachable!(),
         }
         .ok()?;
@@ -895,7 +909,7 @@ impl<'args, 'iter> Arguments<'args, 'iter> {
         }
 
         // assert!(num_bytes == self.buffer.len());
-        let (end, want_newline) = match (&self.split_behavior, self.buffer.last()) {
+        let (end, want_newline) = match (&self.split_behavior, buffer.last()) {
             // remove the newline — consumers do not expect it
             (Newline, Some(b'\n')) => (num_bytes - 1, true),
             // we are missing a trailing newline!
@@ -909,8 +923,8 @@ impl<'args, 'iter> Arguments<'args, 'iter> {
             _ => unreachable!(),
         };
 
-        let parsed = bytes2wcstring(&self.buffer[..end]);
-        self.buffer.clear();
+        let parsed = bytes2wcstring(&buffer[..end]);
+        buffer.clear();
 
         Some(InputValue::new(Cow::Owned(parsed), want_newline))
     }
@@ -925,19 +939,10 @@ impl<'args> Iterator for Arguments<'args, '_> {
     type Item = InputValue<'args>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.reader.is_some() {
-            return self.get_arg_stdin();
+        match &mut self.source {
+            ArgvSource::Args { .. } => self.get_arg_argv(),
+            ArgvSource::Stdin { .. } => self.get_arg_stdin(),
         }
-
-        if *self.argidx >= self.args.len() {
-            return None;
-        }
-        let retval = InputValue::new(
-            Cow::Borrowed(self.args[*self.argidx]),
-            /*want_newline=*/ true,
-        );
-        *self.argidx += 1;
-        Some(retval)
     }
 }
 
@@ -1047,4 +1052,52 @@ pub fn builtin_break_continue(
         LoopStatus::continues
     };
     Ok(SUCCESS)
+}
+
+/// Option character for --color flag
+pub const COLOR_OPTION_CHAR: char = '\x10';
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorEnabled {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl TryFrom<&wstr> for ColorEnabled {
+    type Error = ();
+    fn try_from(s: &wstr) -> Result<Self, Self::Error> {
+        match s {
+            s if s == "auto" => Ok(ColorEnabled::Auto),
+            s if s == "always" => Ok(ColorEnabled::Always),
+            s if s == "never" => Ok(ColorEnabled::Never),
+            _ => Err(()),
+        }
+    }
+}
+
+impl ColorEnabled {
+    pub fn enabled(&self, streams: &crate::io::IoStreams) -> bool {
+        match self {
+            ColorEnabled::Always => true,
+            ColorEnabled::Never => false,
+            ColorEnabled::Auto => streams.out_is_terminal(),
+        }
+    }
+
+    pub fn parse_from_opt(
+        streams: &mut IoStreams,
+        cmd: &wstr,
+        arg: &wstr,
+    ) -> Result<Self, ErrorCode> {
+        Self::try_from(arg).map_err(|()| {
+            streams.err.append(&wgettext_fmt!(
+                "%s: Invalid value for '--color' option: '%s'. Expected 'always', 'never', or 'auto'\n",
+                cmd,
+                arg
+            ));
+            STATUS_INVALID_ARGS
+        })
+    }
 }

@@ -47,7 +47,7 @@ use fish::{
     parse_constants::{ParseErrorList, ParseTreeFlags},
     parse_tree::ParsedSource,
     parse_util::parse_util_detect_errors_in_ast,
-    parser::{BlockType, CancelBehavior, Parser},
+    parser::{BlockType, CancelBehavior, Parser, ParserEnvSetMode},
     path::path_get_config,
     prelude::*,
     printf,
@@ -385,7 +385,8 @@ fn throwing_main() -> i32 {
         set_libc_locales(/*log_ok=*/ false)
     };
 
-    fish::localization::initialize_gettext();
+    #[cfg(feature = "localize-messages")]
+    fish::localization::initialize_localization();
 
     // Enable debug categories set in FISH_DEBUG.
     // This is in *addition* to the ones given via --debug.
@@ -498,9 +499,9 @@ fn throwing_main() -> i32 {
 
     if is_interactive_session() && opts.no_config && !opts.no_exec {
         // If we have no config, we default to the default key bindings.
-        parser.vars().set_one(
+        parser.set_one(
             L!("fish_key_bindings"),
-            EnvMode::UNEXPORT,
+            ParserEnvSetMode::new(EnvMode::UNEXPORT),
             L!("fish_default_key_bindings").to_owned(),
         );
         if function::exists(L!("fish_default_key_bindings"), parser) {
@@ -545,9 +546,9 @@ fn throwing_main() -> i32 {
         // Pass additional args as $argv.
         // Note that we *don't* support setting argv[0]/$0, unlike e.g. bash.
         let list = &args[my_optind..];
-        parser.vars().set(
+        parser.set_var(
             L!("argv"),
-            EnvMode::default(),
+            ParserEnvSetMode::default(),
             list.iter().map(|s| s.to_owned()).collect(),
         );
         res = run_command_list(parser, &opts.batch_cmds);
@@ -580,9 +581,9 @@ fn throwing_main() -> i32 {
             }
             Ok(f) => {
                 let list = &args[my_optind..];
-                parser.vars().set(
+                parser.set_var(
                     L!("argv"),
-                    EnvMode::default(),
+                    ParserEnvSetMode::default(),
                     list.iter().map(|s| s.to_owned()).collect(),
                 );
                 let rel_filename = &args[my_optind - 1];

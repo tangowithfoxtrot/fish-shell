@@ -16,7 +16,7 @@
 
 use crate::{
     common::cstr2wcstring,
-    env::EnvVar,
+    env::{EnvSetMode, EnvVar},
     fs::{
         LOCKED_FILE_MODE, LockedFile, LockingMode, PotentialUpdate, WriteMethod, lock_and_load,
         rewrite_via_temporary_file,
@@ -29,7 +29,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::CString,
     fs::File,
-    io::{BufRead, Read, Write},
+    io::{BufRead, BufWriter, Read, Write},
     mem::MaybeUninit,
     num::NonZeroUsize,
     ops::ControlFlow,
@@ -50,12 +50,14 @@ use crate::{
     fds::wopen_cloexec,
     flog::{flog, flogf},
     fs::fsync,
-    history::file::{HistoryFile, RawHistoryFile, append_history_item_to_buffer},
+    highlight::highlight_and_colorize,
+    history::file::{HistoryFile, RawHistoryFile},
     io::IoStreams,
     localization::wgettext_fmt,
     operation_context::{EXPANSION_LIMIT_BACKGROUND, OperationContext},
     parse_constants::{ParseTreeFlags, StatementDecoration},
     parse_util::{parse_util_detect_errors, parse_util_unescape_wildcards},
+    parser::Parser,
     path::{path_get_config, path_get_data, path_is_valid},
     prelude::*,
     threads::assert_is_background_thread,
@@ -108,16 +110,6 @@ use super::file::time_to_seconds;
 const DFLT_FISH_HISTORY_SESSION_ID: &wstr = L!("fish");
 
 pub const VACUUM_FREQUENCY: usize = 25;
-
-/// Output the contents `buffer` to `file` and clear the `buffer`.
-fn flush_to_file(buffer: &mut Vec<u8>, file: &mut File, min_size: usize) -> std::io::Result<()> {
-    if buffer.is_empty() || buffer.len() < min_size {
-        return Ok(());
-    }
-    file.write_all(buffer)?;
-    buffer.clear();
-    Ok(())
-}
 
 struct TimeProfiler {
     what: &'static str,
@@ -289,13 +281,20 @@ impl HistoryItem {
         // Ok, merge this item.
         self.creation_timestamp = self.creation_timestamp.max(item.creation_timestamp);
         if self.required_paths.len() < item.required_paths.len() {
-            self.required_paths = item.required_paths.clone();
+            self.required_paths.clone_from(&item.required_paths);
         }
         true
     }
 }
 
 static HISTORIES: Mutex<BTreeMap<WString, Arc<History>>> = Mutex::new(BTreeMap::new());
+
+/// When deleting, whether the deletion should be only for this session or for all sessions.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeletionScope {
+    SessionOnly,
+    AllSessions,
+}
 
 struct HistoryImpl {
     /// The name of this list. Used for picking a suitable filename and for switching modes.
@@ -311,10 +310,8 @@ struct HistoryImpl {
     has_pending_item: bool, // false
     /// Whether we should disable saving to the file for a time.
     disable_automatic_save_counter: u32, // 0
-    /// Deleted item contents.
-    /// Boolean describes if it should be deleted only in this session or in all
-    /// (used in deduplication).
-    deleted_items: HashMap<WString, bool>,
+    /// Deleted item contents, and the scope of the deletion.
+    deleted_items: HashMap<WString, DeletionScope>,
     /// The history file contents.
     file_contents: Option<HistoryFile>,
     /// The file ID of the history file.
@@ -456,7 +453,7 @@ impl HistoryImpl {
                 continue;
             }
 
-            if !seen.insert(item.contents.to_owned()) {
+            if !seen.insert(item.contents.clone()) {
                 // This item was not inserted because it was already in the set, so delete the item at
                 // this index.
                 self.new_items.remove(idx);
@@ -511,23 +508,21 @@ impl HistoryImpl {
                 let Some(old_item) = local_file.decode_item(offset) else {
                     continue;
                 };
-
-                // If old item is newer than session always erase if in deleted.
-                if old_item.timestamp() > self.boundary_timestamp {
-                    if old_item.is_empty() || self.deleted_items.contains_key(old_item.str()) {
-                        continue;
-                    }
-                    lru.add_item(old_item);
-                } else {
-                    // If old item is older and in deleted items don't erase if added by
-                    // clear_session.
-                    if old_item.is_empty() || self.deleted_items.get(old_item.str()) == Some(&false)
-                    {
-                        continue;
-                    }
-                    // Add this old item.
-                    lru.add_item(old_item);
+                if old_item.is_empty() {
+                    continue;
                 }
+
+                // Check if this item should be deleted.
+                if let Some(&scope) = self.deleted_items.get(old_item.str()) {
+                    // If old item is newer than session always erase if in deleted.
+                    // If old item is older and in deleted items don't erase if added by clear_session.
+                    let delete = old_item.timestamp() > self.boundary_timestamp
+                        || scope == DeletionScope::AllSessions;
+                    if delete {
+                        continue;
+                    }
+                }
+                lru.add_item(old_item);
             }
         }
 
@@ -551,30 +546,12 @@ impl HistoryImpl {
         /// Default buffer size for flushing to the history file.
         const HISTORY_OUTPUT_BUFFER_SIZE: usize = 64 * 1024;
         // Write them out.
-        let mut err = None;
-        let mut buffer = Vec::with_capacity(HISTORY_OUTPUT_BUFFER_SIZE + 128);
+        let mut buffer = BufWriter::with_capacity(HISTORY_OUTPUT_BUFFER_SIZE + 128, dst);
         for item in items {
-            append_history_item_to_buffer(&item, &mut buffer);
-            if let Err(e) = flush_to_file(&mut buffer, dst, HISTORY_OUTPUT_BUFFER_SIZE) {
-                err = Some(e);
-                break;
-            }
+            item.write_to(&mut buffer)?;
         }
-        if err.is_none() {
-            if let Err(e) = flush_to_file(&mut buffer, dst, 0) {
-                err = Some(e);
-            }
-        }
-        if let Some(err) = err {
-            flog!(
-                history_file,
-                "Error writing to temporary history file:",
-                err
-            );
-            Err(err)
-        } else {
-            Ok(())
-        }
+        buffer.flush()?;
+        Ok(())
     }
 
     /// Saves history by rewriting the file.
@@ -587,7 +564,15 @@ impl HistoryImpl {
 
         let rewrite =
             |old_file: &File, tmp_file: &mut File| -> std::io::Result<PotentialUpdate<()>> {
-                self.rewrite_to_temporary_file(old_file, tmp_file)?;
+                let result = self.rewrite_to_temporary_file(old_file, tmp_file);
+                if let Err(err) = result {
+                    flog!(
+                        history_file,
+                        "Error writing to temporary history file:",
+                        err
+                    );
+                    return Err(err);
+                }
                 Ok(PotentialUpdate {
                     do_save: true,
                     data: (),
@@ -646,19 +631,20 @@ impl HistoryImpl {
         // So far so good. Write all items at or after first_unwritten_new_item_index. Note that we
         // write even a pending item - pending items are ignored by history within the command
         // itself, but should still be written to the file.
-        // Use a small buffer size for appending, we usually only have 1 item
+        // Use a small buffer size for appending, as we usually only have 1 item.
+        // Buffer everything and then write it all at once to avoid tearing writes (O_APPEND).
         let mut buffer = Vec::new();
         let mut new_first_index = self.first_unwritten_new_item_index;
         while new_first_index < self.new_items.len() {
             let item = &self.new_items[new_first_index];
             if item.should_write_to_disk() {
-                append_history_item_to_buffer(item, &mut buffer);
+                // Can't error writing to a buffer.
+                item.write_to(&mut buffer).unwrap();
             }
             // We wrote or skipped this item, hooray.
             new_first_index += 1;
         }
-
-        flush_to_file(&mut buffer, locked_history_file.get_mut(), 0)?;
+        locked_history_file.get_mut().write_all(&buffer)?;
         fsync(locked_history_file.get())?;
         self.first_unwritten_new_item_index = new_first_index;
 
@@ -808,7 +794,8 @@ impl HistoryImpl {
     /// Remove a history item.
     fn remove(&mut self, str_to_remove: &wstr) {
         // Add to our list of deleted items.
-        self.deleted_items.insert(str_to_remove.to_owned(), false);
+        self.deleted_items
+            .insert(str_to_remove.to_owned(), DeletionScope::AllSessions);
 
         for idx in (0..self.new_items.len()).rev() {
             let matched = self.new_items[idx].str() == str_to_remove;
@@ -856,7 +843,8 @@ impl HistoryImpl {
     /// Clears only session.
     fn clear_session(&mut self) {
         for item in &self.new_items {
-            self.deleted_items.insert(item.str().to_owned(), true);
+            self.deleted_items
+                .insert(item.str().to_owned(), DeletionScope::SessionOnly);
         }
 
         self.new_items.clear();
@@ -1356,6 +1344,8 @@ impl History {
     #[allow(clippy::too_many_arguments)]
     pub fn search(
         self: &Arc<Self>,
+        parser: &Parser,
+        streams: &mut IoStreams,
         search_type: SearchType,
         search_args: &[&wstr],
         show_time_format: Option<&str>,
@@ -1364,7 +1354,7 @@ impl History {
         null_terminate: bool,
         reverse: bool,
         cancel_check: &CancelChecker,
-        streams: &mut IoStreams,
+        color_enabled: bool,
     ) -> bool {
         let mut remaining = max_items;
         let mut collected = Vec::new();
@@ -1376,7 +1366,17 @@ impl History {
                 return ControlFlow::Break(());
             }
             remaining -= 1;
-            let formatted_record = format_history_record(item, show_time_format, null_terminate);
+            let mut formatted_record =
+                format_history_record(item, show_time_format, null_terminate);
+
+            if color_enabled {
+                formatted_record = bytes2wcstring(&highlight_and_colorize(
+                    &formatted_record,
+                    &parser.context(),
+                    parser.vars(),
+                ));
+            }
+
             if reverse {
                 // We need to collect this for later.
                 collected.push(formatted_record);
@@ -1760,8 +1760,9 @@ pub fn all_paths_are_valid<P: IntoIterator<Item = WString>>(
 
 /// Sets private mode on. Once in private mode, it cannot be turned off.
 pub fn start_private_mode(vars: &EnvStack) {
-    vars.set_one(L!("fish_history"), EnvMode::GLOBAL, L!("").to_owned());
-    vars.set_one(L!("fish_private_mode"), EnvMode::GLOBAL, L!("1").to_owned());
+    let global_mode = EnvSetMode::new_at_early_startup(EnvMode::GLOBAL);
+    vars.set_one(L!("fish_history"), global_mode, L!("").to_owned());
+    vars.set_one(L!("fish_private_mode"), global_mode, L!("1").to_owned());
 }
 
 /// Queries private mode status.
@@ -1777,7 +1778,7 @@ mod tests {
     };
     use crate::common::ESCAPE_TEST_CHAR;
     use crate::common::{ScopeGuard, bytes2wcstring, wcs2bytes, wcs2osstring};
-    use crate::env::{EnvMode, EnvStack};
+    use crate::env::{EnvMode, EnvSetMode, EnvStack};
     use crate::fs::{LockedFile, WriteMethod};
     use crate::path::path_get_data;
     use crate::prelude::*;
@@ -2270,8 +2271,9 @@ mod tests {
         let wdir_path = WString::from(tmpdir.path().to_str().unwrap());
 
         let test_vars = EnvStack::new();
-        test_vars.set_one(L!("PWD"), EnvMode::GLOBAL, wdir_path.clone());
-        test_vars.set_one(L!("HOME"), EnvMode::GLOBAL, wdir_path.clone());
+        let global_mode = EnvSetMode::new(EnvMode::GLOBAL, false);
+        test_vars.set_one(L!("PWD"), global_mode, wdir_path.clone());
+        test_vars.set_one(L!("HOME"), global_mode, wdir_path.clone());
 
         let history = History::with_name(L!("path_detection"));
         history.clear();

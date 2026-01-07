@@ -1,6 +1,6 @@
 use crate::common::wcs2zstring;
 use crate::env::{
-    ELECTRIC_VARIABLES, ElectricVar, EnvMode, EnvStackSetResult, EnvVar, EnvVarFlags,
+    ELECTRIC_VARIABLES, ElectricVar, EnvMode, EnvSetMode, EnvStackSetResult, EnvVar, EnvVarFlags,
     PATH_ARRAY_SEP, Statuses, VarTable, is_read_only,
 };
 use crate::env_universal_common::EnvUniversal;
@@ -15,13 +15,13 @@ use crate::reader::{commandline_get_state, reader_status_count};
 use crate::threads::{is_forked_child, is_main_thread};
 use crate::wutil::fish_wcstol_radix;
 
-use once_cell::sync::Lazy;
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::HashSet;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Deref, DerefMut};
+use std::sync::LazyLock;
 
 #[cfg(not(target_has_atomic = "64"))]
 use portable_atomic::AtomicU64;
@@ -116,11 +116,20 @@ struct Query {
     pub user: bool,
 }
 
+impl From<EnvMode> for Query {
+    fn from(mode: EnvMode) -> Self {
+        Self::new(mode, false)
+    }
+}
+impl From<EnvSetMode> for Query {
+    fn from(mode: EnvSetMode) -> Self {
+        Self::new(mode.mode, mode.user)
+    }
+}
 impl Query {
     /// Creates a `Query` from env mode flags.
-    fn new(mode: EnvMode) -> Self {
-        let has_scope = mode
-            .intersects(EnvMode::LOCAL | EnvMode::FUNCTION | EnvMode::GLOBAL | EnvMode::UNIVERSAL);
+    fn new(mode: EnvMode, user: bool) -> Self {
+        let has_scope = mode.intersects(EnvMode::ANY_SCOPE);
         let has_export_unexport = mode.intersects(EnvMode::EXPORT | EnvMode::UNEXPORT);
         Query {
             has_scope,
@@ -138,7 +147,7 @@ impl Query {
             pathvar: mode.contains(EnvMode::PATHVAR),
             unpathvar: mode.contains(EnvMode::UNPATHVAR),
 
-            user: mode.contains(EnvMode::USER),
+            user,
         }
     }
 
@@ -285,7 +294,7 @@ impl Iterator for EnvNodeIter {
     }
 }
 
-static GLOBAL_NODE: Lazy<EnvNodeRef> = Lazy::new(|| EnvNodeRef::new(false, None));
+static GLOBAL_NODE: LazyLock<EnvNodeRef> = LazyLock::new(|| EnvNodeRef::new(false, None));
 
 /// Recursive helper to snapshot a series of nodes.
 fn copy_node_chain(node: &EnvNodeRef) -> EnvNodeRef {
@@ -459,7 +468,7 @@ impl EnvScopedImpl {
     }
 
     pub fn getf(&self, key: &wstr, mode: EnvMode) -> Option<EnvVar> {
-        let query = Query::new(mode);
+        let query = Query::from(mode);
         let mut result: Option<EnvVar> = None;
         // Computed variables are effectively global and can't be shadowed.
         if query.global {
@@ -489,7 +498,7 @@ impl EnvScopedImpl {
     }
 
     pub fn get_names(&self, flags: EnvMode) -> Vec<WString> {
-        let query = Query::new(flags);
+        let query = Query::from(flags);
         let mut names: HashSet<WString> = HashSet::new();
 
         // Helper to add the names of variables from `envs` to names, respecting show_exported and
@@ -586,7 +595,7 @@ impl EnvScopedImpl {
         let mut cursor = self.export_array_generations.iter().fuse();
         let mut mismatch = false;
         self.enumerate_generations(|r#gen| {
-            if cursor.next().cloned() != Some(r#gen) {
+            if cursor.next().copied() != Some(r#gen) {
                 mismatch = true;
             }
         });
@@ -721,8 +730,8 @@ impl EnvStackImpl {
     }
 
     /// Set a variable under the name `key`, using the given `mode`, setting its value to `val`.
-    pub fn set(&mut self, key: &wstr, mode: EnvMode, mut val: Vec<WString>) -> ModResult {
-        let query = Query::new(mode);
+    pub fn set(&mut self, key: &wstr, mode: EnvSetMode, mut val: Vec<WString>) -> ModResult {
+        let query = Query::from(mode);
         // Handle electric and read-only variables.
         if let Some(ret) = self.try_set_electric(key, &query, &mut val) {
             return ModResult::new(ret);
@@ -754,6 +763,7 @@ impl EnvStackImpl {
                 result.uvar_modified = true;
             } else if query.global || (query.universal && UVAR_SCOPE_IS_GLOBAL.load()) {
                 Self::set_in_node(&mut self.base.globals, key, val, flags);
+                result.global_modified = true;
             } else if query.local {
                 assert!(
                     !self.base.locals.ptr_eq(&self.base.globals),
@@ -802,8 +812,8 @@ impl EnvStackImpl {
     }
 
     /// Remove a variable under the name `key`.
-    pub fn remove(&mut self, key: &wstr, mode: EnvMode) -> ModResult {
-        let query = Query::new(mode);
+    pub fn remove(&mut self, key: &wstr, mode: EnvSetMode) -> ModResult {
+        let query = Query::from(mode);
         // Users can't remove read-only keys.
         if query.user && is_read_only(key) {
             return ModResult::new(EnvStackSetResult::Scope);

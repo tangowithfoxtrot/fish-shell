@@ -11,7 +11,7 @@ use crate::panic::panic_handler;
 use super::prelude::*;
 use crate::ast::{self, AsNode, Ast, Kind, Leaf, Node, NodeVisitor, SourceRangeList, Traversal};
 use crate::common::{
-    PROGRAM_NAME, UnescapeFlags, UnescapeStringStyle, bytes2wcstring, get_program_name,
+    PROGRAM_NAME, ReadExt, UnescapeFlags, UnescapeStringStyle, bytes2wcstring, get_program_name,
     unescape_string, wcs2bytes,
 };
 use crate::env::EnvStack;
@@ -756,6 +756,10 @@ impl<'source, 'ast> PrettyPrinterState<'source, 'ast> {
         };
 
         conj.decorator.is_some()
+            || matches!(
+                self.traversal.parent(conj.as_node()).kind(),
+                Kind::IfClause(_) | Kind::WhileHeader(_)
+            )
     }
 
     fn visit_left_brace(&mut self, node: &dyn ast::Token) {
@@ -910,10 +914,9 @@ pub fn main() {
 
 fn throwing_main() -> i32 {
     // TODO: Duplicated with fish_key_reader
-    use crate::io::FdOutputStream;
-    use crate::io::IoChain;
-    use crate::io::OutputStream::Fd;
-    use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+    use crate::fds::BorrowedFdFile;
+    use crate::io::{FdOutputStream, IoChain, OutputStream::Fd};
+    use libc::{STDERR_FILENO, STDOUT_FILENO};
 
     topic_monitor_init();
     threads::init();
@@ -922,12 +925,13 @@ fn throwing_main() -> i32 {
     let mut err = Fd(FdOutputStream::new(STDERR_FILENO));
     let io_chain = IoChain::new();
     let mut streams = IoStreams::new(&mut out, &mut err, &io_chain);
-    streams.stdin_fd = STDIN_FILENO;
+    streams.stdin_file = Some(BorrowedFdFile::stdin());
     // Safety: single-threaded.
     unsafe {
         set_libc_locales(/*log_ok=*/ false)
     };
-    crate::localization::initialize_gettext();
+    #[cfg(feature = "localize-messages")]
+    crate::localization::initialize_localization();
     env_init(None, true, false);
 
     // Only set these here so you can't set them via the builtin.
@@ -940,15 +944,19 @@ fn throwing_main() -> i32 {
     let args: Vec<WString> = std::env::args_os()
         .map(|osstr| bytes2wcstring(osstr.as_bytes()))
         .collect();
-    do_indent(&mut streams, args).builtin_status_code()
+    do_indent(None, &mut streams, args).builtin_status_code()
 }
 
-pub fn fish_indent(_parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> BuiltinResult {
+pub fn fish_indent(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> BuiltinResult {
     let args = args.iter_mut().map(|x| x.to_owned()).collect();
-    do_indent(streams, args)
+    do_indent(Some(parser), streams, args)
 }
 
-fn do_indent(streams: &mut IoStreams, args: Vec<WString>) -> BuiltinResult {
+fn do_indent(
+    parser: Option<&Parser>,
+    streams: &mut IoStreams,
+    args: Vec<WString>,
+) -> BuiltinResult {
     // Types of output we support
     #[derive(Eq, PartialEq)]
     enum OutputType {
@@ -988,7 +996,11 @@ fn do_indent(streams: &mut IoStreams, args: Vec<WString>) -> BuiltinResult {
         match c {
             'P' => DUMP_PARSE_TREE.store(true),
             'h' => {
-                print_help("fish_indent");
+                if let Some(parser) = parser {
+                    builtin_print_help(parser, streams, L!("fish_indent"));
+                } else {
+                    print_help("fish_indent");
+                }
                 return Ok(SUCCESS);
             }
             'v' => {
@@ -1042,18 +1054,24 @@ fn do_indent(streams: &mut IoStreams, args: Vec<WString>) -> BuiltinResult {
                 ));
                 return Err(STATUS_CMD_ERROR);
             }
-            use std::os::fd::FromRawFd;
-            let mut fd = unsafe { std::fs::File::from_raw_fd(streams.stdin_fd) };
+            let Some(stdin_file) = streams.stdin_file.as_mut() else {
+                let cmd = "fish_indent";
+                streams
+                    .err
+                    .append(&wgettext_fmt!("%s: stdin is closed\n", cmd));
+                return Err(STATUS_CMD_ERROR);
+            };
             let mut buf = vec![];
-            match fd.read_to_end(&mut buf) {
+            match stdin_file.read_to_end_interruptible(&mut buf) {
                 Ok(_) => {}
-                Err(_) => {
-                    // Don't close the fd
-                    std::mem::forget(fd);
-                    return Err(STATUS_CMD_ERROR);
+                Err(err) => {
+                    return if err.kind() == std::io::ErrorKind::Interrupted {
+                        Err(128 + libc::SIGINT)
+                    } else {
+                        Err(STATUS_CMD_ERROR)
+                    };
                 }
             }
-            std::mem::forget(fd);
             src = bytes2wcstring(&buf);
         } else {
             let arg = args[i];
@@ -1250,7 +1268,7 @@ fn make_pygments_csv(src: &wstr) -> Vec<u8> {
     }
 
     let mut token_ranges: Vec<TokenRange> = vec![];
-    for (i, color) in colors.iter().cloned().enumerate() {
+    for (i, color) in colors.iter().copied().enumerate() {
         let role = color.foreground;
         // See if we can extend the last range.
         if let Some(last) = token_ranges.last_mut() {

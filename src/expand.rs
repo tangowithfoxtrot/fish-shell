@@ -297,9 +297,9 @@ pub fn expand_tilde(input: &mut WString, vars: &dyn Environment) {
     }
 }
 
-/// Perform the opposite of tilde expansion on the string, which is modified in place.
-pub fn replace_home_directory_with_tilde(s: &wstr, vars: &dyn Environment) -> WString {
-    let mut result = s.to_owned();
+/// Perform the opposite of tilde expansion on the string.
+pub fn replace_home_directory_with_tilde(s: impl Into<WString>, vars: &dyn Environment) -> WString {
+    let mut result = s.into();
     // Only absolute paths get this treatment.
     if result.starts_with(L!("/")) {
         let mut home_directory = L!("~").to_owned();
@@ -737,7 +737,7 @@ fn expand_variables(
                 // here, So tmp < 1 means it's definitely not in.
                 // Note we are 1-based.
                 if item_index >= 1 && item_index <= all_var_items.len() {
-                    var_item_list.push(all_var_items[item_index - 1].to_owned());
+                    var_item_list.push(all_var_items[item_index - 1].clone());
                 }
             }
         }
@@ -1038,7 +1038,7 @@ pub fn expand_cmdsubst(
                 continue;
             }
             // -1 to convert from 1-based slice index to 0-based vector index.
-            sub_res2.push(sub_res[idx as usize - 1].to_owned());
+            sub_res2.push(sub_res[idx as usize - 1].clone());
         }
         sub_res = sub_res2;
     }
@@ -1597,6 +1597,7 @@ mod tests {
     use crate::expand::{ExpandResultCode, expand_to_receiver};
     use crate::operation_context::{EXPANSION_LIMIT_DEFAULT, no_cancel};
     use crate::parse_constants::ParseErrorList;
+    use crate::parser::ParserEnvSetMode;
     use crate::tests::prelude::*;
     use crate::wildcard::ANY_STRING;
     use crate::{
@@ -1957,7 +1958,7 @@ mod tests {
 
         let parser = TestParser::new();
         parser.vars().push(true);
-        let set = parser.vars().set(L!("bigvar"), EnvMode::LOCAL, vals);
+        let set = parser.set_var(L!("bigvar"), ParserEnvSetMode::new(EnvMode::LOCAL), vals);
         assert_eq!(set, EnvStackSetResult::Ok);
 
         let mut errors = ParseErrorList::new();
@@ -1977,7 +1978,7 @@ mod tests {
         assert_ne!(errors, vec![]);
         assert_eq!(res, ExpandResultCode::error);
 
-        parser.vars().pop();
+        parser.vars().pop(false);
     }
 
     #[test]
@@ -2047,5 +2048,23 @@ mod tests {
         );
 
         assert_eq!(abbr_expand_1(L!("foo"), cmd), Some(L!("bar").into()));
+    }
+
+    #[test]
+    fn test_replace_home_directory_with_tilde() {
+        use super::replace_home_directory_with_tilde as rhdwt;
+        use crate::env::{EnvMode, EnvSetMode, EnvStack};
+        let vars = EnvStack::new();
+        vars.set_one(
+            L!("HOME"),
+            EnvSetMode::new(EnvMode::GLOBAL, false),
+            L!("/home/testuser").to_owned(),
+        );
+
+        assert_eq!(rhdwt("/home/testuser/", &vars), "~/");
+        assert_eq!(rhdwt("/home/testuser/Documents/", &vars), "~/Documents/");
+        assert_eq!(rhdwt("/home/testuser", &vars), "/home/testuser");
+        assert_eq!(rhdwt("/other/path/", &vars), "/other/path/");
+        assert_eq!(rhdwt("relative/path", &vars), "relative/path");
     }
 }

@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
 use super::*;
-use crate::env::{EnvMode, EnvVar, EnvVarFlags};
+use crate::env::{EnvVar, EnvVarFlags};
 use crate::flog::flog;
 use crate::parse_util::parse_util_unescape_wildcards;
+use crate::parser::ParserEnvSetMode;
 use crate::wildcard::{ANY_STRING, wildcard_match};
 
 #[derive(Default)]
@@ -145,9 +146,8 @@ impl<'args> StringSubCommand<'args> for Match<'args> {
             ..
         }) = matcher
         {
-            let vars = parser.vars();
             for (name, vals) in first_match_captures.into_iter() {
-                vars.set(&WString::from(name), EnvMode::default(), vals);
+                parser.set_var(&WString::from(name), ParserEnvSetMode::default(), vals);
             }
         }
 
@@ -295,7 +295,7 @@ impl<'opts, 'args> RegexMatcher<'opts, 'args> {
             // empty/null members so we're going to have to use an empty string as the
             // sentinel value.
 
-            if let Some(m) = cg.as_ref().and_then(|cg| cg.name(&name.to_string())) {
+            if let Some(m) = cg.as_ref().and_then(|cg| cg.name(&name.clone())) {
                 captures.push(WString::from(m.as_bytes()));
             } else if opts.all {
                 captures.push(WString::new());

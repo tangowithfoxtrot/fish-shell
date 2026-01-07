@@ -106,6 +106,22 @@ pub fn highlight_shell(
     *color = highlighter.highlight();
 }
 
+pub fn highlight_and_colorize(
+    text: &wstr,
+    ctx: &OperationContext<'_>,
+    vars: &dyn Environment,
+) -> Vec<u8> {
+    let mut colors = Vec::new();
+    highlight_shell(
+        text,
+        &mut colors,
+        ctx,
+        /*io_ok=*/ false,
+        /*cursor=*/ None,
+    );
+    colorize(text, &colors, vars)
+}
+
 /// highlight_color_resolver_t resolves highlight specs (like "a command") to actual RGB colors.
 /// It maintains a cache with no invalidation mechanism. The lifetime of these should typically be
 /// one screen redraw.
@@ -951,24 +967,29 @@ impl<'s> Highlighter<'s> {
         }
         // No command substitution, so we can highlight the target file or fd. For example,
         // disallow redirections into a non-existent directory.
-        let target_is_valid = if !self.io_still_ok() {
+        let (role, file_exists) = if !self.io_still_ok() {
             // I/O is disallowed, so we don't have much hope of catching anything but gross
             // errors. Assume it's valid.
-            true
+            (HighlightRole::redirection, false)
         } else if contains_pending_variable(&self.pending_variables, &target) {
-            true
+            // Target uses a variable defined by the current commandline. Assume it's valid.
+            (HighlightRole::redirection, false)
         } else {
             // Validate the redirection target..
-            self.file_tester.test_redirection_target(&target, oper.mode)
-        };
-        self.color_node(
-            &redir.target,
-            HighlightSpec::with_fg(if target_is_valid {
-                HighlightRole::redirection
+            if let Ok(IsFile(file_exists)) =
+                self.file_tester.test_redirection_target(&target, oper.mode)
+            {
+                (HighlightRole::redirection, file_exists)
             } else {
-                HighlightRole::error
-            }),
-        );
+                (HighlightRole::error, false)
+            }
+        };
+        self.color_node(&redir.target, HighlightSpec::with_fg(role));
+        if file_exists {
+            for i in redir.target.source_range().as_usize() {
+                self.color_array[i].valid_path = true;
+            }
+        }
     }
 
     fn visit_variable_assignment(&mut self, varas: &VariableAssignment) {
@@ -1274,7 +1295,7 @@ pub struct HighlightSpec {
 mod tests {
     use super::{HighlightColorResolver, HighlightRole, HighlightSpec, highlight_shell};
     use crate::common::ScopeGuard;
-    use crate::env::{EnvMode, Environment};
+    use crate::env::{EnvMode, EnvSetMode, Environment};
     use crate::future_feature_flags::{self, FeatureFlag};
     use crate::highlight::parse_text_face_for_highlight;
     use crate::operation_context::{EXPANSION_LIMIT_BACKGROUND, OperationContext};
@@ -1376,6 +1397,9 @@ mod tests {
         let mut param_valid_path = HighlightSpec::with_fg(HighlightRole::param);
         param_valid_path.valid_path = true;
 
+        let mut redirection_valid_path = HighlightSpec::with_fg(HighlightRole::redirection);
+        redirection_valid_path.valid_path = true;
+
         let saved_flag = future_feature_flags::test(FeatureFlag::AmpersandNoBgInToken);
         future_feature_flags::set(FeatureFlag::AmpersandNoBgInToken, true);
         let _restore_saved_flag = ScopeGuard::new((), |_| {
@@ -1386,26 +1410,15 @@ mod tests {
 
         // Verify variables and wildcards in commands using /bin/cat.
         let vars = parser.vars();
-        vars.set_one(
-            L!("CDPATH"),
-            EnvMode::LOCAL,
-            L!("./cdpath-entry").to_owned(),
-        );
+        let local_mode = EnvSetMode::new_at_early_startup(EnvMode::LOCAL);
+        vars.set_one(L!("CDPATH"), local_mode, L!("./cdpath-entry").to_owned());
 
-        vars.set_one(
-            L!("VARIABLE_IN_COMMAND"),
-            EnvMode::LOCAL,
-            L!("a").to_owned(),
-        );
-        vars.set_one(
-            L!("VARIABLE_IN_COMMAND2"),
-            EnvMode::LOCAL,
-            L!("at").to_owned(),
-        );
+        vars.set_one(L!("VARIABLE_IN_COMMAND"), local_mode, L!("a").to_owned());
+        vars.set_one(L!("VARIABLE_IN_COMMAND2"), local_mode, L!("at").to_owned());
 
         let _cleanup = ScopeGuard::new((), |_| {
-            vars.remove(L!("VARIABLE_IN_COMMAND"), EnvMode::default());
-            vars.remove(L!("VARIABLE_IN_COMMAND2"), EnvMode::default());
+            vars.remove(L!("VARIABLE_IN_COMMAND"), EnvSetMode::default());
+            vars.remove(L!("VARIABLE_IN_COMMAND2"), EnvSetMode::default());
         });
 
         validate!(
@@ -1524,7 +1537,7 @@ mod tests {
             ("param1", fg(HighlightRole::param)),
             // Input redirection.
             ("<", fg(HighlightRole::redirection)),
-            ("/bin/echo", fg(HighlightRole::redirection)),
+            ("/dev/null", redirection_valid_path),
             // Output redirection to a valid fd.
             ("1>&2", fg(HighlightRole::redirection)),
             // Output redirection to an invalid fd.
@@ -1798,7 +1811,7 @@ mod tests {
         // First, set up fish_color_command to include underline
         vars.set_one(
             L!("fish_color_command"),
-            EnvMode::LOCAL,
+            EnvSetMode::new_at_early_startup(EnvMode::LOCAL),
             L!("--underline").to_owned(),
         );
 
@@ -1850,7 +1863,7 @@ mod tests {
         let vars = parser.vars();
 
         let set = |var: &wstr, value: Vec<WString>| {
-            vars.set(var, EnvMode::LOCAL, value);
+            vars.set(var, EnvSetMode::new(EnvMode::LOCAL, false), value);
         };
         set(L!("fish_color_normal"), vec![L!("normal").into()]);
         set(

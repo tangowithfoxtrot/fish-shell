@@ -91,7 +91,7 @@ function fish_config --description "Launch fish's web based configuration"
                         echo -s (set_color --underline) $promptname (set_color normal)
                         $fish -c '
                             functions -e fish_right_prompt
-                            __fish_data_with_file $argv[1] source
+                            __fish_config_with_file $argv[1] source
                             false
                             fish_prompt
                             echo (set_color normal)
@@ -120,9 +120,9 @@ function fish_config --description "Launch fish's web based configuration"
                         return 1
                     end
                     __fish_config_prompt_reset
-                    __fish_data_with_file $prompt_path source
+                    __fish_config_with_file $prompt_path source
                     if not functions -q fish_mode_prompt
-                        __fish_data_with_file functions/fish_mode_prompt.fish source
+                        status get-file functions/fish_mode_prompt.fish | source
                     end
                 case save
                     if begin
@@ -142,7 +142,7 @@ function fish_config --description "Launch fish's web based configuration"
                             return 1
                         end
                         __fish_config_prompt_reset
-                        __fish_data_with_file $prompt_path source
+                        __fish_config_with_file $prompt_path source
                     end
 
                     funcsave fish_prompt
@@ -156,7 +156,7 @@ function fish_config --description "Launch fish's web based configuration"
                         end
                     end
                     if not functions -q fish_mode_prompt
-                        __fish_data_with_file functions/fish_mode_prompt.fish source
+                        status get-file functions/fish_mode_prompt.fish | source
                     end
                     return
             end
@@ -287,7 +287,7 @@ function __fish_config_theme_choose
 
     set -l color_theme
     __fish_config_theme_canonicalize
-    set -l theme_data (type -q cat && __fish_theme_cat $theme_name)
+    set -l theme_data (__fish_theme_cat $theme_name)
     or return
     set -l color_themes dark light unknown
     set -l theme_is_color_theme_aware false
@@ -321,10 +321,11 @@ function __fish_config_theme_choose
             else
                 set desired_color_theme $fish_terminal_color_theme
                 if not set -q desired_color_theme[1]
-                    echo >&2 "fish_config theme choose: internal error: \$fish_terminal_color_theme not yet initialized"
-                    return 1
-                end
-                if not contains -- "[$desired_color_theme]" $theme_data
+                    if test $scope = -U
+                        echo >&2 "fish_config theme save: error: \$fish_terminal_color_theme not yet initialized"
+                        return 1
+                    end
+                else if not contains -- "[$desired_color_theme]" $theme_data
                     __fish_config_theme_choose_bad_color_theme $theme_name "$desired_color_theme" \$fish_terminal_color_theme = $desired_color_theme
                     echo >&2 "fish_config theme choose: hint: if your terminal does not report colors, pass --color-theme=light or --color-theme=dark when using color-theme-aware themes"
                     return 1
@@ -340,9 +341,9 @@ function __fish_config_theme_choose
         end
 
         set -l color_theme
-        string join \n -- $theme_data |
+        string match -re -- (__fish_theme_variable_filter)'|^\[.*\]$' $theme_data |
             while read -lat toks
-                if $theme_is_color_theme_aware
+                if $theme_is_color_theme_aware && set -q desired_color_theme[1]
                     for ct in $color_themes
                         if test "$toks" = [$ct]
                             set color_theme $ct
@@ -354,15 +355,19 @@ function __fish_config_theme_choose
                     end
                 end
                 set -l varname $toks[1]
-                string match -rq -- (__fish_theme_variable_filter) "$varname"
-                or continue
+                string match -q '[*' -- $varname
+                and continue
                 # If we're supposed to set universally, remove any shadowing globals
                 # so the change takes effect immediately (and there's no warning).
                 if test $scope = -U; and set -qg $varname
                     set -eg $varname
                 end
                 if $override || not set -q $varname || string match -rq -- '--theme=.*' $$varname
-                    set $scope $toks (test $scope != -U && echo --theme=$theme_name)
+                    set $scope $toks[1] (
+                        if not $theme_is_color_theme_aware || set -q desired_color_theme[1]
+                            string join \n -- $toks[2..]
+                        end
+                    ) (test $scope != -U && echo --theme=$theme_name)
                 end
             end
         if $override
@@ -376,31 +381,38 @@ function __fish_config_theme_choose
             end
         end
     end
-    if test -n "$fish_terminal_color_theme" || not $need_hook
-        if set -q _flag_no_override[1]
-            __fish_apply_theme
-        else
-            __fish_override=true __fish_apply_theme
+    if not $need_hook || test -n "$fish_terminal_color_theme" ||
+            # comment to work around fish_indent bug
+            {
+                $theme_is_color_theme_aware && test -z "$fish_terminal_color_theme"
+            }
+        if not set -q _flag_no_override[1]
+            set -fx __fish_override true
         end
+        __fish_apply_theme
     end
 end
 
 function __fish_config_theme_canonicalize --no-scope-shadowing
     # theme_name
     # color_theme
-    if not path is (__fish_theme_dir)/$theme_name.theme
-        switch $theme_name
-            case 'fish default'
-                set theme_name default
-            case 'ayu Dark' 'ayu Light' 'ayu Mirage' \
-                'Base16 Default Dark' 'Base16 Default Light' 'Base16 Eighties' \
-                'Bay Cruise' Dracula Fairground 'Just a Touch' Lava \
-                'Mono Lace' 'Mono Smoke' \
-                None Nord 'Old School' Seaweed 'Snow Day' \
-                'Solarized Dark' 'Solarized Light' \
-                'Tomorrow Night Bright' 'Tomorrow Night' Tomorrow
-                set theme_name (string lower (string replace -a " " "-" $theme_name))
-        end
+    if path is (__fish_theme_dir)/$theme_name.theme
+        return
+    end
+    switch $theme_name
+        case 'fish default'
+            set theme_name default
+        case 'ayu Dark' 'ayu Light' 'ayu Mirage' \
+            'Base16 Default Dark' 'Base16 Default Light' 'Base16 Eighties' \
+            'Bay Cruise' Dracula Fairground 'Just a Touch' Lava \
+            'Mono Lace' 'Mono Smoke' \
+            None Nord 'Old School' Seaweed 'Snow Day' \
+            'Solarized Dark' 'Solarized Light' \
+            'Tomorrow Night Bright' 'Tomorrow Night' Tomorrow
+            if test $theme_name = Tomorrow
+                set color_theme light
+            end
+            set theme_name (string lower (string replace -a " " "-" $theme_name))
     end
     switch $theme_name
         case \
@@ -408,8 +420,6 @@ function __fish_config_theme_canonicalize --no-scope-shadowing
             base16-default-dark base16-default-light \
             solarized-dark solarized-light
             string match -rq -- '^(?<theme_name>.*)-(?<color_theme>dark|light)$' $theme_name
-        case tomorrow
-            set color_theme light
         case tomorrow-night
             set theme_name tomorrow
             set color_theme dark

@@ -20,15 +20,15 @@ use fish_common::{ENCODE_DIRECT_END, char_offset, is_console_session, subslice_p
 use fish_fallback::fish_wcwidth;
 use fish_wchar::{decode_byte_from_char, encode_byte_to_char};
 use libc::{SIG_IGN, SIGTTOU, STDIN_FILENO};
-use once_cell::sync::OnceCell;
 use std::cell::{Cell, RefCell};
 use std::env;
 use std::ffi::{CStr, CString, OsString};
+use std::io::Read;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::prelude::*;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
-use std::sync::{Arc, MutexGuard};
+use std::sync::{Arc, MutexGuard, OnceLock};
 use std::time;
 
 pub const BUILD_DIR: &str = env!("FISH_RESOLVED_BUILD_DIR");
@@ -1030,10 +1030,6 @@ pub fn get_omitted_newline_str() -> &'static str {
 
 static OMITTED_NEWLINE_STR: AtomicRef<str> = AtomicRef::new(&"");
 
-pub fn get_omitted_newline_width() -> usize {
-    OMITTED_NEWLINE_STR.load().len()
-}
-
 static OBFUSCATION_READ_CHAR: AtomicU32 = AtomicU32::new(0);
 
 pub fn get_obfuscation_read_char() -> char {
@@ -1044,7 +1040,7 @@ pub fn get_obfuscation_read_char() -> char {
 pub static PROFILING_ACTIVE: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
 
 /// Name of the current program. Should be set at startup. Used by the debug function.
-pub static PROGRAM_NAME: OnceCell<&'static wstr> = OnceCell::new();
+pub static PROGRAM_NAME: OnceLock<&'static wstr> = OnceLock::new();
 
 pub fn get_program_name() -> &'static wstr {
     PROGRAM_NAME.get().unwrap()
@@ -1234,6 +1230,23 @@ pub fn read_blocked(fd: RawFd, buf: &mut [u8]) -> nix::Result<usize> {
             continue;
         }
         return res;
+    }
+}
+
+pub trait ReadExt {
+    /// Like [`std::io::Read::read_to_end`], but does not retry on EINTR.
+    fn read_to_end_interruptible(&mut self, buf: &mut Vec<u8>) -> std::io::Result<()>;
+}
+
+impl<T: Read + ?Sized> ReadExt for T {
+    fn read_to_end_interruptible(&mut self, buf: &mut Vec<u8>) -> std::io::Result<()> {
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match self.read(&mut chunk)? {
+                0 => return Ok(()),
+                n => buf.extend_from_slice(&chunk[..n]),
+            }
+        }
     }
 }
 
@@ -1951,7 +1964,7 @@ macro_rules! env_stack_set_from_env {
         if let Some(var) = std::env::var_os($var_name) {
             $vars.set_one(
                 L!($var_name),
-                $crate::env::EnvMode::GLOBAL,
+                $crate::env::EnvSetMode::new_at_early_startup($crate::env::EnvMode::GLOBAL),
                 $crate::common::bytes2wcstring(var.as_bytes()),
             );
         }

@@ -4,7 +4,7 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
-        Mutex, MutexGuard,
+        LazyLock, Mutex, MutexGuard,
         atomic::{self, AtomicUsize},
     },
     time::{Duration, Instant},
@@ -32,7 +32,7 @@ use crate::{
     parse_util::{
         parse_util_cmdsubst_extent, parse_util_process_extent, parse_util_unescape_wildcards,
     },
-    parser::{Block, Parser},
+    parser::{Block, Parser, ParserEnvSetMode},
     parser_keywords::parser_keywords_is_subcommand,
     path::{path_get_path, path_try_get_path},
     prelude::*,
@@ -55,7 +55,6 @@ use crate::{
 };
 use bitflags::bitflags;
 use fish_wchar::WExt;
-use once_cell::sync::Lazy;
 
 // Completion description strings, mostly for different types of files, such as sockets, block
 // devices, etc.
@@ -207,7 +206,7 @@ impl Completion {
 
     /// If this completion replaces the entire token, prepend a prefix. Otherwise do nothing.
     pub fn prepend_token_prefix(&mut self, prefix: &wstr) {
-        if self.flags.contains(CompleteFlags::REPLACES_TOKEN) {
+        if self.replaces_token() {
             self.completion.insert_utfstr(0, prefix)
         }
     }
@@ -401,7 +400,7 @@ impl CompleteEntryOpt {
 }
 
 /// Last value used in the order field of [`CompletionEntry`].
-static complete_order: AtomicUsize = AtomicUsize::new(0);
+static COMPLETE_ORDER: AtomicUsize = AtomicUsize::new(0);
 
 struct CompletionEntry {
     /// List of all options.
@@ -415,7 +414,7 @@ impl CompletionEntry {
     pub fn new() -> Self {
         Self {
             options: vec![],
-            order: complete_order.fetch_add(1, atomic::Ordering::Relaxed),
+            order: COMPLETE_ORDER.fetch_add(1, atomic::Ordering::Relaxed),
         }
     }
 
@@ -451,7 +450,7 @@ static COMPLETION_TOMBSTONES: Mutex<BTreeSet<WString>> = Mutex::new(BTreeSet::ne
 
 /// Completion "wrapper" support. The map goes from wrapping-command to wrapped-command-list.
 type WrapperMap = HashMap<WString, Vec<WString>>;
-static WRAPPER_MAP: Lazy<Mutex<WrapperMap>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static WRAPPER_MAP: LazyLock<Mutex<WrapperMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Clear the [`CompleteFlags::AUTO_SPACE`] flag, and set [`CompleteFlags::NO_SPACE`] appropriately
 /// depending on the suffix of the string.
@@ -606,8 +605,8 @@ struct Completer<'ctx> {
     condition_cache: HashMap<WString, bool>,
 }
 
-static completion_autoloader: Lazy<Mutex<Autoload>> =
-    Lazy::new(|| Mutex::new(Autoload::new(L!("fish_complete_path"))));
+static COMPLETION_AUTOLOADER: LazyLock<Mutex<Autoload>> =
+    LazyLock::new(|| Mutex::new(Autoload::new(L!("fish_complete_path"))));
 
 impl<'ctx> Completer<'ctx> {
     pub fn new(ctx: &'ctx OperationContext<'ctx>, flags: CompletionRequestOptions) -> Self {
@@ -1257,7 +1256,7 @@ impl<'ctx> Completer<'ctx> {
             flog!(complete, "Skipping completions for non-existent command");
         } else if let Some(parser) = self.ctx.maybe_parser() {
             complete_load(&cmd, parser);
-        } else if !completion_autoloader
+        } else if !COMPLETION_AUTOLOADER
             .lock()
             .unwrap()
             .has_attempted_autoload(&cmd)
@@ -1793,7 +1792,7 @@ impl<'ctx> Completer<'ctx> {
         }
         #[cfg(not(target_os = "android"))]
         {
-            static s_setpwent_lock: Mutex<()> = Mutex::new(());
+            static SETPWENT_LOCK: Mutex<()> = Mutex::new(());
 
             if s.char_at(0) != '~' || s.contains('/') {
                 return false;
@@ -1817,7 +1816,7 @@ impl<'ctx> Completer<'ctx> {
                 Some(charptr2wcstring(pw.pw_name))
             }
 
-            let _guard = s_setpwent_lock.lock().unwrap();
+            let _guard = SETPWENT_LOCK.lock().unwrap();
 
             unsafe { libc::setpwent() };
             while let Some(pw_name) = getpwent_name() {
@@ -1914,9 +1913,11 @@ impl<'ctx> Completer<'ctx> {
             } else {
                 Vec::new()
             };
-            parser
-                .vars()
-                .set(variable_name, EnvMode::LOCAL | EnvMode::EXPORT, vals);
+            parser.set_var(
+                variable_name,
+                ParserEnvSetMode::new(EnvMode::LOCAL | EnvMode::EXPORT),
+                vals,
+            );
             if self.ctx.check_cancel() {
                 break;
             }
@@ -2091,7 +2092,7 @@ impl<'ctx> Completer<'ctx> {
             return;
         };
         for comp in completions {
-            if comp.flags.contains(CompleteFlags::REPLACES_TOKEN) {
+            if comp.replaces_token() {
                 continue;
             }
             comp.flags |= CompleteFlags::REPLACES_TOKEN;
@@ -2126,7 +2127,7 @@ impl<'ctx> Completer<'ctx> {
         let mut comp_str;
         for comp in self.completions.get_list_mut() {
             comp_str = comp.completion.clone();
-            if !comp.flags.contains(CompleteFlags::REPLACES_TOKEN) {
+            if !comp.replaces_token() {
                 comp_str.insert_utfstr(0, prefix);
             }
             if arg_strs.binary_search(&comp_str).is_ok() {
@@ -2479,14 +2480,14 @@ pub fn complete_load(cmd: &wstr, parser: &Parser) -> bool {
     // We need to take the lock to decide what to load, drop it to perform the load, then reacquire
     // it.
     // Note we only look at the global fish_function_path and fish_complete_path.
-    let path_to_load = completion_autoloader
+    let path_to_load = COMPLETION_AUTOLOADER
         .lock()
         .expect("mutex poisoned")
         .resolve_command(cmd, EnvStack::globals());
     match path_to_load {
         AutoloadResult::Path(path_to_load) => {
             Autoload::perform_autoload(&path_to_load, parser);
-            completion_autoloader
+            COMPLETION_AUTOLOADER
                 .lock()
                 .expect("mutex poisoned")
                 .mark_autoload_finished(cmd);
@@ -2547,7 +2548,7 @@ pub fn complete_invalidate_path() {
     // unload any completions that the user may specified on the command line. We should in
     // principle track those completions loaded by the autoloader alone.
 
-    let cmds = completion_autoloader
+    let cmds = COMPLETION_AUTOLOADER
         .lock()
         .expect("mutex poisoned")
         .get_autoloaded_commands();
@@ -2630,11 +2631,12 @@ mod tests {
         sort_and_prioritize,
     };
     use crate::abbrs::{self, Abbreviation, with_abbrs_mut};
-    use crate::env::{EnvMode, Environment};
+    use crate::env::{EnvMode, EnvSetMode, Environment};
     use crate::io::IoChain;
     use crate::operation_context::{
         EXPANSION_LIMIT_BACKGROUND, EXPANSION_LIMIT_DEFAULT, OperationContext, no_cancel,
     };
+    use crate::parser::ParserEnvSetMode;
     use crate::prelude::*;
     use crate::reader::completion_apply_to_command_line;
     use crate::tests::prelude::*;
@@ -2997,7 +2999,7 @@ mod tests {
         let completions = do_complete(L!("cat te"), CompletionRequestOptions::default());
         assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].completion, L!("stfile"));
-        assert!(!(completions[0].flags.contains(CompleteFlags::REPLACES_TOKEN)));
+        assert!(!completions[0].replaces_token());
         assert!(
             !(completions[0]
                 .flags
@@ -3014,7 +3016,7 @@ mod tests {
         let completions = do_complete(L!("cat testfile TE"), CompletionRequestOptions::default());
         assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].completion, L!("testfile"));
-        assert!(completions[0].flags.contains(CompleteFlags::REPLACES_TOKEN));
+        assert!(completions[0].replaces_token());
         assert!(
             completions[0]
                 .flags
@@ -3221,9 +3223,9 @@ mod tests {
         // This is to ensure tilde expansion is handled. See the `cd ~/test_autosuggest_suggest_specia`
         // test below.
         // Fake out the home directory
-        parser.vars().set_one(
+        parser.set_one(
             L!("HOME"),
-            EnvMode::LOCAL | EnvMode::EXPORT,
+            ParserEnvSetMode::new(EnvMode::LOCAL | EnvMode::EXPORT),
             L!("test/test-home").to_owned(),
         );
         std::fs::create_dir_all("test/test-home/test_autosuggest_suggest_special/").unwrap();
@@ -3333,9 +3335,10 @@ mod tests {
         perform_one_completion_cd_test!("cd ~absolutelynosuchus", "er/");
         perform_one_completion_cd_test!("cd ~absolutelynosuchuser/", "path1/");
 
-        parser
-            .vars()
-            .remove(L!("HOME"), EnvMode::LOCAL | EnvMode::EXPORT);
+        parser.vars().remove(
+            L!("HOME"),
+            EnvSetMode::new(EnvMode::LOCAL | EnvMode::EXPORT, false),
+        );
         parser.popd();
     }
 

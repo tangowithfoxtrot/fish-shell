@@ -22,8 +22,8 @@ use std::time::SystemTime;
 use libc::{ONLCR, STDERR_FILENO, STDOUT_FILENO};
 
 use crate::common::{
-    get_ellipsis_char, get_omitted_newline_str, get_omitted_newline_width,
-    has_working_tty_timestamps, shell_modes, wcs2bytes, write_loop,
+    get_ellipsis_char, get_omitted_newline_str, has_working_tty_timestamps, shell_modes, wcs2bytes,
+    write_loop,
 };
 use crate::env::Environment;
 use crate::flog::{flog, flogf};
@@ -687,10 +687,12 @@ fn abandon_line_string(screen_width: Option<usize>) -> Vec<u8> {
 
     let mut abandon_line_string = Vec::with_capacity(screen_width + 32);
 
+    let omitted_newline_str = get_omitted_newline_str();
+
     // Do the PROMPT_SP hack.
     // Don't need to check for fish_wcwidth errors; this is done when setting up
     // omitted_newline_char in common.rs.
-    let non_space_width = get_omitted_newline_width();
+    let non_space_width = omitted_newline_str.chars().count();
     // We do `>` rather than `>=` because the code below might require one extra space.
     if screen_width > non_space_width {
         if use_terminfo() {
@@ -732,13 +734,13 @@ fn abandon_line_string(screen_width: Option<usize>) -> Vec<u8> {
             abandon_line_string.write_command(EnterDimMode);
         }
 
-        abandon_line_string.extend_from_slice(get_omitted_newline_str().as_bytes());
+        abandon_line_string.extend_from_slice(omitted_newline_str.as_bytes());
         abandon_line_string.write_command(ExitAttributeMode);
         abandon_line_string.extend(repeat_n(b' ', screen_width - non_space_width));
     }
 
     abandon_line_string.push(b'\r');
-    abandon_line_string.extend_from_slice(get_omitted_newline_str().as_bytes());
+    abandon_line_string.extend_from_slice(omitted_newline_str.as_bytes());
     // Now we are certainly on a new line. But we may have dropped the omitted newline char on
     // it. So append enough spaces to overwrite the omitted newline char, and then clear all the
     // spaces from the new line.
@@ -1978,7 +1980,7 @@ fn compute_layout(
     );
 
     let left_prompt_width = left_prompt_layout.last_line_width;
-    let mut right_prompt_width = right_prompt_layout.last_line_width;
+    let right_prompt_width = right_prompt_layout.last_line_width;
 
     // Get the width of the first line, and if there is more than one line.
     let first_command_line_width: usize = line_at_cursor(commandline_before_suggestion, 0)
@@ -2014,24 +2016,14 @@ fn compute_layout(
         ..Default::default()
     };
 
-    // Hide the right prompt if it doesn't fit on the first line.
-    if left_prompt_width + first_command_line_width + right_prompt_width < screen_width {
-        result.right_prompt = right_prompt;
-    } else {
-        right_prompt_width = 0;
-    }
-
-    // Now we should definitely fit.
-    assert!(left_prompt_width + right_prompt_width <= screen_width);
-
     // Track each logical line from the autosuggestion so we can determine how much of it fits
     // on screen. We allow the lines to soft wrap naturally and we only truncate vertically if
     // we would exceed the screen height.
-    let cursor_y = left_prompt_layout.line_starts.len() - 1
-        + commandline_before_suggestion
-            .chars()
-            .filter(|&c| c == '\n')
-            .count();
+    let commandline_before_suggestion_lines = commandline_before_suggestion
+        .chars()
+        .filter(|&c| c == '\n')
+        .count();
+    let cursor_y = left_prompt_layout.line_starts.len() - 1 + commandline_before_suggestion_lines;
 
     let mut suggestion_lines = vec![];
 
@@ -2060,7 +2052,8 @@ fn compute_layout(
                     + commandline_before_suggestion
                         .chars()
                         .rposition(|c| c == '\n')
-                        .map_or(right_prompt_width, indent_width)
+                        .map(indent_width)
+                        .unwrap_or_default()
             } else {
                 indent_width(suggestion_start - "\n".len())
             };
@@ -2120,6 +2113,24 @@ fn compute_layout(
 
     let mut autosuggestion = WString::new();
     let mut displayed_len = 0;
+    {
+        // Hide the right prompt if it doesn't fit on the first line.
+        let first_command_line_suggestion_width = if commandline_before_suggestion_lines == 0 {
+            suggestion_lines.first().map_or(0, |line| {
+                line.chars().map(wcwidth_rendered_min_0).sum::<usize>()
+            })
+        } else {
+            0
+        };
+        if left_prompt_width
+            + first_command_line_width
+            + first_command_line_suggestion_width
+            + right_prompt_width
+            <= screen_width
+        {
+            result.right_prompt = right_prompt;
+        }
+    }
     for (line_idx, autosuggestion_line) in suggestion_lines.iter().enumerate() {
         if line_idx != 0 {
             autosuggestion.push('\n');
@@ -2419,20 +2430,19 @@ mod tests {
     fn test_compute_layout() {
         macro_rules! validate {
             (
-            (
-                $screen_width:expr,
-                $left_untrunc_prompt:literal,
-                $right_untrunc_prompt:literal,
-                $commandline_before_suggestion:literal,
-                $autosuggestion_str:literal,
-                $commandline_after_suggestion:literal
-            )
-            -> (
-                $left_prompt:literal,
-                $left_prompt_space:expr,
-                $right_prompt:literal,
-                $autosuggestion:literal $(,)?
-            )
+                (
+                    $screen_width:expr,
+                    $left_untrunc_prompt:literal,
+                    $right_untrunc_prompt:literal,
+                    $commandline_before_suggestion:literal,
+                    $autosuggestion_str:literal,
+                    $commandline_after_suggestion:literal
+                ) -> (
+                    $left_prompt:literal,
+                    $left_prompt_space:expr,
+                    $right_prompt:literal,
+                    $autosuggestion:literal $(,)?
+                )
         ) => {{
                 let full_commandline = L!($commandline_before_suggestion).to_owned()
                     + L!($autosuggestion_str)
@@ -2480,7 +2490,7 @@ mod tests {
             ) -> (
                 "left>",
                 5,
-                "<right",
+                "",
                 " autosuggesTION",
             )
         );
@@ -2602,7 +2612,7 @@ mod tests {
             ) -> (
                 "left>",
                 5,
-                "",
+                "<RIGHT",
                 "and AUTOSUGGESTION",
             )
         );
@@ -2612,7 +2622,7 @@ mod tests {
             ) -> (
                 "left>",
                 5,
-                "",
+                "<RIGHT",
                 "AUTOSUGGESTION",
             )
         );
@@ -2622,7 +2632,7 @@ mod tests {
             ) -> (
                 "left>",
                 5,
-                "",
+                "<RIGHT",
                 "utosuggestion sofT WRAP",
             )
         );

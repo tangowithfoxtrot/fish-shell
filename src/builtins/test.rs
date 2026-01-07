@@ -10,9 +10,9 @@ mod test_expressions {
         Error, Options, file_id_for_path, fish_wcswidth, lwstat, waccess, wcstod::wcstod,
         wcstoi_opts, wstat,
     };
-    use once_cell::sync::Lazy;
     use std::collections::HashMap;
     use std::os::unix::prelude::*;
+    use std::sync::LazyLock;
 
     #[derive(Copy, Clone, PartialEq, Eq)]
     pub(super) enum Token {
@@ -164,7 +164,7 @@ mod test_expressions {
             }
             let bint = self.base as i32;
             if bint == 0 {
-                match streams.stdin_fd {
+                match streams.stdin_fd() {
                     -1 => false,
                     fd => isatty(fd),
                 }
@@ -182,7 +182,7 @@ mod test_expressions {
         TOKEN_INFOS.get(str).copied().unwrap_or(Token::Unknown)
     }
 
-    static TOKEN_INFOS: Lazy<HashMap<&'static wstr, Token>> = Lazy::new(|| {
+    static TOKEN_INFOS: LazyLock<HashMap<&'static wstr, Token>> = LazyLock::new(|| {
         let pairs = [
             (L!(""), Token::Unknown),
             (L!("!"), Token::UnaryBoolean(UnaryBooleanToken::Bang)),

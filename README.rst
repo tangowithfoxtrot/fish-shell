@@ -117,7 +117,7 @@ Dependencies
 
 Compiling fish requires:
 
--  Rust (version 1.85 or later)
+-  Rust (version 1.85 or later), including cargo
 -  CMake (version 3.15 or later)
 -  a C compiler (for system feature detection and the test helper binary)
 -  PCRE2 (headers and libraries) - optional, this will be downloaded if missing
@@ -158,8 +158,13 @@ In addition to the normal CMake build options (like ``CMAKE_INSTALL_PREFIX``), f
 - Rust_CARGO=path - the path to cargo. If not set, cmake will check $PATH and ~/.cargo/bin
 - Rust_CARGO_TARGET=target - the target to pass to cargo. Set this for cross-compilation.
 - WITH_DOCS=ON|OFF - whether to build the documentation. By default, this is ON when Sphinx is installed.
+- FISH_INDENT_FOR_BUILDING_DOCS - useful for cross-compilation.
+  Set this to the path to the ``fish_indent`` executable to use for building HTML docs.
+  By default, ``${CMAKE_BINARY_DIR}/fish_indent`` will be used.
+  If that's not runnable on the compile host,
+  you can build a native one with ``cargo build --bin fish_indent`` and set this to ``$PWD/target/debug/fish_indent``.
 - FISH_USE_SYSTEM_PCRE2=ON|OFF - whether to use an installed pcre2. This is normally autodetected.
-- WITH_GETTEXT=ON|OFF - whether to include translations.
+- WITH_MESSAGE_LOCALIZATION=ON|OFF - whether to include translations.
 - extra_functionsdir, extra_completionsdir and extra_confdir - to compile in an additional directory to be searched for functions, completions and configuration snippets
 
 Building fish with Cargo

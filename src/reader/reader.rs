@@ -24,7 +24,6 @@ use libc::{
 };
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
-use once_cell::sync::Lazy;
 #[cfg(not(target_has_atomic = "64"))]
 use portable_atomic::AtomicU64;
 use std::borrow::Cow;
@@ -43,7 +42,7 @@ use std::pin::Pin;
 #[cfg(target_has_atomic = "64")]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use errno::{Errno, errno};
@@ -113,6 +112,7 @@ use crate::parse_util::{
     parse_util_get_line_from_offset, parse_util_get_offset, parse_util_get_offset_from_line,
     parse_util_lineno, parse_util_locate_cmdsubst_range, parse_util_token_extent,
 };
+use crate::parser::ParserEnvSetMode;
 use crate::parser::{BlockType, EvalRes, Parser};
 use crate::prelude::*;
 use crate::proc::{
@@ -174,17 +174,16 @@ enum ExitState {
 
 static EXIT_STATE: AtomicU8 = AtomicU8::new(ExitState::None as u8);
 
-pub static SHELL_MODES: Lazy<Mutex<libc::termios>> =
-    Lazy::new(|| Mutex::new(unsafe { std::mem::zeroed() }));
+pub static SHELL_MODES: LazyLock<Mutex<libc::termios>> =
+    LazyLock::new(|| Mutex::new(unsafe { std::mem::zeroed() }));
 
 /// The valid terminal modes on startup.
 /// Warning: this is read from the SIGTERM handler! Hence the raw global.
-static TERMINAL_MODE_ON_STARTUP: once_cell::sync::OnceCell<libc::termios> =
-    once_cell::sync::OnceCell::new();
+static TERMINAL_MODE_ON_STARTUP: OnceLock<libc::termios> = OnceLock::new();
 
 /// Mode we use to execute programs.
-static TTY_MODES_FOR_EXTERNAL_CMDS: Lazy<Mutex<libc::termios>> =
-    Lazy::new(|| Mutex::new(unsafe { std::mem::zeroed() }));
+static TTY_MODES_FOR_EXTERNAL_CMDS: LazyLock<Mutex<libc::termios>> =
+    LazyLock::new(|| Mutex::new(unsafe { std::mem::zeroed() }));
 
 static RUN_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -392,9 +391,11 @@ pub fn reader_push<'a>(parser: &'a Parser, history_name: &wstr, conf: ReaderConf
         // Provide value for `status current-command`
         parser.libdata_mut().status_vars.command = L!("fish").to_owned();
         // Also provide a value for the deprecated fish 2.0 $_ variable
-        parser
-            .vars()
-            .set_one(L!("_"), EnvMode::GLOBAL, L!("fish").to_owned());
+        parser.set_one(
+            L!("_"),
+            ParserEnvSetMode::new(EnvMode::GLOBAL),
+            L!("fish").to_owned(),
+        );
         let old = parser
             .blocking_query_timeout
             .replace(input_data.blocking_query_timeout);
@@ -557,6 +558,12 @@ enum JumpPrecision {
     To,
 }
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum CompletionAction {
+    ShownAmbiguous,
+    InsertedUnique,
+}
+
 /// readline_loop_state_t encapsulates the state used in a readline loop.
 struct ReadlineLoopState {
     /// The last command that was executed.
@@ -566,10 +573,7 @@ struct ReadlineLoopState {
     yank_len: usize,
 
     /// If the last "complete" readline command has inserted text into the command line.
-    complete_did_insert: bool,
-
-    /// List of completions.
-    comp: Vec<Completion>,
+    completion_action: Option<CompletionAction>,
 
     /// Whether the loop has finished, due to reaching the character limit or through executing a
     /// command.
@@ -584,8 +588,7 @@ impl ReadlineLoopState {
         Self {
             last_cmd: None,
             yank_len: 0,
-            complete_did_insert: true,
-            comp: vec![],
+            completion_action: None,
             finished: false,
             nchars: None,
         }
@@ -1099,9 +1102,7 @@ pub fn reader_set_autosuggestion_enabled(vars: &dyn Environment) {
         let enable = check_bool_var(vars, L!("fish_autosuggestion_enabled"), true);
         if data.conf.autosuggest_ok != enable {
             data.conf.autosuggest_ok = enable;
-            data.force_exec_prompt_and_repaint = true;
-            data.input_data
-                .queue_char(CharEvent::from_readline(ReadlineCmd::Repaint));
+            data.schedule_prompt_repaint();
         }
     }
 }
@@ -1121,11 +1122,7 @@ pub fn reader_schedule_prompt_repaint() {
     let Some(data) = current_data() else {
         return;
     };
-    if !data.force_exec_prompt_and_repaint {
-        data.force_exec_prompt_and_repaint = true;
-        data.input_data
-            .queue_char(CharEvent::from_readline(ReadlineCmd::Repaint));
-    }
+    data.schedule_prompt_repaint();
 }
 
 pub fn reader_update_termsize(parser: &Parser) {
@@ -1621,6 +1618,15 @@ impl ReaderData {
             }
             CharOffset::Pager(_) | CharOffset::None => {}
         }
+    }
+
+    pub fn schedule_prompt_repaint(&mut self) {
+        if self.force_exec_prompt_and_repaint {
+            return;
+        }
+        self.force_exec_prompt_and_repaint = true;
+        self.input_data
+            .queue_char(CharEvent::from_readline(ReadlineCmd::Repaint));
     }
 }
 
@@ -2466,7 +2472,6 @@ impl<'a> Reader<'a> {
 
         self.parser.eval(cmd, &IoChain::new());
         self.parser.set_last_statuses(last_statuses);
-        scoped_tty.reclaim();
     }
 
     /// Run a sequence of commands from an input binding.
@@ -2552,7 +2557,7 @@ impl<'a> Reader<'a> {
         if self.reset_loop_state {
             self.reset_loop_state = false;
             self.rls_mut().last_cmd = None;
-            self.rls_mut().complete_did_insert = false;
+            self.rls_mut().completion_action = None;
         }
         // Perhaps update the termsize. This is cheap if it has not changed.
         reader_update_termsize(self.parser);
@@ -2914,7 +2919,7 @@ impl<'a> Reader<'a> {
                 // but never complete{,_and_search})
                 //
                 // Also paging is already cancelled above.
-                if self.rls().complete_did_insert
+                if self.rls().completion_action == Some(CompletionAction::InsertedUnique)
                     && matches!(
                         self.rls().last_cmd,
                         Some(rl::Complete | rl::CompleteAndSearch)
@@ -2963,8 +2968,7 @@ impl<'a> Reader<'a> {
                     return;
                 }
                 if self.is_navigating_pager_contents()
-                    || (!self.rls().comp.is_empty()
-                        && !self.rls().complete_did_insert
+                    || (self.rls().completion_action == Some(CompletionAction::ShownAmbiguous)
                         && self.rls().last_cmd == Some(rl::Complete))
                 {
                     // The user typed complete more than once in a row. If we are not yet fully
@@ -2988,7 +2992,6 @@ impl<'a> Reader<'a> {
                     let mut tty = TtyHandoff::new(reader_save_screen_state);
                     tty.disable_tty_protocols();
                     self.compute_and_apply_completions(c);
-                    tty.reclaim();
                 }
             }
             rl::PagerToggleSearch => {
@@ -3289,7 +3292,7 @@ impl<'a> Reader<'a> {
                 self.history_pager = Some(0..1);
                 // Update the pager data.
                 self.pager.set_search_field_shown(true);
-                self.pager.set_prefix(L!("► "), false);
+                self.pager.set_prefix(Cow::Borrowed(L!("► ")), false);
                 // Update the search field, which triggers the actual history search.
                 let search_string = if !self.history_search.active()
                     || self.history_search.search_string().is_empty()
@@ -3503,9 +3506,7 @@ impl<'a> Reader<'a> {
             | rl::PrevdOrBackwardWord => {
                 if c == rl::PrevdOrBackwardWord && self.command_line.is_empty() {
                     self.eval_bind_cmd(L!("prevd"));
-                    self.force_exec_prompt_and_repaint = true;
-                    self.input_data
-                        .queue_char(CharEvent::from_readline(ReadlineCmd::Repaint));
+                    self.schedule_prompt_repaint();
                     return;
                 }
 
@@ -3529,9 +3530,7 @@ impl<'a> Reader<'a> {
             | rl::NextdOrForwardWord => {
                 if c == rl::NextdOrForwardWord && self.command_line.is_empty() {
                     self.eval_bind_cmd(L!("nextd"));
-                    self.force_exec_prompt_and_repaint = true;
-                    self.input_data
-                        .queue_char(CharEvent::from_readline(ReadlineCmd::Repaint));
+                    self.schedule_prompt_repaint();
                     return;
                 }
 
@@ -5986,12 +5985,10 @@ fn reader_run_command(parser: &Parser, cmd: &wstr) -> EvalRes {
 
     // Provide values for `status current-command` and `status current-commandline`
     if !ft.is_empty() {
-        parser.libdata_mut().status_vars.command = ft.to_owned();
+        parser.libdata_mut().status_vars.command = ft.clone();
         parser.libdata_mut().status_vars.commandline = cmd.to_owned();
         // Also provide a value for the deprecated fish 2.0 $_ variable
-        parser
-            .vars()
-            .set_one(L!("_"), EnvMode::GLOBAL, ft.to_owned());
+        parser.set_one(L!("_"), ParserEnvSetMode::new(EnvMode::GLOBAL), ft.clone());
     }
 
     reader_write_title(cmd, parser, true);
@@ -6009,9 +6006,9 @@ fn reader_run_command(parser: &Parser, cmd: &wstr) -> EvalRes {
     if !ft.is_empty() {
         let time_after = Instant::now();
         let duration = time_after.duration_since(time_before);
-        parser.vars().set_one(
+        parser.set_one(
             ENV_CMD_DURATION,
-            EnvMode::UNEXPORT,
+            ParserEnvSetMode::new(EnvMode::UNEXPORT),
             duration.as_millis().to_wstring(),
         );
     }
@@ -6021,9 +6018,11 @@ fn reader_run_command(parser: &Parser, cmd: &wstr) -> EvalRes {
     // Provide value for `status current-command`
     parser.libdata_mut().status_vars.command = get_program_name().to_owned();
     // Also provide a value for the deprecated fish 2.0 $_ variable
-    parser
-        .vars()
-        .set_one(L!("_"), EnvMode::GLOBAL, get_program_name().to_owned());
+    parser.set_one(
+        L!("_"),
+        ParserEnvSetMode::new(EnvMode::GLOBAL),
+        get_program_name().to_owned(),
+    );
     // Provide value for `status current-commandline`
     parser.libdata_mut().status_vars.commandline = L!("").to_owned();
 
@@ -6110,19 +6109,20 @@ impl<'a> Reader<'a> {
 
         // Remove ephemeral items - even if the text is empty.
         self.history.remove_ephemeral_items();
-
-        if !text.is_empty() {
-            // Mark this item as ephemeral if should_add_to_history says no (#615).
-            let mode = if !self.should_add_to_history(&text) {
-                PersistenceMode::Ephemeral
-            } else if in_private_mode(self.vars()) {
-                PersistenceMode::Memory
-            } else {
-                PersistenceMode::Disk
-            };
-            self.history
-                .add_pending_with_file_detection(&text, &self.parser.variables, mode);
+        if text.is_empty() {
+            return;
         }
+
+        // Mark this item as ephemeral if should_add_to_history says no (#615).
+        let mode = if !self.should_add_to_history(&text) {
+            PersistenceMode::Ephemeral
+        } else if in_private_mode(self.vars()) {
+            PersistenceMode::Memory
+        } else {
+            PersistenceMode::Disk
+        };
+        self.history
+            .add_pending_with_file_detection(&text, &self.parser.variables, mode);
     }
 
     /// Check if we have background jobs that we have not warned about.
@@ -6513,15 +6513,6 @@ fn reader_can_replace(s: &wstr, flags: CompleteFlags) -> bool {
         .any(|c| matches!(c, '$' | '*' | '?' | '(' | '{' | '}' | ')'))
 }
 
-/// Determine the best (lowest) match rank for a set of completions.
-fn get_best_rank(comp: &[Completion]) -> u32 {
-    let mut best_rank = u32::MAX;
-    for c in comp {
-        best_rank = best_rank.min(c.rank());
-    }
-    best_rank
-}
-
 impl<'a> Reader<'a> {
     /// Compute completions and update the pager and/or commandline as needed.
     fn compute_and_apply_completions(&mut self, c: ReadlineCmd) {
@@ -6584,8 +6575,7 @@ impl<'a> Reader<'a> {
                 return;
             }
             ExpandResultCode::ok => {
-                self.rls_mut().comp.clear();
-                self.rls_mut().complete_did_insert = false;
+                self.rls_mut().completion_action = None;
                 self.push_edit(
                     EditableLineTag::Commandline,
                     Edit::new(token_range, wc_expanded),
@@ -6598,12 +6588,11 @@ impl<'a> Reader<'a> {
         // up to the end of the token we're completing.
         let cmdsub = &el.text()[cmdsub_range.start..token_range.end];
 
-        let (comp, _needs_load) = complete(
+        let (mut comp, _needs_load) = complete(
             cmdsub,
             CompletionRequestOptions::normal(),
             &self.parser.context(),
         );
-        self.rls_mut().comp = comp;
 
         let el = &self.command_line;
         // User-supplied completions may have changed the commandline - prevent buffer
@@ -6612,23 +6601,22 @@ impl<'a> Reader<'a> {
         token_range.end = std::cmp::min(token_range.end, el.text().len());
 
         // Munge our completions.
-        sort_and_prioritize(
-            &mut self.rls_mut().comp,
-            CompletionRequestOptions::default(),
-        );
+        sort_and_prioritize(&mut comp, CompletionRequestOptions::default());
 
         let el = &self.command_line;
         // Record our cycle_command_line.
         self.cycle_command_line = el.text().to_owned();
         self.cycle_cursor_pos = token_range.end;
 
-        self.rls_mut().complete_did_insert = self.handle_completions(token_range);
+        let inserted_unique = self.handle_completions(token_range, comp);
+        self.rls_mut().completion_action = if inserted_unique {
+            Some(CompletionAction::InsertedUnique)
+        } else {
+            (!self.pager.is_empty()).then_some(CompletionAction::ShownAmbiguous)
+        };
 
         // Show the search field if requested and if we printed a list of completions.
-        if c == ReadlineCmd::CompleteAndSearch
-            && !self.rls().complete_did_insert
-            && !self.pager.is_empty()
-        {
+        if c == ReadlineCmd::CompleteAndSearch && !inserted_unique && !self.pager.is_empty() {
             self.pager.set_search_field_shown(true);
             self.select_completion_in_direction(SelectionMotion::Next, false);
         }
@@ -6637,7 +6625,7 @@ impl<'a> Reader<'a> {
     fn try_insert(&mut self, c: Completion, tok: &wstr, token_range: Range<usize>) {
         // If this is a replacement completion, check that we know how to replace it, e.g. that
         // the token doesn't contain evil operators like {}.
-        if !c.flags.contains(CompleteFlags::REPLACES_TOKEN) || reader_can_replace(tok, c.flags) {
+        if !c.replaces_token() || reader_can_replace(tok, c.flags) {
             self.completion_insert(
                 &c.completion,
                 token_range.end,
@@ -6662,11 +6650,30 @@ impl<'a> Reader<'a> {
     /// \param token_end the position after the token to complete
     ///
     /// Return true if we inserted text into the command line, false if we did not.
-    fn handle_completions(&mut self, token_range: Range<usize>) -> bool {
+    fn handle_completions(&mut self, token_range: Range<usize>, mut comp: Vec<Completion>) -> bool {
         let tok = self.command_line.text()[token_range.clone()].to_owned();
 
-        let comp = &self.rls().comp;
-        // Check trivial cases.
+        comp.retain({
+            let best_rank = comp.iter().map(|c| c.rank()).min().unwrap_or(u32::MAX);
+            move |c| {
+                // Ignore completions with a less suitable match rank than the best.
+                assert!(c.rank() >= best_rank);
+                c.rank() == best_rank
+            }
+        });
+
+        // Determine whether we are going to replace the token or not. If any commands of the best
+        // rank do not require replacement, then ignore all those that want to use replacement.
+        let will_replace_token = comp.iter().all(|c| c.replaces_token());
+
+        comp.retain(|c| !c.replaces_token() || reader_can_replace(&tok, c.flags));
+
+        for c in &mut comp {
+            if !will_replace_token && c.replaces_token() {
+                c.flags |= CompleteFlags::SUPPRESS_PAGER_PREFIX;
+            }
+        }
+
         let len = comp.len();
         if len == 0 {
             // No suitable completions found, flash screen and return.
@@ -6678,85 +6685,27 @@ impl<'a> Reader<'a> {
             return false;
         } else if len == 1 {
             // Exactly one suitable completion found - insert it.
-            let c = &comp[0];
-            self.try_insert(c.clone(), &tok, token_range);
-            return true;
-        }
-
-        let best_rank = get_best_rank(comp);
-
-        // Determine whether we are going to replace the token or not. If any commands of the best
-        // rank do not require replacement, then ignore all those that want to use replacement.
-        let mut will_replace_token = true;
-        for c in comp {
-            if c.rank() <= best_rank && !c.flags.contains(CompleteFlags::REPLACES_TOKEN) {
-                will_replace_token = false;
-                break;
-            }
-        }
-
-        // Decide which completions survived. There may be a lot of them; it would be nice if we could
-        // figure out how to avoid copying them here.
-        let mut surviving_completions = vec![];
-        let mut all_matches_exact_or_prefix = true;
-        for c in comp {
-            // Ignore completions with a less suitable match rank than the best.
-            if c.rank() > best_rank {
-                continue;
-            }
-
-            // Only use completions that match replace_token.
-            let completion_replaces_token = c.flags.contains(CompleteFlags::REPLACES_TOKEN);
-            let replaces_only_due_to_case_mismatch = {
-                c.flags.contains(CompleteFlags::REPLACES_TOKEN)
-                    && c.r#match.is_exact_or_prefix()
-                    && !matches!(c.r#match.case_fold, CaseSensitivity::Sensitive)
-            };
-            if completion_replaces_token != will_replace_token {
-                // Keep smart/samecase results even if we prefer not to replace the token.
-                if will_replace_token || !replaces_only_due_to_case_mismatch {
-                    continue;
-                }
-            }
-
-            // Don't use completions that want to replace, if we cannot replace them.
-            if completion_replaces_token && !reader_can_replace(&tok, c.flags) {
-                continue;
-            }
-
-            all_matches_exact_or_prefix &= c.r#match.is_exact_or_prefix();
-
-            let mut completion = c.clone();
-            if replaces_only_due_to_case_mismatch && !will_replace_token {
-                completion.flags |= CompleteFlags::SUPPRESS_PAGER_PREFIX;
-            }
-            surviving_completions.push(completion);
-        }
-
-        if surviving_completions.len() == 1 {
-            // After sorting and stuff only one completion is left, use it.
-            //
-            // TODO: This happens when smartcase kicks in, e.g.
-            // the token is "cma" and the options are "cmake/" and "CMakeLists.txt"
-            // it would be nice if we could figure
-            // out how to use it more.
-            let c = std::mem::take(&mut surviving_completions[0]);
-
+            let c = std::mem::take(&mut comp[0]);
             self.try_insert(c, &tok, token_range);
             return true;
         }
 
         let mut use_prefix = false;
-        let mut common_prefix = L!("").to_owned();
+        let mut common_prefix = L!("");
+        let all_matches_exact_or_prefix = comp.iter().all(|c| c.r#match.is_exact_or_prefix());
+        assert!(will_replace_token || all_matches_exact_or_prefix);
         if all_matches_exact_or_prefix {
             // Try to find a common prefix to insert among the surviving completions.
             let mut flags = CompleteFlags::empty();
             let mut prefix_is_partial_completion = false;
             let mut first = true;
-            for c in &surviving_completions {
+            for c in &comp {
+                if c.flags.contains(CompleteFlags::SUPPRESS_PAGER_PREFIX) {
+                    continue;
+                }
                 if first {
                     // First entry, use the whole string.
-                    common_prefix = c.completion.clone();
+                    common_prefix = &c.completion;
                     flags = c.flags;
                     first = false;
                 } else {
@@ -6771,7 +6720,7 @@ impl<'a> Reader<'a> {
                     }
 
                     // idx is now the length of the new common prefix.
-                    common_prefix.truncate(idx);
+                    common_prefix = common_prefix.slice_to(idx);
                     prefix_is_partial_completion = true;
 
                     // Early out if we decide there's no common prefix.
@@ -6795,7 +6744,7 @@ impl<'a> Reader<'a> {
                     flags |= CompleteFlags::NO_SPACE;
                 }
                 self.completion_insert(
-                    &common_prefix,
+                    common_prefix,
                     token_range.end,
                     flags,
                     /*is_unique=*/ false,
@@ -6805,48 +6754,53 @@ impl<'a> Reader<'a> {
             }
         }
 
+        // Print the completion list.
+        let prefix = if will_replace_token && !use_prefix {
+            Cow::Borrowed(L!(""))
+        } else {
+            let mut prefix = WString::new();
+            let full = if will_replace_token {
+                common_prefix.to_owned()
+            } else {
+                tok + common_prefix
+            };
+            if full.len() <= PREFIX_MAX_LEN {
+                prefix = full;
+            } else {
+                // Collapse parent directories and append end of string
+                prefix.push(get_ellipsis_char());
+
+                let truncated = &full[full.len() - PREFIX_MAX_LEN..];
+                let (i, last_component) = truncated.split('/').enumerate().last().unwrap();
+                if i == 0 {
+                    // No path separators were found in the common prefix, so we can't collapse
+                    // any further
+                    prefix.push_utfstr(&truncated);
+                } else {
+                    // Discard any parent directories and include whats left
+                    prefix.push('/');
+                    prefix.push_utfstr(last_component);
+                };
+            }
+            Cow::Owned(prefix)
+        };
+
         if use_prefix {
-            for c in &mut surviving_completions {
+            let common_prefix_len = common_prefix.len();
+            for c in &mut comp {
                 if c.flags.contains(CompleteFlags::SUPPRESS_PAGER_PREFIX) {
                     // Keep replacement semantics and the original prefix so these completions can
                     // fix casing when selected.
                     continue;
                 }
                 c.flags &= !CompleteFlags::REPLACES_TOKEN;
-                c.completion.replace_range(0..common_prefix.len(), L!(""));
+                c.completion.replace_range(0..common_prefix_len, L!(""));
             }
-        }
-
-        // Print the completion list.
-        let mut prefix = WString::new();
-        if will_replace_token || !all_matches_exact_or_prefix {
-            if use_prefix {
-                prefix.push_utfstr(&common_prefix);
-            }
-        } else if tok.len() + common_prefix.len() <= PREFIX_MAX_LEN {
-            prefix.push_utfstr(&tok);
-            prefix.push_utfstr(&common_prefix);
-        } else {
-            // Collapse parent directories and append end of string
-            prefix.push(get_ellipsis_char());
-
-            let full = tok + &common_prefix[..];
-            let truncated = &full[full.len() - PREFIX_MAX_LEN..];
-            let (i, last_component) = truncated.split('/').enumerate().last().unwrap();
-            if i == 0 {
-                // No path separators were found in the common prefix, so we can't collapse
-                // any further
-                prefix.push_utfstr(&truncated);
-            } else {
-                // Discard any parent directories and include whats left
-                prefix.push('/');
-                prefix.push_utfstr(last_component);
-            };
         }
 
         // Update the pager data.
-        self.pager.set_prefix(&prefix, true);
-        self.pager.set_completions(&surviving_completions, true);
+        self.pager.set_prefix(prefix, true);
+        self.pager.set_completions(&comp, true);
         // Modify the command line to reflect the new pager.
         self.pager_selection_changed();
         false

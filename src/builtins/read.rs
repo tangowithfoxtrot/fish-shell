@@ -16,6 +16,7 @@ use crate::input_common::InvalidPolicy;
 use crate::input_common::decode_one_codepoint_utf8;
 use crate::nix::isatty;
 use crate::parse_execution::varname_error;
+use crate::parser::ParserEnvSetMode;
 use crate::reader::ReaderConfig;
 use crate::reader::commandline_set_buffer;
 use crate::reader::{reader_pop, reader_push, reader_readline, set_shell_modes_temporarily};
@@ -42,7 +43,7 @@ pub(crate) enum TokenOutputMode {
 #[derive(Default)]
 struct Options {
     print_help: bool,
-    place: EnvMode,
+    place: ParserEnvSetMode,
     prompt: Option<WString>,
     prompt_str: Option<WString>,
     right_prompt: WString,
@@ -63,7 +64,7 @@ struct Options {
 impl Options {
     fn new() -> Self {
         Options {
-            place: EnvMode::USER,
+            place: ParserEnvSetMode::user(EnvMode::empty()),
             ..Default::default()
         }
     }
@@ -129,10 +130,10 @@ fn parse_cmd_opts(
                 return Err(STATUS_INVALID_ARGS);
             }
             'f' => {
-                opts.place |= EnvMode::FUNCTION;
+                opts.place.mode |= EnvMode::FUNCTION;
             }
             'g' => {
-                opts.place |= EnvMode::GLOBAL;
+                opts.place.mode |= EnvMode::GLOBAL;
             }
             'h' => {
                 opts.print_help = true;
@@ -141,7 +142,7 @@ fn parse_cmd_opts(
                 opts.one_line = true;
             }
             'l' => {
-                opts.place |= EnvMode::LOCAL;
+                opts.place.mode |= EnvMode::LOCAL;
             }
             'n' => {
                 opts.nchars = match fish_wcstoi(w.woptarg.unwrap()) {
@@ -205,13 +206,13 @@ fn parse_cmd_opts(
                 opts.token_mode = Some(new_mode);
             }
             'U' => {
-                opts.place |= EnvMode::UNIVERSAL;
+                opts.place.mode |= EnvMode::UNIVERSAL;
             }
             'u' => {
-                opts.place |= EnvMode::UNEXPORT;
+                opts.place.mode |= EnvMode::UNEXPORT;
             }
             'x' => {
-                opts.place |= EnvMode::EXPORT;
+                opts.place.mode |= EnvMode::EXPORT;
             }
             'z' => {
                 opts.split_null = true;
@@ -483,7 +484,7 @@ fn validate_read_args(
         opts.prompt = Some(DEFAULT_READ_PROMPT.to_owned());
     }
 
-    if opts.place.contains(EnvMode::UNEXPORT) && opts.place.contains(EnvMode::EXPORT) {
+    if opts.place.mode.contains(EnvMode::UNEXPORT) && opts.place.mode.contains(EnvMode::EXPORT) {
         streams
             .err
             .append(&wgettext_fmt!(BUILTIN_ERR_EXPUNEXP, cmd));
@@ -493,7 +494,8 @@ fn validate_read_args(
 
     if opts
         .place
-        .intersection(EnvMode::LOCAL | EnvMode::FUNCTION | EnvMode::GLOBAL | EnvMode::UNIVERSAL)
+        .mode
+        .intersection(EnvMode::ANY_SCOPE)
         .iter()
         .count()
         > 1
@@ -602,7 +604,7 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
     validate_read_args(cmd, &mut opts, argv, parser, streams)?;
 
     // stdin may have been explicitly closed
-    if streams.stdin_fd < 0 {
+    if streams.is_stdin_closed() {
         streams
             .err
             .append(&wgettext_fmt!("%s: stdin is closed\n", cmd));
@@ -620,12 +622,12 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
     let vars_left = |var_ptr: usize| argc - var_ptr;
     let clear_remaining_vars = |var_ptr: &mut usize| {
         while vars_left(*var_ptr) != 0 {
-            parser.vars().set_empty(argv[*var_ptr], opts.place);
+            parser.set_empty(argv[*var_ptr], opts.place);
             *var_ptr += 1;
         }
     };
 
-    let stream_stdin_is_a_tty = isatty(streams.stdin_fd);
+    let stream_stdin_is_a_tty = streams.stdin_fd() >= 0 && isatty(streams.stdin_fd());
 
     // Normally, we either consume a line of input or all available input. But if we are reading a
     // line at a time, we need a middle ground where we only consume as many lines as we need to
@@ -644,7 +646,7 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
                 opts.prompt.as_ref().unwrap(),
                 &opts.right_prompt,
                 &opts.commandline,
-                streams.stdin_fd,
+                streams.stdin_fd(),
             );
         } else if opts.nchars.is_none() && !stream_stdin_is_a_tty &&
                    // "one_line" is implemented as reading n-times to a new line,
@@ -653,7 +655,7 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
                    !opts.one_line &&
                        (
                            streams.stdin_is_directly_redirected ||
-                               unsafe {libc::lseek(streams.stdin_fd, 0, SEEK_CUR)} != -1)
+                               unsafe {libc::lseek(streams.stdin_fd(), 0, SEEK_CUR)} != -1)
         {
             // We read in chunks when we either can seek (so we put the bytes back),
             // or we have the bytes to ourselves (because it's directly redirected).
@@ -663,14 +665,18 @@ pub fn read(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
             // You don't rewind VHS tapes before throwing them in the trash.
             // TODO: Do this when nchars is set by seeking back.
             exit_res = read_in_chunks(
-                streams.stdin_fd,
+                streams.stdin_fd(),
                 &mut buff,
                 opts.split_null,
                 !streams.stdin_is_directly_redirected,
             );
         } else {
-            exit_res =
-                read_one_char_at_a_time(streams.stdin_fd, &mut buff, opts.nchars, opts.split_null);
+            exit_res = read_one_char_at_a_time(
+                streams.stdin_fd(),
+                &mut buff,
+                opts.nchars,
+                opts.split_null,
+            );
         }
 
         if exit_res.is_err() {

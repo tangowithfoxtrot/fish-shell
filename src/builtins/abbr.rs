@@ -1,7 +1,9 @@
 use super::prelude::*;
 use crate::abbrs::{self, Abbreviation, Position};
-use crate::common::{EscapeStringStyle, escape, escape_string, valid_func_name};
+use crate::common::{EscapeStringStyle, bytes2wcstring, escape, escape_string, valid_func_name};
 use crate::env::{EnvMode, EnvStackSetResult};
+use crate::highlight::highlight_and_colorize;
+use crate::parser::ParserEnvSetMode;
 use crate::re::{regex_make_anchored, to_boxed_chars};
 use pcre2::utf32::{Regex, RegexBuilder};
 
@@ -21,6 +23,7 @@ struct Options {
     position: Option<Position>,
     set_cursor_marker: Option<WString>,
     args: Vec<WString>,
+    color: ColorEnabled,
 }
 
 impl Options {
@@ -123,7 +126,7 @@ fn join(list: &[&wstr], sep: &wstr) -> WString {
 }
 
 // Print abbreviations in a fish-script friendly way.
-fn abbr_show(streams: &mut IoStreams) -> BuiltinResult {
+fn abbr_show(opts: &Options, streams: &mut IoStreams, parser: &Parser) -> BuiltinResult {
     let style = EscapeStringStyle::Script(Default::default());
 
     abbrs::with_abbrs(|abbrs| {
@@ -172,7 +175,15 @@ fn abbr_show(streams: &mut IoStreams) -> BuiltinResult {
                 ));
             }
             result.push('\n');
-            streams.out.append(&result);
+            if opts.color.enabled(streams) {
+                streams.out.append(&bytes2wcstring(&highlight_and_colorize(
+                    &result,
+                    &parser.context(),
+                    parser.vars(),
+                )));
+            } else {
+                streams.out.append(&result);
+            }
         }
     });
 
@@ -460,7 +471,8 @@ fn abbr_erase(opts: &Options, parser: &Parser) -> BuiltinResult {
                 let esc_src = escape(arg);
                 if !esc_src.is_empty() {
                     let var_name = WString::from_str("_fish_abbr_") + esc_src.as_utfstr();
-                    let ret = parser.vars().remove(&var_name, EnvMode::UNIVERSAL);
+                    let ret =
+                        parser.remove_var(&var_name, ParserEnvSetMode::new(EnvMode::UNIVERSAL));
 
                     if ret == EnvStackSetResult::Ok {
                         result = Ok(SUCCESS)
@@ -506,6 +518,7 @@ pub fn abbr(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
         wopt(L!("global"), ArgType::NoArgument, 'g'),
         wopt(L!("universal"), ArgType::NoArgument, 'U'),
         wopt(L!("help"), ArgType::NoArgument, 'h'),
+        wopt(L!("color"), ArgType::RequiredArgument, COLOR_OPTION_CHAR),
     ];
 
     let mut opts = Options::default();
@@ -612,6 +625,9 @@ pub fn abbr(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
                 builtin_unknown_option(parser, streams, cmd, argv[w.wopt_index - 1], false);
                 return Err(STATUS_INVALID_ARGS);
             }
+            COLOR_OPTION_CHAR => {
+                opts.color = ColorEnabled::parse_from_opt(streams, cmd, w.woptarg.unwrap())?;
+            }
             _ => {
                 panic!("unexpected retval from wgeopter.next()");
             }
@@ -630,7 +646,7 @@ pub fn abbr(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
         return abbr_add(&opts, streams);
     };
     if opts.show {
-        return abbr_show(streams);
+        return abbr_show(&opts, streams, parser);
     };
     if opts.list {
         return abbr_list(&opts, streams);

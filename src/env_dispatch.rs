@@ -8,7 +8,8 @@ use crate::locale::{invalidate_numeric_locale, set_libc_locales};
 use crate::prelude::*;
 use crate::reader::{
     reader_change_cursor_end_mode, reader_change_cursor_selection_mode, reader_change_history,
-    reader_schedule_prompt_repaint, reader_set_autosuggestion_enabled, reader_set_transient_prompt,
+    reader_current_data, reader_schedule_prompt_repaint, reader_set_autosuggestion_enabled,
+    reader_set_transient_prompt,
 };
 use crate::screen::{
     IS_DUMB, LAYOUT_CACHE_SHARED, ONLY_GRAYSCALE, screen_set_midnight_commander_hack,
@@ -47,8 +48,14 @@ static VAR_DISPATCH_TABLE: once_cell::sync::Lazy<VarDispatchTable> =
     once_cell::sync::Lazy::new(|| {
         let mut table = VarDispatchTable::default();
 
+        macro_rules! vars {
+            ( $f:ident ) => {
+                |vars: &EnvStack, _suppress_repaint: bool| $f(vars)
+            };
+        }
+
         for name in LOCALE_VARIABLES {
-            table.add_anon(name, handle_locale_change);
+            table.add_anon(name, vars!(handle_locale_change));
         }
 
         for name in CURSES_VARIABLES {
@@ -59,43 +66,49 @@ static VAR_DISPATCH_TABLE: once_cell::sync::Lazy<VarDispatchTable> =
         table.add_anon(L!("COLORTERM"), handle_fish_term_change);
         table.add_anon(L!("fish_term256"), handle_fish_term_change);
         table.add_anon(L!("fish_term24bit"), handle_fish_term_change);
-        table.add_anon(L!("fish_escape_delay_ms"), update_wait_on_escape_ms);
+        table.add_anon(L!("fish_escape_delay_ms"), vars!(update_wait_on_escape_ms));
         table.add_anon(
             L!("fish_sequence_key_delay_ms"),
-            update_wait_on_sequence_key_ms,
+            vars!(update_wait_on_sequence_key_ms),
         );
-        table.add_anon(L!("fish_emoji_width"), guess_emoji_width);
-        table.add_anon(L!("fish_ambiguous_width"), handle_change_ambiguous_width);
-        table.add_anon(L!("LINES"), handle_term_size_change);
-        table.add_anon(L!("COLUMNS"), handle_term_size_change);
-        table.add_anon(L!("fish_complete_path"), handle_complete_path_change);
-        table.add_anon(L!("fish_function_path"), handle_function_path_change);
-        table.add_anon(L!("fish_read_limit"), handle_read_limit_change);
-        table.add_anon(L!("fish_history"), handle_fish_history_change);
+        table.add_anon(L!("fish_emoji_width"), vars!(guess_emoji_width));
+        table.add_anon(
+            L!("fish_ambiguous_width"),
+            vars!(handle_change_ambiguous_width),
+        );
+        table.add_anon(L!("LINES"), vars!(handle_term_size_change));
+        table.add_anon(L!("COLUMNS"), vars!(handle_term_size_change));
+        table.add_anon(L!("fish_complete_path"), vars!(handle_complete_path_change));
+        table.add_anon(L!("fish_function_path"), vars!(handle_function_path_change));
+        table.add_anon(L!("fish_read_limit"), vars!(handle_read_limit_change));
+        table.add_anon(L!("fish_history"), vars!(handle_fish_history_change));
         table.add_anon(
             L!("fish_autosuggestion_enabled"),
-            handle_autosuggestion_change,
+            vars!(handle_autosuggestion_change),
         );
-        table.add_anon(L!("fish_transient_prompt"), handle_transient_prompt_change);
+        table.add_anon(
+            L!("fish_transient_prompt"),
+            vars!(handle_transient_prompt_change),
+        );
         table.add_anon(
             L!("fish_use_posix_spawn"),
-            handle_fish_use_posix_spawn_change,
+            vars!(handle_fish_use_posix_spawn_change),
         );
-        table.add_anon(L!("fish_trace"), handle_fish_trace);
+        table.add_anon(L!("fish_trace"), vars!(handle_fish_trace));
         table.add_anon(
             L!("fish_cursor_selection_mode"),
-            handle_fish_cursor_selection_mode_change,
+            vars!(handle_fish_cursor_selection_mode_change),
         );
         table.add_anon(
             L!("fish_cursor_end_mode"),
-            handle_fish_cursor_end_mode_change,
+            vars!(handle_fish_cursor_end_mode_change),
         );
 
         table
     });
 
 type NamedEnvCallback = fn(name: &wstr, env: &EnvStack);
-type AnonEnvCallback = fn(env: &EnvStack);
+type AnonEnvCallback = fn(env: &EnvStack, suppress_repaint: bool);
 
 enum EnvCallback {
     Named(NamedEnvCallback),
@@ -120,10 +133,10 @@ impl VarDispatchTable {
         assert!(prev.is_none(), "Already observing {}", name);
     }
 
-    pub fn dispatch(&self, key: &wstr, vars: &EnvStack) {
+    pub fn dispatch(&self, key: &wstr, vars: &EnvStack, suppress_repaint: bool) {
         match self.table.get(key) {
             Some(EnvCallback::Named(named)) => (named)(key, vars),
-            Some(EnvCallback::Anon(anon)) => (anon)(vars),
+            Some(EnvCallback::Anon(anon)) => (anon)(vars, suppress_repaint),
             None => (),
         }
     }
@@ -206,26 +219,41 @@ pub fn guess_emoji_width(vars: &EnvStack) {
     }
 }
 
+pub struct VarChangeMilieu {
+    pub is_repainting: bool,
+    pub global_or_universal: bool,
+}
+
 /// React to modifying the given variable.
-pub fn env_dispatch_var_change(key: &wstr, vars: &EnvStack) {
+pub fn env_dispatch_var_change(milieu: VarChangeMilieu, key: &wstr, vars: &EnvStack) {
     use once_cell::sync::Lazy;
 
+    let suppress_repaint = milieu.is_repainting || !milieu.global_or_universal;
+
     // We want to ignore variable changes until the dispatch table is explicitly initialized.
+    // TODO(MSRV>=1.94): Use std::sync::LazyLock. (LazyLock::get is stabilized in Rust 1.94)
     if let Some(dispatch_table) = Lazy::get(&VAR_DISPATCH_TABLE) {
-        dispatch_table.dispatch(key, vars);
+        dispatch_table.dispatch(key, vars, suppress_repaint);
     }
 
-    if string_prefixes_string(L!("fish_color_"), key)
-        // TODO Don't re-exec prompt when only pager color changed.
-        || string_prefixes_string(L!("fish_pager_color_"), key)
-    {
-        reader_schedule_prompt_repaint();
+    // TODO(MSRV>=1.88): if-let
+    if !suppress_repaint {
+        if let Some(data) = reader_current_data() {
+            if string_prefixes_string(L!("fish_color_"), key) || {
+                // TODO Don't re-exec prompt when only pager color changed.
+                string_prefixes_string(L!("fish_pager_color_"), key)
+            } {
+                data.schedule_prompt_repaint();
+            }
+        }
     }
 }
 
-fn handle_fish_term_change(vars: &EnvStack) {
+fn handle_fish_term_change(vars: &EnvStack, suppress_repaint: bool) {
     update_fish_color_support(vars);
-    reader_schedule_prompt_repaint();
+    if !suppress_repaint {
+        reader_schedule_prompt_repaint();
+    }
 }
 
 fn handle_change_ambiguous_width(vars: &EnvStack) {
@@ -307,11 +335,13 @@ fn handle_locale_change(vars: &EnvStack) {
     init_locale(vars);
 }
 
-fn handle_term_change(vars: &EnvStack) {
+fn handle_term_change(vars: &EnvStack, suppress_repaint: bool) {
     guess_emoji_width(vars);
     init_terminal(vars);
     read_terminfo_database(vars);
-    reader_schedule_prompt_repaint();
+    if !suppress_repaint {
+        reader_schedule_prompt_repaint();
+    }
 }
 
 fn handle_fish_use_posix_spawn_change(vars: &EnvStack) {

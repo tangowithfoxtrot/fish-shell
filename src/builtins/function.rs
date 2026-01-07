@@ -74,7 +74,6 @@ fn job_id_for_pid(pid: Pid, parser: &Parser) -> Option<u64> {
 /// Returns an exit status.
 fn parse_cmd_opts(
     opts: &mut FunctionCmdOpts,
-    optind: &mut usize,
     argv: &mut [&wstr],
     parser: &Parser,
     streams: &mut IoStreams,
@@ -83,6 +82,34 @@ fn parse_cmd_opts(
     let print_hints = false;
     let mut handling_named_arguments = false;
     let mut w = WGetopter::new(SHORT_OPTIONS, LONG_OPTIONS, argv);
+
+    let mut validate_variable_name =
+        |streams: &mut IoStreams, varname: &wstr, read_only_ok: bool| {
+            if !valid_var_name(varname) {
+                streams.err.append(&varname_error(cmd, varname));
+                return Err(STATUS_INVALID_ARGS);
+            }
+            if !read_only_ok && is_read_only(varname) {
+                streams.err.append(&wgettext_fmt!(
+                    "%s: variable '%s' is read-only\n",
+                    cmd,
+                    varname
+                ));
+                return Err(STATUS_INVALID_ARGS);
+            }
+            Ok(())
+        };
+    fn add_named_argument(
+        validate_variable_name: &mut impl FnMut(&mut IoStreams, &wstr, bool) -> Result<(), i32>,
+        streams: &mut IoStreams,
+        opts: &mut FunctionCmdOpts,
+        varname: &wstr,
+    ) -> Result<(), i32> {
+        validate_variable_name(streams, varname, /*read_only_ok=*/ false)?;
+        opts.named_arguments.push(varname.to_owned());
+        Ok::<(), ErrorCode>(())
+    }
+
     while let Some(opt) = w.next_opt() {
         // NON_OPTION_CHAR is returned when we reach a non-permuted non-option.
         if opt != 'a' && opt != NON_OPTION_CHAR {
@@ -91,17 +118,9 @@ fn parse_cmd_opts(
         match opt {
             NON_OPTION_CHAR => {
                 // A positional argument we got because we use RETURN_IN_ORDER.
-                let woptarg = w.woptarg.unwrap().to_owned();
+                let woptarg = w.woptarg.unwrap();
                 if handling_named_arguments {
-                    if is_read_only(&woptarg) {
-                        streams.err.append(&wgettext_fmt!(
-                            "%s: variable '%s' is read-only\n",
-                            cmd,
-                            woptarg
-                        ));
-                        return Err(STATUS_INVALID_ARGS);
-                    }
-                    opts.named_arguments.push(woptarg);
+                    add_named_argument(&mut validate_variable_name, streams, opts, woptarg)?;
                 } else {
                     streams.err.append(&wgettext_fmt!(
                         "%s: %s: unexpected positional argument",
@@ -127,10 +146,7 @@ fn parse_cmd_opts(
             }
             'v' => {
                 let name = w.woptarg.unwrap().to_owned();
-                if !valid_var_name(&name) {
-                    streams.err.append(&varname_error(cmd, &name));
-                    return Err(STATUS_INVALID_ARGS);
-                }
+                validate_variable_name(streams, &name, /*read_only_ok=*/ true)?;
                 opts.events.push(EventDescription::Variable { name });
             }
             'e' => {
@@ -175,17 +191,13 @@ fn parse_cmd_opts(
                 opts.events.push(e);
             }
             'a' => {
-                let name = w.woptarg.unwrap().to_owned();
-                if is_read_only(&name) {
-                    streams.err.append(&wgettext_fmt!(
-                        "%s: variable '%s' is read-only\n",
-                        cmd,
-                        name
-                    ));
-                    return Err(STATUS_INVALID_ARGS);
-                }
                 handling_named_arguments = true;
-                opts.named_arguments.push(name);
+                add_named_argument(
+                    &mut validate_variable_name,
+                    streams,
+                    opts,
+                    w.woptarg.unwrap(),
+                )?;
             }
             'S' => {
                 opts.shadow_scope = false;
@@ -195,10 +207,7 @@ fn parse_cmd_opts(
             }
             'V' => {
                 let woptarg = w.woptarg.unwrap();
-                if !valid_var_name(woptarg) {
-                    streams.err.append(&varname_error(cmd, woptarg));
-                    return Err(STATUS_INVALID_ARGS);
-                }
+                validate_variable_name(streams, woptarg, /*read_only_ok=*/ false)?;
                 opts.inherit_vars.push(woptarg.to_owned());
             }
             'h' => {
@@ -228,7 +237,23 @@ fn parse_cmd_opts(
         }
     }
 
-    *optind = w.wopt_index;
+    let optind = w.wopt_index;
+    if argv.len() != optind {
+        if !opts.named_arguments.is_empty() {
+            // Remaining arguments are named arguments.
+            for &arg in argv[optind..].iter() {
+                add_named_argument(&mut validate_variable_name, streams, opts, arg)?;
+            }
+        } else {
+            streams.err.append(&wgettext_fmt!(
+                "%s: %s: unexpected positional argument",
+                cmd,
+                argv[optind],
+            ));
+            return Err(STATUS_INVALID_ARGS);
+        }
+    }
+
     Ok(SUCCESS)
 }
 
@@ -287,32 +312,11 @@ pub fn function(
     let argv = &mut argv[1..];
 
     let mut opts = FunctionCmdOpts::default();
-    let mut optind = 0;
-    parse_cmd_opts(&mut opts, &mut optind, argv, parser, streams)?;
+    parse_cmd_opts(&mut opts, argv, parser, streams)?;
 
     if opts.print_help {
         builtin_print_error_trailer(parser, streams.err, cmd);
         return Ok(SUCCESS);
-    }
-
-    if argv.len() != optind {
-        if !opts.named_arguments.is_empty() {
-            // Remaining arguments are named arguments.
-            for &arg in argv[optind..].iter() {
-                if !valid_var_name(arg) {
-                    streams.err.append(&varname_error(cmd, arg));
-                    return Err(STATUS_INVALID_ARGS);
-                }
-                opts.named_arguments.push(arg.to_owned());
-            }
-        } else {
-            streams.err.append(&wgettext_fmt!(
-                "%s: %s: unexpected positional argument",
-                cmd,
-                argv[optind],
-            ));
-            return Err(STATUS_INVALID_ARGS);
-        }
     }
 
     // Extract the current filename.
@@ -330,13 +334,6 @@ pub fn function(
             Some((name, vals))
         })
         .collect();
-
-    for named in &opts.named_arguments {
-        if !valid_var_name(named) {
-            streams.err.append(&varname_error(cmd, named));
-            return Err(STATUS_INVALID_ARGS);
-        }
-    }
 
     // We have what we need to actually define the function.
     let props = function::FunctionProperties {
