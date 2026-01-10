@@ -1114,6 +1114,8 @@ fn format_history_record(
     item: &HistoryItem,
     show_time_format: Option<&str>,
     null_terminate: bool,
+    parser: &Parser,
+    color_enabled: bool,
 ) -> WString {
     let mut result = WString::new();
     let seconds = time_to_seconds(item.timestamp());
@@ -1139,7 +1141,16 @@ fn format_history_record(
         }
     }
 
-    result.push_utfstr(item.str());
+    let mut command = item.str().to_owned();
+    if color_enabled {
+        command = bytes2wcstring(&highlight_and_colorize(
+            &command,
+            &parser.context(),
+            parser.vars(),
+        ));
+    }
+
+    result.push_utfstr(&command);
     result.push(if null_terminate { '\0' } else { '\n' });
     result
 }
@@ -1366,16 +1377,13 @@ impl History {
                 return ControlFlow::Break(());
             }
             remaining -= 1;
-            let mut formatted_record =
-                format_history_record(item, show_time_format, null_terminate);
-
-            if color_enabled {
-                formatted_record = bytes2wcstring(&highlight_and_colorize(
-                    &formatted_record,
-                    &parser.context(),
-                    parser.vars(),
-                ));
-            }
+            let formatted_record = format_history_record(
+                item,
+                show_time_format,
+                null_terminate,
+                parser,
+                color_enabled,
+            );
 
             if reverse {
                 // We need to collect this for later.
@@ -1733,13 +1741,12 @@ pub fn expand_and_detect_paths<P: IntoIterator<Item = WString>>(
 /// Given a list of proposed paths and a context, expand each one and see if it refers to a file.
 /// Wildcard expansions are suppressed.
 /// Returns `true` if `paths` is empty or every path is valid.
-pub fn all_paths_are_valid<P: IntoIterator<Item = WString>>(
-    paths: P,
-    ctx: &OperationContext<'_>,
-) -> bool {
+pub fn all_paths_are_valid(paths: &[WString], ctx: &OperationContext<'_>) -> bool {
     assert_is_background_thread();
     let working_directory = ctx.vars().get_pwd_slash();
-    for mut path in paths {
+    let mut path = WString::new();
+    for unexpanded_path in paths {
+        path.clone_from(unexpanded_path);
         if ctx.check_cancel() {
             return false;
         }
