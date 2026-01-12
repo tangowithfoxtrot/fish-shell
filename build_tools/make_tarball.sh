@@ -7,14 +7,13 @@
 set -e
 
 # Get the version
-VERSION=$(build_tools/git_version_gen.sh --stdout 2>/dev/null)
+VERSION=$(build_tools/git_version_gen.sh)
 
 prefix=fish-$VERSION
 path=${FISH_ARTEFACT_PATH:-~/fish_built}/$prefix.tar.xz
 
 git archive \
     --prefix="$prefix/" \
-    --add-virtual-file="$prefix/version:$VERSION" \
     HEAD |
     xz >"$path"
 
