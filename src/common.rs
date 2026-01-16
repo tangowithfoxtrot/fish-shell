@@ -12,11 +12,13 @@ use crate::parse_util::parse_util_escape_string_with_quote;
 use crate::prelude::*;
 use crate::terminal::Output;
 use crate::termsize::Termsize;
-use crate::wcstringutil::str2bytes_callback;
 use crate::wildcard::{ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE};
 use crate::wutil::fish_iswalnum;
 use fish_fallback::fish_wcwidth;
-use fish_wchar::{decode_byte_from_char, encode_byte_to_char};
+use fish_wcstringutil::str2bytes_callback;
+use fish_widestring::{
+    ENCODE_DIRECT_END, decode_byte_from_char, encode_byte_to_char, subslice_position,
+};
 use std::env;
 use std::ffi::{CStr, CString, OsString};
 use std::os::unix::prelude::*;
@@ -184,7 +186,7 @@ fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
                     need_escape = true;
                     if escape_printables {
                         out.push('\\')
-                    };
+                    }
                 }
                 out.push(c);
             }
@@ -1243,7 +1245,7 @@ pub fn is_windows_subsystem_for_linux(v: WSL) -> bool {
             Ok(17763..) => return Some(WSL::V1),
             Ok(_) => (),      // return true, but first warn (see below)
             _ => return None, // if parsing fails, assume this isn't WSL
-        };
+        }
 
         // #5298, #5661: There are acknowledged, published, and (later) fixed issues with
         // job control under early WSL releases that prevent fish from running correctly,
@@ -1380,9 +1382,8 @@ mod tests {
         ENCODE_DIRECT_END, ESCAPE_TEST_CHAR, EscapeFlags, EscapeStringStyle, UnescapeStringStyle,
         bytes2wcstring, escape_string, unescape_string, wcs2bytes,
     };
-    use crate::util::get_seeded_rng;
-    use fish_common::ENCODE_DIRECT_BASE;
-    use fish_wchar::{L, WString, wstr};
+    use fish_util::get_seeded_rng;
+    use fish_widestring::{ENCODE_DIRECT_BASE, L, WString, wstr};
     use rand::{Rng, RngCore};
 
     #[test]

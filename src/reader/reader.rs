@@ -116,7 +116,7 @@ use crate::parser::ParserEnvSetMode;
 use crate::parser::{BlockType, EvalRes, Parser};
 use crate::prelude::*;
 use crate::proc::{
-    have_proc_stat, hup_jobs, is_interactive_session, job_reap, jobs_requiring_warning_on_exit,
+    HAVE_PROC_STAT, hup_jobs, is_interactive_session, job_reap, jobs_requiring_warning_on_exit,
     print_exit_warning_for_jobs, proc_update_jiffies,
 };
 use crate::screen::is_dumb;
@@ -149,16 +149,15 @@ use crate::tty_handoff::XTGETTCAP_QUERY_OS_NAME;
 use crate::tty_handoff::{
     TtyHandoff, get_tty_protocols_active, initialize_tty_protocols, safe_deactivate_tty_protocols,
 };
-use crate::wcstringutil::CaseSensitivity;
-use crate::wcstringutil::string_prefixes_string_maybe_case_insensitive;
-use crate::wcstringutil::{
-    StringFuzzyMatch, count_preceding_backslashes, join_strings, string_prefixes_string,
-    string_prefixes_string_case_insensitive,
-};
 use crate::wildcard::wildcard_has;
 use crate::wutil::{fstat, perror, write_to_fd, wstat};
 use crate::{abbrs, event, function};
 use fish_fallback::fish_wcwidth;
+use fish_wcstringutil::{
+    CaseSensitivity, StringFuzzyMatch, count_preceding_backslashes, join_strings,
+    string_prefixes_string, string_prefixes_string_case_insensitive,
+    string_prefixes_string_maybe_case_insensitive,
+};
 
 /// A description of where fish is in the process of exiting.
 #[repr(u8)]
@@ -326,7 +325,7 @@ pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> TerminalInitResu
             }
             CharEvent::QueryResult(Interrupted) => break,
             Key(_) | Readline(_) | Command(_) | Implicit(_) => panic!(),
-        };
+        }
     }
 
     stop_query(input_queue.blocking_query());
@@ -373,7 +372,7 @@ pub fn current_data() -> Option<&'static mut ReaderData> {
         .map(|data| unsafe { Pin::get_unchecked_mut(Pin::as_mut(data)) })
 }
 pub use current_data as reader_current_data;
-use fish_wchar::word_char::is_blank;
+use fish_widestring::word_char::is_blank;
 
 /// Add a new reader to the reader stack.
 /// If `history_name` is empty, then save history in-memory only; do not write it to disk.
@@ -1330,7 +1329,7 @@ pub fn reader_test_and_clear_interrupted() -> i32 {
     let res = INTERRUPTED.load(Ordering::Relaxed);
     if res != 0 {
         INTERRUPTED.store(0, Ordering::Relaxed);
-    };
+    }
     res
 }
 
@@ -2679,7 +2678,7 @@ impl<'a> Reader<'a> {
                 accumulated_chars.push(c);
             } else {
                 continue;
-            };
+            }
         }
 
         if !accumulated_chars.is_empty() {
@@ -4093,7 +4092,7 @@ impl<'a> Reader<'a> {
                         replacement.extend(chr.to_uppercase());
                     } else {
                         replacement.extend(chr.to_lowercase());
-                    };
+                    }
                     capitalized_first = capitalized_first || make_uppercase;
                     pos += 1;
                 }
@@ -5986,7 +5985,7 @@ fn extract_tokens(s: &wstr) -> Vec<PositionedToken> {
         // We are only interested in leaf nodes with source.
         if node.as_leaf().is_none() {
             continue;
-        };
+        }
         let range = node.source_range();
         if range.length() == 0 {
             continue;
@@ -6322,7 +6321,7 @@ fn reader_run_command(parser: &Parser, cmd: &wstr) -> EvalRes {
     // Provide value for `status current-commandline`
     parser.libdata_mut().status_vars.commandline = L!("").to_owned();
 
-    if have_proc_stat() {
+    if *HAVE_PROC_STAT {
         proc_update_jiffies(parser);
     }
 
@@ -7076,7 +7075,7 @@ impl<'a> Reader<'a> {
                     // Discard any parent directories and include whats left
                     prefix.push('/');
                     prefix.push_utfstr(last_component);
-                };
+                }
             }
             Cow::Owned(prefix)
         };

@@ -32,11 +32,11 @@ use crate::portable_atomic::AtomicU64;
 use crate::prelude::*;
 use crate::proc::{JobGroupRef, JobList, JobRef, Pid, ProcStatus, job_reap};
 use crate::signal::{Signal, signal_check_cancel, signal_clear_cancel};
-use crate::util::get_time;
 use crate::wait_handle::WaitHandleStore;
 use crate::wutil::perror;
 use crate::{flog, flogf, function};
-use fish_wchar::WExt;
+use fish_util::get_time;
+use fish_widestring::WExt;
 use libc::c_int;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::OsStr;
@@ -1283,7 +1283,7 @@ impl Parser {
             .is_some_and(|var| var.as_list() == [color_theme])
         {
             return;
-        };
+        }
         flogf!(
             reader,
             "Setting %s to %s",
@@ -1497,7 +1497,7 @@ mod tests {
     use crate::reader::{fake_scoped_reader, reader_reset_interrupted};
     use crate::signal::{signal_clear_cancel, signal_reset_handlers, signal_set_handlers};
     use crate::tests::prelude::*;
-    use crate::wcstringutil::join_strings;
+    use fish_wcstringutil::join_strings;
     use libc::SIGINT;
     use std::time::Duration;
     #[test]

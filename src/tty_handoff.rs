@@ -18,7 +18,7 @@ use crate::terminal::TerminalCommand::{
 use crate::terminal::{Output, Outputter};
 use crate::threads::assert_is_main_thread;
 use crate::wutil::{perror, wcstoi};
-use fish_wchar::ToWString;
+use fish_widestring::ToWString;
 use libc::{EINVAL, ENOTTY, EPERM, STDIN_FILENO, WNOHANG};
 use std::mem::MaybeUninit;
 use std::sync::{
@@ -305,7 +305,7 @@ fn set_tty_protocols_active(on_write: fn(), enable: bool) {
         ProtocolKind::Other => flog!(reader, mode, "other extended keys"),
         ProtocolKind::WorkAroundWezTerm => flog!(reader, mode, "wezterm; no modifyOtherKeys"),
         ProtocolKind::None => (),
-    };
+    }
     (on_write)();
 }
 
@@ -391,7 +391,7 @@ impl TtyHandoff {
     pub fn disable_tty_protocols(&mut self) {
         if !self.tty_protocols_applied {
             return; // Already disabled.
-        };
+        }
         self.tty_protocols_applied = false;
         set_tty_protocols_active(self.on_write, false);
     }

@@ -5,7 +5,6 @@ use crate::ast::{
     Keyword, Kind, Node, NodeVisitor, Redirection, Token, VariableAssignment,
 };
 use crate::builtins::shared::builtin_exists;
-use crate::color::Color;
 use crate::common::{valid_var_name, valid_var_name_char};
 use crate::complete::complete_wrap_map;
 use crate::env::{EnvVar, Environment};
@@ -29,9 +28,10 @@ use crate::terminal::Outputter;
 use crate::text_face::{SpecifiedTextFace, TextFace, UnderlineStyle, parse_text_face};
 use crate::threads::assert_is_background_thread;
 use crate::tokenizer::{PipeOrRedir, variable_assignment_equals_pos};
-use crate::wcstringutil::string_prefixes_string;
+use fish_color::Color;
 use fish_common::{ASCII_MAX, EXPAND_RESERVED_BASE, EXPAND_RESERVED_END};
-use fish_wchar::{L, WExt, WString, wstr};
+use fish_wcstringutil::string_prefixes_string;
+use fish_widestring::{L, WExt, WString, wstr};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -259,22 +259,22 @@ fn command_is_valid(
     // Builtins
     if !is_valid && builtin_ok {
         is_valid = builtin_exists(cmd)
-    };
+    }
 
     // Functions
     if !is_valid && function_ok {
         is_valid = function::exists_no_autoload(cmd)
-    };
+    }
 
     // Abbreviations
     if !is_valid && abbreviation_ok {
         is_valid = with_abbrs(|set| set.has_match(cmd, abbrs::Position::Command, L!("")))
-    };
+    }
 
     // Regular commands
     if !is_valid && command_ok {
         is_valid = path_get_path(cmd, vars).is_some()
-    };
+    }
 
     // Implicit cd
     if !is_valid && implicit_cd_ok {
@@ -448,7 +448,7 @@ fn color_variable(inp: &wstr, colors: &mut [HighlightSpec]) -> usize {
                 // double-quoted string that doesn't happen. As such, color the variable + the slice
                 // start red. Coloring any more than that looks bad, unless we're willing to try and
                 // detect where the double-quoted string ends, and I'd rather not do that.
-                colors[..idx + 1].fill(HighlightSpec::with_fg(HighlightRole::error));
+                colors[..=idx].fill(HighlightSpec::with_fg(HighlightRole::error));
                 break;
             }
         }
@@ -895,7 +895,7 @@ impl<'s> Highlighter<'s> {
             | ParseKeyword::Exclam
             | ParseKeyword::Time => role = HighlightRole::operat,
             ParseKeyword::None => (),
-        };
+        }
         self.color_node(node.as_node(), HighlightSpec::with_fg(role));
     }
     fn visit_token(&mut self, tok: &dyn Token) {

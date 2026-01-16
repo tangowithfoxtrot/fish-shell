@@ -13,7 +13,6 @@ pub mod abbrs;
 pub mod ast;
 pub mod autoload;
 pub mod builtins;
-pub mod color;
 pub mod complete;
 pub mod editable_line;
 pub mod env;
@@ -74,9 +73,7 @@ pub mod topic_monitor;
 pub mod trace;
 pub mod tty_handoff;
 pub mod universal_notifier;
-pub mod util;
 pub mod wait_handle;
-pub mod wcstringutil;
 pub mod wgetopt;
 pub mod wildcard;
 

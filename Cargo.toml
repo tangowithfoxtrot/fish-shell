@@ -17,6 +17,7 @@ cfg-if = "1.0.3"
 errno = "0.3.0"
 fish-build-helper = { path = "crates/build-helper" }
 fish-build-man-pages = { path = "crates/build-man-pages" }
+fish-color = { path = "crates/color" }
 fish-common = { path = "crates/common" }
 fish-fallback = { path = "crates/fallback" }
 fish-gettext = { path = "crates/gettext" }
@@ -25,8 +26,10 @@ fish-gettext-maps = { path = "crates/gettext-maps" }
 fish-gettext-mo-file-parser = { path = "crates/gettext-mo-file-parser" }
 fish-printf = { path = "crates/printf", features = ["widestring"] }
 fish-tempfile = { path = "crates/tempfile" }
-fish-wchar = { path = "crates/wchar" }
+fish-util = { path = "crates/util" }
+fish-wcstringutil = { path = "crates/wcstringutil" }
 fish-widecharwidth = { path = "crates/widecharwidth" }
+fish-widestring = { path = "crates/widestring" }
 libc = "0.2.177"
 # lru pulls in hashbrown by default, which uses a faster (though less DoS resistant) hashing algo.
 # disabling default features uses the stdlib instead, but it doubles the time to rewrite the history
@@ -93,14 +96,17 @@ cfg-if.workspace = true
 errno.workspace = true
 fish-build-helper.workspace = true
 fish-build-man-pages = { workspace = true, optional = true }
+fish-color.workspace = true
 fish-common.workspace = true
 fish-fallback.workspace = true
 fish-gettext = { workspace = true, optional = true }
 fish-gettext-extraction = { workspace = true, optional = true }
 fish-printf.workspace = true
 fish-tempfile.workspace = true
-fish-wchar.workspace = true
+fish-util.workspace = true
+fish-wcstringutil.workspace = true
 fish-widecharwidth.workspace = true
+fish-widestring.workspace = true
 libc.workspace = true
 lru.workspace = true
 macro_rules_attribute = "0.2.2"
@@ -111,7 +117,6 @@ pcre2.workspace = true
 rand.workspace = true
 terminfo.workspace = true
 xterm-color.workspace = true
-widestring.workspace = true
 
 [target.'cfg(not(target_has_atomic = "64"))'.dependencies]
 portable-atomic.workspace = true
@@ -185,15 +190,19 @@ rustdoc.private_intra_doc_links = "allow"
 
 [workspace.lints.clippy]
 assigning_clones = "warn"
-implicit_clone = "warn"
 cloned_instead_of_copied = "warn"
-len_without_is_empty = "allow"     # we're not a library crate
+implicit_clone = "warn"
+len_without_is_empty = "allow"    # we're not a library crate
 let_and_return = "allow"
 manual_range_contains = "allow"
 map_unwrap_or = "warn"
+mut_mut = "warn"
 needless_lifetimes = "allow"
 new_without_default = "allow"
 option_map_unit_fn = "allow"
+ptr_offset_by_literal = "warn"
+ref_option = "warn"
+unnecessary_semicolon = "warn"
 
 # We do not want to use the e?print(ln)?! macros.
 # These lints flag their use.

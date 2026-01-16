@@ -324,7 +324,7 @@ impl RustEmbed for EmptyEmbed {
 cfg_if!(
     if #[cfg(feature = "embed-manpages")] {
         #[derive(RustEmbed)]
-        #[folder = "$FISH_RESOLVED_BUILD_DIR/fish-man/man1"]
+        #[folder = "$FISH_RESOLVED_BUILD_DIR/fish-docs/man/man1"]
         #[prefix = "man/man1/"]
         struct Docs;
     } else {
@@ -527,7 +527,7 @@ pub fn status(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> B
             }
         }
         STATUS_LIST_FILES => {
-            use crate::util::wcsfilecmp_glob;
+            use fish_util::wcsfilecmp_glob;
             let mut paths = vec![];
             let mut add = |arg| {
                 let arg = crate::common::wcs2bytes(arg);
@@ -579,7 +579,7 @@ pub fn status(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> B
                     args[0]
                 ));
                 return Err(STATUS_INVALID_ARGS);
-            };
+            }
             return if get_scroll_content_up_capability() == Some(true) {
                 Ok(SUCCESS)
             } else {
@@ -776,7 +776,7 @@ pub fn status(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> B
                 }
             }
         }
-    };
+    }
 
     Ok(SUCCESS)
 }

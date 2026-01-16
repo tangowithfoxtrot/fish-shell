@@ -1,5 +1,4 @@
 // Generic output functions.
-use crate::color::{Color, Color24};
 use crate::common::ToCString;
 use crate::common::{self, EscapeStringStyle, escape_string, wcs2bytes, wcs2bytes_appending};
 use crate::flogf;
@@ -9,6 +8,7 @@ use crate::screen::{is_dumb, only_grayscale};
 use crate::text_face::{TextFace, TextStyling, UnderlineStyle};
 use crate::threads::MainThread;
 use bitflags::bitflags;
+use fish_color::{Color, Color24};
 use std::cell::{RefCell, RefMut};
 use std::env;
 use std::ffi::{CStr, CString};
@@ -281,7 +281,7 @@ fn palette_color(out: &mut impl Output, paintable: Paintable, mut idx: u8) -> bo
         0..=7 => write_to_output!(out, "\x1b[{}m", 30 + bg + idx),
         8..=15 => write_to_output!(out, "\x1b[{}m", 90 + bg + (idx - 8)),
         _ => write_to_output!(out, "\x1b[{};5;{}m", 38 + bg, idx),
-    };
+    }
     true
 }
 

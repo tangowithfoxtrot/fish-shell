@@ -37,10 +37,6 @@ use crate::{
     path::{path_get_path, path_try_get_path},
     prelude::*,
     tokenizer::{Tok, TokFlags, TokenType, Tokenizer, variable_assignment_equals_pos},
-    wcstringutil::{
-        StringFuzzyMatch, string_fuzzy_match_string, string_prefixes_string,
-        string_prefixes_string_case_insensitive,
-    },
     wildcard::{wildcard_complete, wildcard_has, wildcard_match},
     wutil::wrealpath,
 };
@@ -50,11 +46,15 @@ use crate::{
     common::charptr2wcstring,
     localization::{LocalizableString, localizable_string},
     reader::{get_quote, is_backslashed},
-    util::wcsfilecmp,
-    wcstringutil::{string_suffixes_string_case_insensitive, strip_executable_suffix},
 };
 use bitflags::bitflags;
-use fish_wchar::WExt;
+use fish_util::wcsfilecmp;
+use fish_wcstringutil::{
+    StringFuzzyMatch, string_fuzzy_match_string, string_prefixes_string,
+    string_prefixes_string_case_insensitive, string_suffixes_string_case_insensitive,
+    strip_executable_suffix,
+};
+use fish_widestring::WExt;
 
 // Completion description strings, mostly for different types of files, such as sockets, block
 // devices, etc.
@@ -1644,7 +1644,7 @@ impl<'ctx> Completer<'ctx> {
         Self::escape_opening_brackets(&mut local_completions, s);
         // Any COMPLETE_REPLACES_TOKEN will also stomp the separator. We need to "repair" them by
         // inserting our separator and prefix.
-        let prefix_with_sep = s.as_char_slice()[..sep_index + 1].into();
+        let prefix_with_sep = s.as_char_slice()[..=sep_index].into();
         for comp in &mut local_completions {
             comp.prepend_token_prefix(prefix_with_sep);
             comp.r#match.from_separator = true;
@@ -2305,7 +2305,7 @@ pub fn complete_add(
 
     // Lock the lock that allows us to edit the completion entry list.
     let mut completion_map = COMPLETION_MAP.lock().expect("mutex poisoned");
-    let c = &mut completion_map
+    let c = completion_map
         .entry(CompletionEntryIndex {
             name: cmd,
             is_path: cmd_is_path,
@@ -2640,7 +2640,7 @@ mod tests {
     use crate::prelude::*;
     use crate::reader::completion_apply_to_command_line;
     use crate::tests::prelude::*;
-    use crate::wcstringutil::join_strings;
+    use fish_wcstringutil::join_strings;
     use std::collections::HashMap;
     use std::ffi::CString;
 

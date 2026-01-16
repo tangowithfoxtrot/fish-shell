@@ -24,13 +24,14 @@ use crate::parse_util::{
 };
 use crate::path::path_apply_working_directory;
 use crate::prelude::*;
-use crate::util::wcsfilecmp_glob;
-use crate::wcstringutil::{join_strings, trim};
 use crate::wildcard::{ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE, WildcardResult};
 use crate::wildcard::{wildcard_expand_string, wildcard_has_internal};
 use crate::wutil::{Options, normalize_path, wcstoi_partial};
 use bitflags::bitflags;
-use fish_common::{EXPAND_RESERVED_BASE, EXPAND_RESERVED_END, char_offset};
+use fish_common::{EXPAND_RESERVED_BASE, EXPAND_RESERVED_END};
+use fish_util::wcsfilecmp_glob;
+use fish_wcstringutil::{join_strings, trim};
+use fish_widestring::char_offset;
 use std::mem::MaybeUninit;
 
 bitflags! {
@@ -845,7 +846,7 @@ fn expand_braces(
             // that.
             let mut synth = WString::new();
             if let Some(last_sep) = last_sep {
-                synth.push_utfstr(&input[..brace_begin.unwrap() + 1]);
+                synth.push_utfstr(&input[..=brace_begin.unwrap()]);
                 synth.push_utfstr(&input[last_sep + 1..]);
                 synth.push(BRACE_END);
             } else {
@@ -1153,7 +1154,7 @@ fn expand_home_directory(input: &mut WString, vars: &dyn Environment) {
                 home = Some(home_var.as_string());
                 tail_idx = 1;
             }
-        };
+        }
     } else {
         // Some other user's home directory.
         let name_cstr = wcs2zstring(username);

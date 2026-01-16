@@ -22,8 +22,9 @@ use crate::{
         rewrite_via_temporary_file,
     },
     threads::ThreadPool,
-    wcstringutil::trim,
 };
+use fish_wcstringutil::{subsequence_in_string, trim};
+use fish_widestring::subslice_position;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
@@ -61,8 +62,6 @@ use crate::{
     path::{path_get_config, path_get_data, path_is_valid},
     prelude::*,
     threads::assert_is_background_thread,
-    util::find_subslice,
-    wcstringutil::subsequence_in_string,
     wildcard::{ANY_STRING, wildcard_match},
     wutil::{FileId, INVALID_FILE_ID, file_id_for_file, wrealpath, wstat, wunlink},
 };
@@ -219,7 +218,7 @@ impl HistoryItem {
         match typ {
             SearchType::Exact => term == *content_to_match,
             SearchType::Contains => {
-                find_subslice(term.as_slice(), content_to_match.as_slice()).is_some()
+                subslice_position(content_to_match.as_slice(), term.as_slice()).is_some()
             }
             SearchType::Prefix => content_to_match.as_slice().starts_with(term.as_slice()),
             SearchType::LinePrefix => content_to_match
@@ -1175,7 +1174,7 @@ fn should_import_bash_history_line(line: &wstr) -> bool {
     // Skip lines with [[...]] and ((...)) since we don't handle those constructs.
     // "<<" here is a proxy for heredocs (and herestrings).
     for seq in [L!("[["), L!("]]"), L!("(("), L!("))"), L!("<<")] {
-        if find_subslice(seq, line.as_char_slice()).is_some() {
+        if subslice_position(line.as_char_slice(), seq).is_some() {
             return false;
         }
     }
@@ -1593,7 +1592,7 @@ impl HistorySearch {
             match direction {
                 SearchDirection::Backward => index += 1,
                 SearchDirection::Forward => index -= 1,
-            };
+            }
 
             if self.current_index == invalid_index {
                 return false;
@@ -1787,8 +1786,8 @@ mod tests {
     use crate::path::path_get_data;
     use crate::prelude::*;
     use crate::tests::prelude::*;
-    use crate::wcstringutil::{string_prefixes_string, string_prefixes_string_case_insensitive};
     use fish_build_helper::workspace_root;
+    use fish_wcstringutil::{string_prefixes_string, string_prefixes_string_case_insensitive};
     use rand::Rng;
     use rand::rngs::ThreadRng;
     use std::collections::VecDeque;

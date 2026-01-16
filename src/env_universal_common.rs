@@ -6,9 +6,9 @@ use crate::flog::{flog, flogf};
 use crate::fs::{PotentialUpdate, lock_and_load, rewrite_via_temporary_file};
 use crate::path::path_get_config;
 use crate::prelude::*;
-use crate::wcstringutil::{LineIterator, join_strings};
 use crate::wutil::{FileId, INVALID_FILE_ID, file_id_for_file, file_id_for_path_narrow, wrealpath};
-use fish_wchar::decode_byte_from_char;
+use fish_wcstringutil::{LineIterator, join_strings};
+use fish_widestring::decode_byte_from_char;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::ffi::CString;
@@ -103,7 +103,7 @@ impl EnvUniversal {
             Entry::Vacant(entry) => {
                 entry.insert(var);
             }
-        };
+        }
         self.modified.insert(key.to_owned());
         if exports {
             self.export_generation += 1;
@@ -807,9 +807,8 @@ fn skip_spaces(mut s: &wstr) -> &wstr {
 
 #[cfg(test)]
 mod tests {
-    use fish_common::ENCODE_DIRECT_BASE;
-    use fish_common::char_offset;
     use fish_tempfile::TempDir;
+    use fish_widestring::{ENCODE_DIRECT_BASE, char_offset};
 
     use crate::common::bytes2wcstring;
     use crate::common::wcs2osstring;

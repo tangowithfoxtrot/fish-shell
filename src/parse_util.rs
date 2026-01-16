@@ -27,10 +27,9 @@ use crate::tokenizer::{
     TOK_ACCEPT_UNFINISHED, TOK_SHOW_COMMENTS, Tok, TokenType, Tokenizer, comment_end,
     is_token_delimiter, quote_end,
 };
-use crate::wcstringutil::count_newlines;
-use crate::wcstringutil::truncate;
 use crate::wildcard::{ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE};
 use fish_common::help_section;
+use fish_wcstringutil::{count_newlines, truncate};
 use std::ops::Range;
 use std::{iter, ops};
 
@@ -977,7 +976,7 @@ impl<'a> IndentVisitor<'a> {
             let mut callback = |offset| {
                 if !quoted {
                     // Quote open event. Indent unquoted part, including the opening quote.
-                    self.indents[done..start + offset + 1].fill(self.indent);
+                    self.indents[done..=(start + offset)].fill(self.indent);
                     done = start + offset + 1;
                 } else {
                     // Quote close. Don't indent, in case it's a multiline string.

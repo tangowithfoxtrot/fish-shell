@@ -6,23 +6,27 @@
 
 pub mod word_char;
 
-use fish_common::{ENCODE_DIRECT_BASE, ENCODE_DIRECT_END, subslice_position};
 use std::{iter, slice};
-pub use widestring::{Utf32Str as wstr, Utf32String as WString, utfstr::CharsUtf32};
+pub use widestring::{Utf32Str as wstr, Utf32String as WString, utf32str as L, utfstr::CharsUtf32};
 
 pub mod prelude {
     pub use crate::{IntoCharIter, L, ToWString, WExt, WString, wstr};
 }
 
-/// Creates a wstr string slice, like the "L" prefix of C++.
-/// The result is of type wstr.
-/// It is NOT nul-terminated.
-#[macro_export]
-macro_rules! L {
-    ($string:expr) => {
-        widestring::utf32str!($string)
-    };
-}
+// These are in the Unicode private-use range. We really shouldn't use this
+// range but have little choice in the matter given how our lexer/parser works.
+// We can't use non-characters for these two ranges because there are only 66 of
+// them and we need at least 256 + 64.
+//
+// If sizeof(wchar_t))==4 we could avoid using private-use chars; however, that
+// would result in fish having different behavior on machines with 16 versus 32
+// bit wchar_t. It's better that fish behave the same on both types of systems.
+//
+// Note: We don't use the highest 8 bit range (0xF800 - 0xF8FF) because we know
+// of at least one use of a codepoint in that range: the Apple symbol (0xF8FF)
+// on Mac OS X. See http://www.unicode.org/faq/private_use.html.
+pub const ENCODE_DIRECT_BASE: char = '\u{F600}';
+pub const ENCODE_DIRECT_END: char = char_offset(ENCODE_DIRECT_BASE, 256);
 
 /// Encode a literal byte in a UTF-32 character. This is required for e.g. the echo builtin, whose
 /// escape sequences can be used to construct raw byte sequences which are then interpreted as e.g.
@@ -47,6 +51,36 @@ pub fn decode_byte_from_char(c: char) -> Option<u8> {
     } else {
         None
     }
+}
+
+pub const fn char_offset(base: char, offset: u32) -> char {
+    match char::from_u32(base as u32 + offset) {
+        Some(c) => c,
+        None => panic!("not a valid char"),
+    }
+}
+
+/// Finds `needle` in a `haystack` and returns the index of the first matching element, if any.
+///
+/// # Examples
+///
+/// ```
+/// use fish_widestring::subslice_position;
+/// let haystack = b"ABC ABCDAB ABCDABCDABDE";
+///
+/// assert_eq!(subslice_position(haystack, b"ABCDABD"), Some(15));
+/// assert_eq!(subslice_position(haystack, b"ABCDE"), None);
+/// ```
+pub fn subslice_position<T: PartialEq>(
+    haystack: impl AsRef<[T]>,
+    needle: impl AsRef<[T]>,
+) -> Option<usize> {
+    let needle = needle.as_ref();
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let haystack = haystack.as_ref();
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Helpers to convert things to widestring.

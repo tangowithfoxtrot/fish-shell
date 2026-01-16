@@ -47,7 +47,7 @@ use crate::trace::trace_if_enabled_with_args;
 use crate::tty_handoff::TtyHandoff;
 use crate::wutil::{fish_wcstol, perror};
 use errno::{errno, set_errno};
-use fish_wchar::ToWString;
+use fish_widestring::ToWString;
 use libc::{
     EACCES, ENOENT, ENOEXEC, ENOTDIR, EPIPE, EXIT_FAILURE, EXIT_SUCCESS, STDERR_FILENO,
     STDIN_FILENO, STDOUT_FILENO,
@@ -344,7 +344,7 @@ fn exit_code_from_exec_error(err: libc::c_int) -> libc::c_int {
 fn is_thompson_shell_payload(p: &[u8]) -> bool {
     if !p.contains(&b'\0') {
         return true;
-    };
+    }
     let mut haslower = false;
     for c in p {
         if c.is_ascii_lowercase() || *c == b'$' || *c == b'`' {
@@ -418,7 +418,7 @@ fn safe_launch_process(
             let mut argv2 = [std::ptr::null(); 1 + MAXARGS + 1];
             let bshell = PATH_BSHELL.as_ptr().cast();
             argv2[0] = bshell;
-            argv2[1..argv.len() + 1].copy_from_slice(argv);
+            argv2[1..=argv.len()].copy_from_slice(argv);
             // The command to call should use the full path,
             // not what we would pass as argv0.
             argv2[1] = actual_cmd.as_ptr();
@@ -970,7 +970,7 @@ fn function_prepare_environment(
     for (idx, named_arg) in props.named_arguments.iter().enumerate() {
         if named_arg == L!("argv") {
             overwrite_argv = true
-        };
+        }
         if idx < argv.len() {
             vars.set_one(named_arg, mode, argv[idx].clone());
         } else {
@@ -981,7 +981,7 @@ fn function_prepare_environment(
     for (key, value) in &*props.inherit_vars {
         if key == L!("argv") {
             overwrite_argv = true
-        };
+        }
         vars.set(key, mode, value.clone());
     }
 

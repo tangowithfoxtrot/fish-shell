@@ -540,7 +540,7 @@ fn parse_cmd_opts<'args>(
                         "--move-unknown"
                     ));
                     return Err(STATUS_INVALID_ARGS);
-                };
+                }
                 opts.unknown_handling = if c == 'i' {
                     UnknownHandling::Ignore
                 } else {
@@ -674,7 +674,7 @@ fn populate_option_strings<'args>(
                 ArgType::OptionalArgument => short_options.push_str("::"),
                 ArgType::RequiredArgument => short_options.push_str(":"),
                 ArgType::NoArgument => {}
-            };
+            }
         }
 
         if !opt_spec.long_flag.is_empty() {
@@ -840,7 +840,7 @@ fn delete_flag<'args>(w: &mut WGetopter<'_, 'args, '_>, is_long_flag: bool) -> C
 
     // Set opt_arg_without to to be opt_arg minus <short-flag><value> (i.e.
     // -<previous-short-opts>...<more-short-opts>). (the +1 is to skip over the leading '-')
-    let opt_arg_without = opt_arg[..previous_opts + 1].to_owned() + more_opts;
+    let opt_arg_without = opt_arg[..=previous_opts].to_owned() + more_opts;
     assert!(opt_arg.len() > 1); // There should be at least one short opt
 
     // Put the version without <short-flag> back, and return the version with it

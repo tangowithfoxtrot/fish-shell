@@ -1,6 +1,7 @@
 // Enumeration of all wildcard types.
 
-use fish_common::{WILDCARD_RESERVED_BASE, char_offset};
+use fish_common::WILDCARD_RESERVED_BASE;
+use fish_widestring::char_offset;
 use libc::X_OK;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -15,13 +16,13 @@ use crate::expand::ExpandFlags;
 use crate::future_feature_flags::FeatureFlag;
 use crate::future_feature_flags::feature_test;
 use crate::prelude::*;
-use crate::wcstringutil::{
-    CaseSensitivity, string_fuzzy_match_string, string_suffixes_string_case_insensitive,
-    strip_executable_suffix,
-};
 use crate::wutil::dir_iter::DirEntryType;
 use crate::wutil::{dir_iter::DirEntry, lwstat, waccess};
 use fish_fallback::wcscasecmp;
+use fish_wcstringutil::{
+    CaseSensitivity, string_fuzzy_match_string, string_suffixes_string_case_insensitive,
+    strip_executable_suffix,
+};
 
 localizable_consts!(
     COMPLETE_EXEC_DESC "command"
@@ -707,7 +708,7 @@ mod expander {
                 let known_dir = need_dir && entry.is_dir();
                 if need_dir && !known_dir {
                     continue;
-                };
+                }
                 if !entry.name.is_empty() && !entry.name.starts_with('.') {
                     self.try_add_completion_result(
                         &(base_dir.to_owned() + entry.name.as_utfstr()),

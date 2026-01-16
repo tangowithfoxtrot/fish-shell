@@ -1,6 +1,6 @@
 use super::errors::Error;
 use super::hex_float;
-use fish_wchar::IntoCharIter;
+use fish_widestring::IntoCharIter;
 
 // Parse a decimal float from a sequence of characters.
 // Return the parsed float, and (on success) the number of characters consumed.
@@ -184,11 +184,11 @@ pub fn is_hex_float<Chars: Iterator<Item = char>>(mut chars: Chars) -> bool {
         }
         Some('0') => (),
         _ => return false,
-    };
+    }
     match chars.next() {
         Some('x') | Some('X') => (),
         _ => return false,
-    };
+    }
     match chars.next() {
         Some(c) => c.is_ascii_hexdigit(),
         None => false,

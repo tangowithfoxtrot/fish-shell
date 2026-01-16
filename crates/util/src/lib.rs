@@ -1,6 +1,6 @@
 //! Generic utilities library.
 
-use crate::prelude::*;
+use fish_widestring::prelude::*;
 use rand::{SeedableRng, rngs::SmallRng};
 use std::cmp::Ordering;
 use std::time;
@@ -234,33 +234,10 @@ fn wcsfilecmp_leading_digits(a: &wstr, b: &wstr) -> (Ordering, usize, usize) {
     (ret, ai, bi)
 }
 
-/// Finds `needle` in a `haystack` and returns the index of the first matching element, if any.
-///
-/// # Examples
-///
-/// ```
-/// use fish::util::find_subslice;
-/// let haystack = b"ABC ABCDAB ABCDABCDABDE";
-///
-/// assert_eq!(find_subslice(b"ABCDABD", haystack), Some(15));
-/// assert_eq!(find_subslice(b"ABCDE", haystack), None);
-/// ```
-pub fn find_subslice<T: PartialEq>(
-    needle: impl AsRef<[T]>,
-    haystack: impl AsRef<[T]>,
-) -> Option<usize> {
-    let needle = needle.as_ref();
-    if needle.is_empty() {
-        return Some(0);
-    }
-    let haystack = haystack.as_ref();
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
 #[cfg(test)]
 mod tests {
     use super::wcsfilecmp;
-    use crate::prelude::*;
+    use fish_widestring::prelude::*;
     use std::cmp::Ordering;
 
     /// Verify the behavior of the `wcsfilecmp()` function.
