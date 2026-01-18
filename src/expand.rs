@@ -116,7 +116,7 @@ impl ExpandResult {
     }
     /// Make an error value with the given status.
     pub fn make_error(status: libc::c_int) -> Self {
-        assert!(status != 0, "status cannot be 0 for an error result");
+        assert_ne!(status, 0, "status cannot be 0 for an error result");
         Self {
             result: ExpandResultCode::error,
             status,
@@ -1166,7 +1166,7 @@ fn expand_home_directory(input: &mut WString, vars: &dyn Environment) {
                 name_cstr.as_ptr(),
                 userinfo.as_mut_ptr(),
                 &mut buf[0],
-                std::mem::size_of_val(&buf),
+                size_of_val(&buf),
                 &mut result,
             )
         };

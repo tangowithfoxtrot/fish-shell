@@ -590,8 +590,9 @@ impl<'c> Tokenizer<'c> {
         token_length: Option<usize>,
         error_len: usize,
     ) -> Tok {
-        assert!(
-            error_type != TokenizerError::None,
+        assert_ne!(
+            error_type,
+            TokenizerError::None,
             "TokenizerError::none passed to call_error"
         );
         assert!(error_loc >= token_start, "Invalid error location");
@@ -997,7 +998,7 @@ impl TryFrom<&wstr> for PipeOrRedir {
 
         // Like try_consume, but asserts on failure.
         let consume = |cursor: &mut usize, c| {
-            assert!(buff.char_at(*cursor) == c, "Failed to consume char");
+            assert_eq!(buff.char_at(*cursor), c, "Failed to consume char");
             *cursor += 1;
         };
 
@@ -1016,8 +1017,9 @@ impl TryFrom<&wstr> for PipeOrRedir {
                     return Err(());
                 }
                 consume(&mut cursor, '|');
-                assert!(
-                    buff.char_at(cursor) != '|',
+                assert_ne!(
+                    buff.char_at(cursor),
+                    '|',
                     "|| passed as redirection, this should have been handled as 'or' by the caller"
                 );
                 result.fd = STDOUT_FILENO;

@@ -256,7 +256,7 @@ fn byte_to_hex(byte: u8) -> (char, char) {
 fn escape_string_url(input: &wstr) -> WString {
     let narrow = wcs2bytes(input);
     let mut out = WString::new();
-    for byte in narrow.into_iter() {
+    for byte in narrow {
         if (byte & 0x80) == 0 {
             let c = char::from_u32(u32::from(byte)).unwrap();
             if c.is_alphanumeric() || [b'/', b'.', b'~', b'-', b'_'].contains(&byte) {
@@ -279,7 +279,7 @@ fn escape_string_var(input: &wstr) -> WString {
     let mut prev_was_hex_encoded = false;
     let narrow = wcs2bytes(input);
     let mut out = WString::new();
-    for c in narrow.into_iter() {
+    for c in narrow {
         let ch: char = c.into();
         if ((c & 0x80) == 0 && ch.is_alphanumeric())
             && (!prev_was_hex_encoded || !is_upper_hex_digit(ch))
@@ -710,7 +710,7 @@ pub fn read_unquoted_escape(
     allow_incomplete: bool,
     unescape_special: bool,
 ) -> Option<usize> {
-    assert!(input.char_at(0) == '\\', "not an escape");
+    assert_eq!(input.char_at(0), '\\', "not an escape");
 
     // Here's the character we'll ultimately append, or none. Note that '\0' is a
     // valid thing to append.
@@ -1385,6 +1385,7 @@ mod tests {
     use fish_util::get_seeded_rng;
     use fish_widestring::{ENCODE_DIRECT_BASE, L, WString, wstr};
     use rand::{Rng, RngCore};
+    use std::fmt::Write as _;
 
     #[test]
     fn test_escape_string() {
@@ -1525,9 +1526,9 @@ mod tests {
 
     /// Helper to convert a narrow string to a sequence of hex digits.
     fn bytes2hex(input: &[u8]) -> String {
-        let mut output = "".to_string();
+        let mut output = String::with_capacity(input.len() * 5);
         for byte in input {
-            output += &format!("0x{:2X} ", *byte);
+            write!(output, "0x{:2X} ", *byte).unwrap();
         }
         output
     }

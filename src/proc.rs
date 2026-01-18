@@ -148,12 +148,13 @@ impl ProcStatus {
                or invalid builtin exit code!"
         );
 
-        // Some paranoia.
-        const _zerocode: i32 = ProcStatus::w_exitcode(0, 0);
-        const _: () = assert!(
-            WIFEXITED(_zerocode),
-            "Synthetic exit status not reported as exited"
-        );
+        const {
+            let _zerocode = ProcStatus::w_exitcode(0, 0);
+            assert!(
+                WIFEXITED(_zerocode),
+                "Synthetic exit status not reported as exited"
+            );
+        }
 
         assert!(ret < 256);
         ProcStatus::new(Some(Self::w_exitcode(ret, 0 /* sig */)))
@@ -1237,7 +1238,7 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool, block_io: Opt
                 continue;
             }
             let pid = Pid::new(pid);
-            assert!(pid == proc.pid().unwrap(), "Unexpected waitpid() return");
+            assert_eq!(pid, proc.pid().unwrap(), "Unexpected waitpid() return");
 
             // The process has stopped or exited! Update its status.
             let status = ProcStatus::from_waitpid(statusv);

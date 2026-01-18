@@ -94,7 +94,7 @@ pub fn execute_setpgid(pid: libc::pid_t, pgroup: libc::pid_t, is_parent: bool) -
             return 0;
         }
         let err = errno::errno().0;
-        assert!(err != libc::EINTR);
+        assert_ne!(err, libc::EINTR);
         if err == libc::EACCES && is_parent {
             // We are the parent process and our child has called exec().
             // This is an unavoidable benign race.
@@ -503,7 +503,7 @@ fn get_interpreter<'a>(command: &CStr, buffer: &'a mut [u8]) -> Option<&'a CStr>
     if fd >= 0 {
         while idx + 1 < buffer.len() {
             let mut ch = b'\0';
-            let amt = unsafe { libc::read(fd, (&raw mut ch).cast(), std::mem::size_of_val(&ch)) };
+            let amt = unsafe { libc::read(fd, (&raw mut ch).cast(), size_of_val(&ch)) };
             if amt <= 0 || ch == b'\n' {
                 break;
             }

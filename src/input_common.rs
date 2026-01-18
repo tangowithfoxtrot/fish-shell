@@ -720,18 +720,18 @@ impl InputData {
     }
 }
 
-#[derive(Clone, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BackgroundColorQuery {
     pub result: Option<xterm_color::Color>,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CursorPositionQueryReason {
     NewPrompt,
     WindowHeightChange,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CursorPositionQuery {
     pub reason: CursorPositionQueryReason,
     pub result: Option<ViewportPosition>,
@@ -746,7 +746,7 @@ impl CursorPositionQuery {
     }
 }
 
-#[derive(Clone, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RecurrentQuery {
     pub background_color: Option<BackgroundColorQuery>,
     pub cursor_position: Option<CursorPositionQuery>,
@@ -1404,7 +1404,7 @@ pub trait InputEventQueuer {
 
     fn parse_osc(&mut self, buffer: &mut Vec<u8>) -> Option<()> {
         let osc_prefix = b"\x1b]";
-        assert!(buffer == osc_prefix);
+        assert_eq!(buffer, osc_prefix);
         self.read_until_sequence_terminator(buffer, /*allow_bel=*/ true)?;
         let buffer = &buffer[osc_prefix.len()..];
         let buffer = buffer.strip_prefix(b"11;")?;
@@ -1415,7 +1415,7 @@ pub trait InputEventQueuer {
     }
 
     fn parse_dcs(&mut self, buffer: &mut Vec<u8>) -> Option<KeyEvent> {
-        assert!(buffer == b"\x1bP");
+        assert_eq!(buffer, b"\x1bP");
         let Some(success) = self.read_sequence_byte(buffer) else {
             return Some(KeyEvent::from(alt('P')));
         };
@@ -1783,7 +1783,7 @@ fn parse_hex(hex: &[u8]) -> Option<Vec<u8>> {
     Some(result)
 }
 fn parse_hex_into(out: &mut [u8], hex: &[u8]) -> Option<()> {
-    assert!(out.len() * 2 == hex.len());
+    assert_eq!(out.len() * 2, hex.len());
     let mut i = 0;
     while i < hex.len() {
         let d1 = char::from(hex[i]).to_digit(16)?;

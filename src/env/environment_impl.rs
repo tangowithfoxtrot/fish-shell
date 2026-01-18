@@ -646,7 +646,7 @@ impl EnvScopedImpl {
 
         // Construct the export list: a list of strings of the form key=value.
         let mut export_list: Vec<CString> = Vec::with_capacity(vals.len());
-        for (key, val) in vals.into_iter() {
+        for (key, val) in vals {
             let mut str = key;
             str.push('=');
             str.push_utfstr(&val.as_string());
@@ -975,7 +975,7 @@ impl EnvStackImpl {
         if key == "umask" {
             return Some(set_umask(val));
         } else if key == "PWD" {
-            assert!(val.len() == 1, "Should have exactly one element in PWD");
+            assert_eq!(val.len(), 1, "Should have exactly one element in PWD");
             let pwd = val.pop().unwrap();
             if pwd != self.base.perproc_data.pwd {
                 self.base.perproc_data.pwd = pwd;
