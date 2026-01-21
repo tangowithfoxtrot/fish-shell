@@ -50,7 +50,7 @@ Guidelines
 In short:
 
 - Be conservative in what you need (keep to the agreed minimum supported Rust version, limit new dependencies)
-- Use automated tools to help you (``build_tools/check.sh``)
+- Use automated tools to help you (``cargo xtask check``)
 
 Commit History
 ==============
@@ -105,21 +105,24 @@ Contributing documentation
 ==========================
 
 The documentation is stored in ``doc_src/``, and written in ReStructured Text and built with Sphinx.
+The builtins and various functions shipped with fish are documented in ``doc_src/cmds/``.
 
-To build it locally, run either::
+To build an HTML version of the docs locally, run::
 
-    sphinx-build -j auto -b html doc_src/ /tmp/fish-doc/
+    cargo xtask html-docs
 
-which will output HTML docs to /tmp/fish-doc.
-You can open it in a browser and see that it looks okay.
-
-Alternatively, you can use::
+will output to ``target/fish-docs/html`` or, if you use CMake::
 
     cmake --build build -t sphinx-docs
 
-which outputs to build/user_doc/html/.
+will output to ``build/cargo/fish-docs/html/``. You can also run ``sphinx-build`` directly, which allows choosing the output directory::
 
-The builtins and various functions shipped with fish are documented in doc_src/cmds/.
+    sphinx-build -j auto -b html doc_src/ /tmp/fish-doc/
+
+will output HTML docs to ``/tmp/fish-doc``.
+
+After building them, you can open the HTML docs in a browser and see that it looks okay.
+
 
 Code Style
 ==========
@@ -245,7 +248,7 @@ In this example we're in the root of the workspace and have run ``cargo build`` 
 
 To run all tests and linters, use::
 
-    build_tools/check.sh
+    cargo xtask check
 
 Contributing Translations
 =========================

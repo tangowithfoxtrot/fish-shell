@@ -35,7 +35,7 @@ pub fn fish_build_dir() -> Cow<'static, Path> {
 }
 
 pub fn fish_doc_dir() -> Cow<'static, Path> {
-    fish_build_dir().join("fish-docs").into()
+    cargo_target_dir().join("fish-docs").into()
 }
 
 // TODO Move this to rsconf
@@ -86,4 +86,19 @@ pub fn target_os_is_bsd() -> bool {
 
 pub fn target_os_is_cygwin() -> bool {
     target_os() == "cygwin"
+}
+
+#[macro_export]
+macro_rules! as_os_strs {
+    [ $( $x:expr, )* ] => {
+        {
+            use std::ffi::OsStr;
+            fn as_os_str<S: AsRef<OsStr> + ?Sized>(s: &S) -> &OsStr {
+                s.as_ref()
+            }
+            &[
+                $( as_os_str($x), )*
+            ]
+        }
+    }
 }
