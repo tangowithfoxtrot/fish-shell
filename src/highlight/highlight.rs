@@ -20,8 +20,7 @@ use crate::parse_constants::{
     ParseKeyword, ParseTokenType, ParseTreeFlags, SourceRange, StatementDecoration,
 };
 use crate::parse_util::{
-    MaybeParentheses, parse_util_locate_cmdsubst_range, parse_util_process_first_token_offset,
-    parse_util_slice_length,
+    MaybeParentheses, get_process_first_token_offset, locate_cmdsubst_range, slice_length,
 };
 use crate::path::{path_as_implicit_cd, path_get_cdpath, path_get_path, paths_are_same_file};
 use crate::terminal::Outputter;
@@ -300,11 +299,12 @@ fn autosuggest_parse_command(
     buff: &wstr,
     ctx: &OperationContext<'_>,
 ) -> Option<(WString, WString)> {
-    let ast = ast::parse(
-        buff,
-        ParseTreeFlags::CONTINUE_AFTER_ERROR | ParseTreeFlags::ACCEPT_INCOMPLETE_TOKENS,
-        None,
-    );
+    let flags = ParseTreeFlags {
+        continue_after_error: true,
+        accept_incomplete_tokens: true,
+        ..Default::default()
+    };
+    let ast = ast::parse(buff, flags, None);
 
     // Find the first statement.
     let job_list: &ast::JobList = ast.top();
@@ -343,7 +343,7 @@ pub fn autosuggest_validate_from_history(
     assert_is_background_thread();
 
     if suggested_range != (0..item_commandline.char_count())
-        && parse_util_process_first_token_offset(item_commandline, suggested_range.start)
+        && get_process_first_token_offset(item_commandline, suggested_range.start)
             .is_some_and(|offset| offset != suggested_range.start)
     {
         return false;
@@ -433,7 +433,7 @@ fn color_variable(inp: &wstr, colors: &mut [HighlightSpec]) -> usize {
     // Handle a slice, up to dollar_count of them. Note that we currently don't do any validation of
     // the slice's contents, e.g. $foo[blah] will not show an error even though it's invalid.
     for _slice_count in 0..dollar_count {
-        match parse_util_slice_length(&inp[idx..]) {
+        match slice_length(&inp[idx..]) {
             Some(slice_len) if slice_len > 0 => {
                 colors[idx] = HighlightSpec::with_fg(HighlightRole::operat);
                 colors[idx + slice_len - 1] = HighlightSpec::with_fg(HighlightRole::operat);
@@ -742,11 +742,14 @@ impl<'s> Highlighter<'s> {
             .resize(self.buff.len(), HighlightSpec::default());
 
         // Flags we use for AST parsing.
-        let ast_flags = ParseTreeFlags::CONTINUE_AFTER_ERROR
-            | ParseTreeFlags::INCLUDE_COMMENTS
-            | ParseTreeFlags::ACCEPT_INCOMPLETE_TOKENS
-            | ParseTreeFlags::LEAVE_UNTERMINATED
-            | ParseTreeFlags::SHOW_EXTRA_SEMIS;
+        let ast_flags = ParseTreeFlags {
+            continue_after_error: true,
+            include_comments: true,
+            accept_incomplete_tokens: true,
+            leave_unterminated: true,
+            show_extra_semis: true,
+            ..Default::default()
+        };
         let ast = ast::parse(self.buff, ast_flags, None);
 
         self.visit_children(ast.top());
@@ -824,7 +827,7 @@ impl<'s> Highlighter<'s> {
         // Now do command substitutions.
         let mut cmdsub_cursor = 0;
         let mut is_quoted = false;
-        while let MaybeParentheses::CommandSubstitution(parens) = parse_util_locate_cmdsubst_range(
+        while let MaybeParentheses::CommandSubstitution(parens) = locate_cmdsubst_range(
             arg_str,
             &mut cmdsub_cursor,
             /*accept_incomplete=*/ true,
@@ -1113,7 +1116,7 @@ impl<'s> Highlighter<'s> {
 /// Return whether a string contains a command substitution.
 fn has_cmdsub(src: &wstr) -> bool {
     let mut cursor = 0;
-    match parse_util_locate_cmdsubst_range(src, &mut cursor, true, None, None) {
+    match locate_cmdsubst_range(src, &mut cursor, true, None, None) {
         MaybeParentheses::Error => false,
         MaybeParentheses::None => false,
         MaybeParentheses::CommandSubstitution(_) => true,

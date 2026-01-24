@@ -528,7 +528,7 @@ impl Parser {
         let mut error_list = ParseErrorList::new();
         if let Some(ps) = parse_source(
             cmd.to_owned(),
-            ParseTreeFlags::empty(),
+            ParseTreeFlags::default(),
             Some(&mut error_list),
         ) {
             return self.eval_parsed_source(
@@ -598,12 +598,12 @@ impl Parser {
         block_type: BlockType,
     ) -> Result<EvalRes, WString> {
         use crate::parse_tree::ParsedSource;
-        use crate::parse_util::parse_util_detect_errors_in_ast;
+        use crate::parse_util::detect_parse_errors_in_ast;
         let mut errors = vec![];
-        let ast = ast::parse(&src, ParseTreeFlags::empty(), Some(&mut errors));
+        let ast = ast::parse(&src, ParseTreeFlags::default(), Some(&mut errors));
         let mut errored = ast.errored();
         if !errored {
-            errored = parse_util_detect_errors_in_ast(&ast, &src, Some(&mut errors)).is_err();
+            errored = detect_parse_errors_in_ast(&ast, &src, Some(&mut errors)).is_err();
         }
         if errored {
             let sb = self.get_backtrace(&src, &errors);
@@ -1492,7 +1492,7 @@ mod tests {
         ParseErrorCode, ParseTokenType, ParseTreeFlags, ParserTestErrorBits, StatementDecoration,
     };
     use crate::parse_tree::{LineCounter, parse_source};
-    use crate::parse_util::{parse_util_detect_errors, parse_util_detect_errors_in_argument};
+    use crate::parse_util::{detect_errors_in_argument, detect_parse_errors};
     use crate::prelude::*;
     use crate::reader::{fake_scoped_reader, reader_reset_interrupted};
     use crate::signal::{signal_clear_cancel, signal_reset_handlers, signal_set_handlers};
@@ -1506,7 +1506,7 @@ mod tests {
         let _cleanup = test_init();
         macro_rules! detect_errors {
             ($src:literal) => {
-                parse_util_detect_errors(L!($src), None, true /* accept incomplete */)
+                detect_parse_errors(L!($src), None, true /* accept incomplete */)
             };
         }
 
@@ -1519,7 +1519,7 @@ mod tests {
             let args = &ast.top().arguments;
             let first_arg = args.first().expect("Failed to parse an argument");
             let mut errors = None;
-            parse_util_detect_errors_in_argument(first_arg, first_arg.source(&src), &mut errors)
+            detect_errors_in_argument(first_arg, first_arg.source(&src), &mut errors)
         }
 
         // Testing block nesting
@@ -1694,7 +1694,7 @@ mod tests {
         );
 
         // Within command substitutions, we should be able to detect everything that
-        // parse_util_detect_errors! can detect.
+        // detect_errors! can detect.
         assert!(
             detect_argument_errors("foo(cat | or cat)")
                 .unwrap_err()
@@ -2051,18 +2051,19 @@ mod tests {
         let ast = ast::parse(L!("a="), ParseTreeFlags::default(), None);
         assert!(ast.errored());
 
+        let flags = ParseTreeFlags {
+            leave_unterminated: true,
+            ..ParseTreeFlags::default()
+        };
+
         // If we are leaving things unterminated, this should not produce an error.
         // i.e. when typing "a=" at the command line, it should be treated as valid
         // because we don't want to color it as an error.
-        let ast = ast::parse(L!("a="), ParseTreeFlags::LEAVE_UNTERMINATED, None);
+        let ast = ast::parse(L!("a="), flags, None);
         assert!(!ast.errored());
 
         let mut errors = vec![];
-        ast::parse(
-            L!("begin; echo ("),
-            ParseTreeFlags::LEAVE_UNTERMINATED,
-            Some(&mut errors),
-        );
+        ast::parse(L!("begin; echo ("), flags, Some(&mut errors));
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0].code,
@@ -2070,11 +2071,7 @@ mod tests {
         );
 
         errors.clear();
-        ast::parse(
-            L!("for x in ("),
-            ParseTreeFlags::LEAVE_UNTERMINATED,
-            Some(&mut errors),
-        );
+        ast::parse(L!("for x in ("), flags, Some(&mut errors));
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0].code,
@@ -2082,11 +2079,7 @@ mod tests {
         );
 
         errors.clear();
-        ast::parse(
-            L!("begin; echo '"),
-            ParseTreeFlags::LEAVE_UNTERMINATED,
-            Some(&mut errors),
-        );
+        ast::parse(L!("begin; echo '"), flags, Some(&mut errors));
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].code, ParseErrorCode::TokenizerUnterminatedQuote);
     }
@@ -2395,7 +2388,11 @@ mod tests {
     #[test]
     fn test_ast() {
         // Light testing of the AST and traversals.
-        let ast = ast::parse(TrueSemiAstTester::TRUE_SEMI, ParseTreeFlags::empty(), None);
+        let ast = ast::parse(
+            TrueSemiAstTester::TRUE_SEMI,
+            ParseTreeFlags::default(),
+            None,
+        );
         let tester = TrueSemiAstTester::new(&ast);
 
         // Walk the AST and collect all nodes.
@@ -2456,7 +2453,7 @@ mod tests {
     #[should_panic]
     fn test_traversal_skip_children_panics() {
         // Test that we panic if we try to skip children of a node that is not the current node.
-        let ast = ast::parse(L!("true;"), ParseTreeFlags::empty(), None);
+        let ast = ast::parse(L!("true;"), ParseTreeFlags::default(), None);
         let mut traversal = ast.walk();
         while let Some(node) = traversal.next() {
             if matches!(node.kind(), ast::Kind::DecoratedStatement(_)) {
@@ -2470,7 +2467,7 @@ mod tests {
     #[should_panic]
     fn test_traversal_parent_panics() {
         // Can only get the parent of nodes still on the stack.
-        let ast = ast::parse(L!("true;"), ParseTreeFlags::empty(), None);
+        let ast = ast::parse(L!("true;"), ParseTreeFlags::default(), None);
         let mut traversal = ast.walk();
         let mut decorated_statement = None;
         while let Some(node) = traversal.next() {
