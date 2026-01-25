@@ -39,14 +39,14 @@ pub fn set_color_support(val: ColorSupport) {
     COLOR_SUPPORT.store(val.bits(), Ordering::Relaxed);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum Paintable {
     Foreground,
     Background,
     Underline,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) enum TerminalCommand<'a> {
     // Text attributes
     ExitAttributeMode,
@@ -105,12 +105,12 @@ pub(crate) enum TerminalCommand<'a> {
     Osc133PromptStart,
     Osc133PromptEnd,
     Osc133CommandStart(&'a wstr),
-    Osc133CommandFinished(libc::c_int),
+    Osc133CommandFinished { exit_status: libc::c_int },
 
     // Other terminal features
     QueryCursorPosition,
     QueryBackgroundColor,
-    ScrollContentUp(usize),
+    ScrollContentUp { lines: usize },
 
     DecsetShowCursor,
     DecsetFocusReporting,
@@ -184,10 +184,10 @@ pub(crate) trait Output {
             Osc133PromptStart => osc_133_prompt_start(self),
             Osc133PromptEnd => osc_133_prompt_end(self),
             Osc133CommandStart(command) => osc_133_command_start(self, command),
-            Osc133CommandFinished(s) => osc_133_command_finished(self, s),
+            Osc133CommandFinished { exit_status } => osc_133_command_finished(self, exit_status),
             QueryCursorPosition => write(self, b"\x1b[6n"),
             QueryBackgroundColor => write(self, b"\x1b]11;?\x1b\\"),
-            ScrollContentUp(lines) => scroll_content_up(self, lines),
+            ScrollContentUp { lines } => scroll_content_up(self, lines),
             DecsetShowCursor => write(self, b"\x1b[?25h"),
             DecsetFocusReporting => write(self, b"\x1b[?1004h"),
             DecrstFocusReporting => write(self, b"\x1b[?1004l"),
@@ -311,7 +311,7 @@ fn rgb_color(out: &mut impl Output, paintable: Paintable, rgb: Color24) -> bool 
     true
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) enum CardinalDirection {
     Up,
     Left,

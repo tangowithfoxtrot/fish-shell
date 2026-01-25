@@ -18,32 +18,16 @@ use std::sync::LazyLock;
 
 /// Returns the user configuration directory for fish. If the directory or one of its parents
 /// doesn't exist, they are first created.
-///
-/// \param path The directory as an out param
-/// Return whether the directory was returned successfully
 pub fn path_get_config() -> Option<WString> {
-    let dir = get_config_directory();
-    if dir.success() {
-        Some(dir.path.clone())
-    } else {
-        None
-    }
+    CONFIG_DIRECTORY.path()
 }
 
 /// Returns the user data directory for fish. If the directory or one of its parents doesn't exist,
 /// they are first created.
 ///
 /// Volatile files presumed to be local to the machine, such as the fish_history will be stored in this directory.
-///
-/// \param path The directory as an out param
-/// Return whether the directory was returned successfully
 pub fn path_get_data() -> Option<WString> {
-    let dir = get_data_directory();
-    if dir.success() {
-        Some(dir.path.clone())
-    } else {
-        None
-    }
+    DATA_DIRECTORY.path()
 }
 
 /// Returns the user cache directory for fish. If the directory or one of its parents doesn't exist,
@@ -51,16 +35,8 @@ pub fn path_get_data() -> Option<WString> {
 ///
 /// Volatile files presumed to be local to the machine such as all the
 /// generated_completions, will be stored in this directory.
-///
-/// \param path The directory as an out param
-/// Return whether the directory was returned successfully
 pub fn path_get_cache() -> Option<WString> {
-    let dir = get_cache_directory();
-    if dir.success() {
-        Some(dir.path.clone())
-    } else {
-        None
-    }
+    CACHE_DIRECTORY.path()
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -76,26 +52,26 @@ pub enum DirRemoteness {
 /// Return the remoteness of the fish data directory.
 /// This will be remote for filesystems like NFS, SMB, etc.
 pub fn path_get_data_remoteness() -> DirRemoteness {
-    get_data_directory().remoteness
+    DATA_DIRECTORY.remoteness
 }
 
 /// Like path_get_data_remoteness but for the config directory.
 pub fn path_get_config_remoteness() -> DirRemoteness {
-    get_config_directory().remoteness
+    CONFIG_DIRECTORY.remoteness
 }
 
 /// Emit any errors if config directories are missing.
 /// Use the given environment stack to ensure this only occurs once.
 pub fn path_emit_config_directory_messages(vars: &EnvStack) {
-    let data = get_data_directory();
-    if !data.success() {
+    let data = &*DATA_DIRECTORY;
+    if let Some(error) = &data.err {
         maybe_issue_path_warning(
             L!("data"),
             wgettext!("can not save history"),
             data.used_xdg,
             L!("XDG_DATA_HOME"),
             &data.path,
-            data.err,
+            error,
             vars,
         );
     }
@@ -103,15 +79,15 @@ pub fn path_emit_config_directory_messages(vars: &EnvStack) {
         flog!(path, "data path appears to be on a network volume");
     }
 
-    let config = get_config_directory();
-    if !config.success() {
+    let config = &*CONFIG_DIRECTORY;
+    if let Some(error) = &data.err {
         maybe_issue_path_warning(
             L!("config"),
             wgettext!("can not save universal variables or functions"),
             config.used_xdg,
             L!("XDG_CONFIG_HOME"),
             &config.path,
-            config.err,
+            error,
             vars,
         );
     }
@@ -130,7 +106,7 @@ fn maybe_issue_path_warning(
     using_xdg: bool,
     xdg_var: &wstr,
     path: &wstr,
-    saved_errno: libc::c_int,
+    error: &std::io::Error,
     vars: &EnvStack,
 ) {
     let warning_var_name = L!("_FISH_WARNED_").to_owned() + which_dir;
@@ -170,7 +146,7 @@ fn maybe_issue_path_warning(
         );
         flog!(
             warning_path,
-            wgettext_fmt!("The error was '%s'.", Errno(saved_errno).to_string())
+            wgettext_fmt!("The error was '%s'.", error.to_string())
         );
         flog!(
             warning_path,
@@ -562,14 +538,14 @@ struct BaseDirectory {
     /// whether the dir is remote
     remoteness: DirRemoteness,
     /// the error code if creating the directory failed, or 0 on success.
-    err: libc::c_int,
+    err: Option<std::io::Error>,
     /// whether an XDG variable was used in resolving the directory.
     used_xdg: bool,
 }
 
 impl BaseDirectory {
-    fn success(&self) -> bool {
-        self.err == 0
+    fn path(&self) -> Option<WString> {
+        self.err.is_none().then(|| self.path.clone())
     }
 }
 
@@ -589,12 +565,7 @@ fn make_base_directory(xdg_var: &wstr, non_xdg_homepath: &wstr) -> BaseDirectory
         let mut build_dir = PathBuf::from(BUILD_DIR);
         build_dir.push("fish-test-home");
 
-        let err = match std::fs::create_dir_all(&build_dir) {
-            Ok(_) => 0,
-            Err(e) => e
-                .raw_os_error()
-                .expect("Failed to create fish base directory, but it wasn't an OS error!"),
-        };
+        let err = std::fs::create_dir_all(&build_dir).err();
 
         return BaseDirectory {
             path: bytes2wcstring(build_dir.as_os_str().as_bytes()),
@@ -621,20 +592,21 @@ fn make_base_directory(xdg_var: &wstr, non_xdg_homepath: &wstr) -> BaseDirectory
         used_xdg = false;
     }
 
-    set_errno(Errno(0));
-    let err;
     let mut remoteness = DirRemoteness::Unknown;
-    if path.is_empty() {
-        err = ENOENT;
+    let err = if path.is_empty() {
+        Some(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Path is empty",
+        ))
     } else if let Err(io_error) = create_dir_all_with_mode(wcs2osstring(&path), 0o700) {
-        err = io_error.raw_os_error().unwrap_or_default();
+        Some(io_error)
     } else {
-        err = 0;
         // Need to append a trailing slash to check the contents of the directory, not its parent.
         let mut tmp = path.clone();
         tmp.push('/');
         remoteness = path_remoteness(&tmp);
-    }
+        None
+    };
 
     BaseDirectory {
         path,
@@ -728,23 +700,14 @@ pub fn path_remoteness(path: &wstr) -> DirRemoteness {
     }
 }
 
-fn get_data_directory() -> &'static BaseDirectory {
-    static DIR: LazyLock<BaseDirectory> =
-        LazyLock::new(|| make_base_directory(L!("XDG_DATA_HOME"), L!("/.local/share/fish")));
-    &DIR
-}
+static DATA_DIRECTORY: LazyLock<BaseDirectory> =
+    LazyLock::new(|| make_base_directory(L!("XDG_DATA_HOME"), L!("/.local/share/fish")));
 
-fn get_cache_directory() -> &'static BaseDirectory {
-    static DIR: LazyLock<BaseDirectory> =
-        LazyLock::new(|| make_base_directory(L!("XDG_CACHE_HOME"), L!("/.cache/fish")));
-    &DIR
-}
+static CACHE_DIRECTORY: LazyLock<BaseDirectory> =
+    LazyLock::new(|| make_base_directory(L!("XDG_CACHE_HOME"), L!("/.cache/fish")));
 
-fn get_config_directory() -> &'static BaseDirectory {
-    static DIR: LazyLock<BaseDirectory> =
-        LazyLock::new(|| make_base_directory(L!("XDG_CONFIG_HOME"), L!("/.config/fish")));
-    &DIR
-}
+static CONFIG_DIRECTORY: LazyLock<BaseDirectory> =
+    LazyLock::new(|| make_base_directory(L!("XDG_CONFIG_HOME"), L!("/.config/fish")));
 
 /// Appends a path component, with a / if necessary.
 pub fn append_path_component(path: &mut WString, component: &wstr) {

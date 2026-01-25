@@ -82,8 +82,6 @@ pub enum SearchType {
     PrefixGlob,
     /// Search for commands containing the given string as a subsequence
     ContainsSubsequence,
-    /// Matches everything.
-    MatchEverything,
 }
 
 /// Ways that a history item may be written to disk (or omitted).
@@ -243,7 +241,6 @@ impl HistoryItem {
                 wildcard_match(content_to_match.as_ref(), &pat, false)
             }
             SearchType::ContainsSubsequence => subsequence_in_string(term, &content_to_match),
-            SearchType::MatchEverything => true,
         }
     }
 
@@ -1399,9 +1396,9 @@ impl History {
             // The user had no search terms; just append everything.
             do_1_history_search(
                 Arc::clone(self),
-                SearchType::MatchEverything,
+                SearchType::Contains,
                 WString::new(),
-                false,
+                true,
                 &mut func,
                 cancel_check,
             );
@@ -1529,13 +1526,16 @@ pub struct HistorySearch {
 }
 
 impl HistorySearch {
-    pub fn new(hist: Arc<History>, s: WString) -> Self {
+    #[cfg(test)]
+    fn new(hist: Arc<History>, s: WString) -> Self {
         Self::new_with(hist, s, SearchType::Contains, SearchFlags::default(), 0)
     }
-    pub fn new_with_type(hist: Arc<History>, s: WString, search_type: SearchType) -> Self {
+    #[cfg(test)]
+    fn new_with_type(hist: Arc<History>, s: WString, search_type: SearchType) -> Self {
         Self::new_with(hist, s, search_type, SearchFlags::default(), 0)
     }
-    pub fn new_with_flags(hist: Arc<History>, s: WString, flags: SearchFlags) -> Self {
+    #[cfg(test)]
+    fn new_with_flags(hist: Arc<History>, s: WString, flags: SearchFlags) -> Self {
         Self::new_with(hist, s, SearchType::Contains, flags, 0)
     }
     /// Constructs a new history search.
@@ -1638,6 +1638,10 @@ impl HistorySearch {
     /// This function panics if there is no current item.
     pub fn current_item(&self) -> &HistoryItem {
         self.current_item.as_ref().expect("No current item")
+    }
+
+    pub fn canon_term(&self) -> &wstr {
+        &self.canon_term
     }
 
     /// Returns the current search result item contents.
