@@ -2633,6 +2633,7 @@ mod tests {
         sort_and_prioritize,
     };
     use crate::abbrs::{self, Abbreviation, with_abbrs_mut};
+    use crate::common::str2wcstring;
     use crate::env::{EnvMode, EnvSetMode, Environment};
     use crate::io::IoChain;
     use crate::operation_context::{
@@ -2658,18 +2659,18 @@ mod tests {
         let vars = PwdEnvironment {
             parent: TestEnvironment {
                 vars: HashMap::from([
-                    (WString::from_str("Foo1"), WString::new()),
-                    (WString::from_str("Foo2"), WString::new()),
-                    (WString::from_str("Foo3"), WString::new()),
-                    (WString::from_str("Bar1"), WString::new()),
-                    (WString::from_str("Bar2"), WString::new()),
-                    (WString::from_str("Bar3"), WString::new()),
-                    (WString::from_str("alpha"), WString::new()),
-                    (WString::from_str("ALPHA!"), WString::new()),
-                    (WString::from_str("gamma1"), WString::new()),
-                    (WString::from_str("GAMMA2"), WString::new()),
-                    (WString::from_str("SOMEDIR"), L!("/").to_owned()),
-                    (WString::from_str("SOMEVAR"), WString::new()),
+                    (L!("Foo1").to_owned(), WString::new()),
+                    (L!("Foo2").to_owned(), WString::new()),
+                    (L!("Foo3").to_owned(), WString::new()),
+                    (L!("Bar1").to_owned(), WString::new()),
+                    (L!("Bar2").to_owned(), WString::new()),
+                    (L!("Bar3").to_owned(), WString::new()),
+                    (L!("alpha").to_owned(), WString::new()),
+                    (L!("ALPHA!").to_owned(), WString::new()),
+                    (L!("gamma1").to_owned(), WString::new()),
+                    (L!("GAMMA2").to_owned(), WString::new()),
+                    (L!("SOMEDIR").to_owned(), L!("/").to_owned()),
+                    (L!("SOMEVAR").to_owned(), WString::new()),
                 ]),
             },
         };
@@ -3281,7 +3282,7 @@ mod tests {
 
         vars.parent
             .vars
-            .insert(L!("AUTOSUGGEST_TEST_LOC").to_owned(), WString::from_str(wd));
+            .insert(L!("AUTOSUGGEST_TEST_LOC").to_owned(), str2wcstring(wd));
         perform_one_autosuggestion_cd_test!("cd $AUTOSUGGEST_TEST_LOC/0", "foobar/", &vars);
         perform_one_autosuggestion_cd_test!("cd ~/test_autosuggest_suggest_specia", "l/", &vars);
 

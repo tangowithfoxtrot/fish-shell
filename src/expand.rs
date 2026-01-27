@@ -1542,7 +1542,7 @@ impl<'a, 'b, 'c> Expander<'a, 'b, 'c> {
         // Get the username_with_tilde (like ~bert) and expand it into a home directory.
         let mut tail_idx = usize::MAX;
         let username_with_tilde =
-            WString::from_str("~") + get_home_directory_name(input, &mut tail_idx);
+            L!("~").to_owned() + get_home_directory_name(input, &mut tail_idx);
         let mut home = username_with_tilde.clone();
         expand_tilde(&mut home, self.ctx.vars());
 
@@ -1591,6 +1591,7 @@ mod tests {
     use crate::abbrs::Abbreviation;
     use crate::abbrs::{self};
     use crate::abbrs::{with_abbrs, with_abbrs_mut};
+    use crate::common::str2wcstring;
     use crate::complete::{CompletionList, CompletionReceiver};
     use crate::env::{EnvMode, EnvStackSetResult};
     use crate::expand::{ExpandResultCode, expand_to_receiver};
@@ -1953,7 +1954,7 @@ mod tests {
         // Make a list of 64 elements, then expand it cartesian-style 64 times.
         // This is far too large to expand.
         let vals: Vec<WString> = (1..=64).map(|i| i.to_wstring()).collect();
-        let expansion = WString::from_str(&str::repeat("$bigvar", 64));
+        let expansion = str2wcstring(str::repeat("$bigvar", 64));
 
         let parser = TestParser::new();
         parser.vars().push(true);
