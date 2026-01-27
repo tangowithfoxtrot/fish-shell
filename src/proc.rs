@@ -3,9 +3,7 @@
 //! the exec library will call proc to create representations of the running jobs as needed.
 
 use crate::ast;
-use crate::common::{
-    Timepoint, WSL, charptr2wcstring, escape, is_windows_subsystem_for_linux, timef,
-};
+use crate::common::{Timepoint, WSL, escape, is_windows_subsystem_for_linux, timef};
 use crate::env::Statuses;
 use crate::event::{self, Event};
 use crate::flog::{flog, flogf};
@@ -25,11 +23,17 @@ use crate::wutil::{wbasename, wperror};
 use cfg_if::cfg_if;
 use fish_widestring::ToWString;
 use libc::{
-    _SC_CLK_TCK, EXIT_SUCCESS, SIG_IGN, SIGABRT, SIGBUS, SIGCONT, SIGFPE, SIGHUP, SIGILL, SIGINT,
-    SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSYS, SIGTTOU, STDOUT_FILENO, WCONTINUED, WEXITSTATUS,
-    WIFCONTINUED, WIFEXITED, WIFSIGNALED, WIFSTOPPED, WNOHANG, WTERMSIG, WUNTRACED,
+    _SC_CLK_TCK, EXIT_SUCCESS, SIG_IGN, SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGINT, SIGPIPE, SIGQUIT,
+    SIGSEGV, SIGSYS, SIGTTOU, STDOUT_FILENO, WCONTINUED, WEXITSTATUS, WIFCONTINUED, WIFEXITED,
+    WIFSIGNALED, WIFSTOPPED, WNOHANG, WTERMSIG, WUNTRACED,
 };
-use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet};
+use nix::{
+    sys::{
+        signal::{SaFlags, SigAction, SigHandler, SigSet, Signal as NixSignal, kill, killpg},
+        wait::{WaitPidFlag, WaitStatus, waitpid},
+    },
+    unistd::getpgrp,
+};
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::fs;
 use std::io::{Read, Write};
@@ -292,6 +296,11 @@ impl Pid {
     pub fn as_pid_t(&self) -> libc::pid_t {
         #[allow(clippy::useless_conversion)]
         self.get().into()
+    }
+
+    #[inline(always)]
+    pub fn as_nix_pid(&self) -> nix::unistd::Pid {
+        nix::unistd::Pid::from_raw(self.as_pid_t())
     }
 }
 
@@ -824,7 +833,7 @@ impl Job {
     /// Return true on success, false if we failed to send the signal.
     pub fn resume(&self) -> bool {
         self.mut_flags().notified_of_stop = false;
-        if !self.signal(SIGCONT) {
+        if !self.signal(NixSignal::SIGCONT) {
             flogf!(
                 proc_pgroup,
                 "Failed to send SIGCONT to procs in job %s",
@@ -842,24 +851,17 @@ impl Job {
 
     /// Send the specified signal to all processes in this job.
     /// Return true on success, false on failure.
-    pub fn signal(&self, signal: i32) -> bool {
+    pub fn signal(&self, signal: NixSignal) -> bool {
         if let Some(pgid) = self.group().get_pgid() {
-            if unsafe { libc::killpg(pgid.as_pid_t(), signal) } == -1 {
-                let strsignal = unsafe { libc::strsignal(signal) };
-                let strsignal = if strsignal.is_null() {
-                    L!("(nil)").to_owned()
-                } else {
-                    charptr2wcstring(strsignal)
-                };
+            if killpg(pgid.as_nix_pid(), signal).is_err() {
+                let strsignal = signal.as_str();
                 wperror(&sprintf!("killpg(%d, %s)", pgid, strsignal));
                 return false;
             }
         } else {
             // This job lives in fish's pgroup and we need to signal procs individually.
             for p in self.external_procs() {
-                if !p.is_completed()
-                    && unsafe { libc::kill(p.pid().unwrap().as_pid_t(), signal) } == -1
-                {
+                if !p.is_completed() && kill(p.pid().unwrap().as_nix_pid(), signal).is_err() {
                     return false;
                 }
             }
@@ -1107,14 +1109,14 @@ pub fn proc_wait_any(parser: &Parser) {
 
 /// Send SIGHUP to the list `jobs`, excepting those which are in fish's pgroup.
 pub fn hup_jobs(jobs: &JobList) {
-    let fish_pgrp = crate::nix::getpgrp();
+    let fish_pgrp = getpgrp();
     let mut kill_list = Vec::new();
     for j in jobs {
         let Some(pgid) = j.get_pgid() else { continue };
-        if pgid.as_pid_t() != fish_pgrp && !j.is_completed() {
-            j.signal(SIGHUP);
+        if pgid.as_nix_pid() != fish_pgrp && !j.is_completed() {
+            j.signal(NixSignal::SIGHUP);
             if j.is_stopped() {
-                j.signal(SIGCONT);
+                j.signal(NixSignal::SIGCONT);
             }
 
             // For most applications, the above alone is sufficient for the suspended process to
@@ -1138,7 +1140,7 @@ pub fn hup_jobs(jobs: &JobList) {
         // handle SIGHUP+SIGCONT without running into SIGTTOU.
         std::thread::sleep(std::time::Duration::from_millis(50));
         for j in kill_list.drain(..) {
-            j.signal(SIGKILL);
+            j.signal(NixSignal::SIGKILL);
         }
     }
 }
@@ -1155,16 +1157,19 @@ pub fn add_disowned_job(j: &Job) {
 // Reap any pids in our disowned list that have exited. This is used to avoid zombies.
 fn reap_disowned_pids() {
     let mut disowned_pids = DISOWNED_PIDS.lock().unwrap();
-    // waitpid returns 0 iff the PID/PGID in question has not changed state; remove the pid/pgid
-    // if it has changed or an error occurs (presumably ECHILD because the child does not exist)
-    disowned_pids.retain(|pid| {
-        let mut status: libc::c_int = 0;
-        let ret = unsafe { libc::waitpid(pid.as_pid_t(), &mut status, WNOHANG) };
-        if ret > 0 {
-            flogf!(proc_reap_external, "Reaped disowned PID or PGID %d", pid);
-        }
-        ret == 0
-    });
+    // Remove the pid/pgid if it has exited or an error occurs (presumably ECHILD because the child does not exist).
+    disowned_pids.retain(
+        |pid| match waitpid(pid.as_nix_pid(), Some(WaitPidFlag::WNOHANG)) {
+            Ok(wait_status) => match wait_status {
+                WaitStatus::Exited(_, _) | WaitStatus::Signaled(_, _, _) => {
+                    flogf!(proc_reap_external, "Reaped disowned PID or PGID %d", pid);
+                    false
+                }
+                _ => true,
+            },
+            Err(_) => false,
+        },
+    );
 }
 
 /// A list of pids that have been disowned. They are kept around until either they exit or

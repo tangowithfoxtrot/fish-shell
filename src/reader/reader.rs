@@ -17,36 +17,6 @@
 //! control-C from generating SIGINT, so failing to disable these would prevent cancellation of wildcard
 //! expansion, etc.
 
-use crate::portable_atomic::AtomicU64;
-use fish_common::{UTF8_BOM_WCHAR, help_section};
-use fish_fallback::lowercase;
-use fish_wcstringutil::{IsPrefix, is_prefix};
-use libc::{
-    _POSIX_VDISABLE, ECHO, EINTR, EIO, EISDIR, ENOTTY, EPERM, ESRCH, FLUSHO, ICANON, ICRNL, IEXTEN,
-    INLCR, IXOFF, IXON, O_NONBLOCK, O_RDONLY, ONLCR, OPOST, SIGINT, SIGTTIN, STDERR_FILENO,
-    STDIN_FILENO, STDOUT_FILENO, TCSANOW, VMIN, VQUIT, VSUSP, VTIME, c_char,
-};
-use nix::fcntl::OFlag;
-use nix::sys::stat::Mode;
-use std::borrow::Cow;
-use std::cell::UnsafeCell;
-use std::cmp;
-use std::io::BufReader;
-use std::mem::MaybeUninit;
-use std::num::NonZeroUsize;
-use std::ops::ControlFlow;
-use std::ops::Range;
-use std::os::fd::BorrowedFd;
-use std::os::fd::FromRawFd;
-use std::os::fd::OwnedFd;
-use std::os::fd::{AsRawFd, RawFd};
-use std::pin::Pin;
-use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant};
-
-use errno::{Errno, errno};
-
 use super::history_search::{ReaderHistorySearch, SearchMode, smartcase_flags};
 use super::iothreads::{self, Debouncers};
 use super::word_motion::{MoveWordDir, MoveWordStateMachine, MoveWordStyle};
@@ -98,7 +68,7 @@ use crate::input_common::{
 use crate::io::IoChain;
 use crate::key::ViewportPosition;
 use crate::kill::{kill_add, kill_replace, kill_yank, kill_yank_rotate};
-use crate::nix::{getpgrp, getpid, isatty};
+use crate::nix::{getpid, isatty};
 use crate::operation_context::{OperationContext, get_bg_context};
 use crate::pager::{PageRendering, Pager, SelectionMotion};
 use crate::panic::AT_EXIT;
@@ -111,6 +81,7 @@ use crate::parse_util::{
     get_token_extent, lineno, locate_cmdsubst_range,
 };
 use crate::parser::{BlockType, EvalRes, Parser, ParserEnvSetMode};
+use crate::portable_atomic::AtomicU64;
 use crate::prelude::*;
 use crate::proc::{
     HAVE_PROC_STAT, hup_jobs, is_interactive_session, job_reap, jobs_requiring_warning_on_exit,
@@ -145,11 +116,44 @@ use crate::wildcard::wildcard_has;
 use crate::wutil::{fstat, perror, write_to_fd, wstat};
 use crate::{abbrs, event, function};
 use assert_matches::assert_matches;
+use errno::{Errno, errno};
+use fish_common::{UTF8_BOM_WCHAR, help_section};
 use fish_fallback::fish_wcwidth;
+use fish_fallback::lowercase;
 use fish_wcstringutil::{
     CaseSensitivity, StringFuzzyMatch, count_preceding_backslashes, join_strings,
     string_prefixes_string, string_prefixes_string_case_insensitive,
     string_prefixes_string_maybe_case_insensitive,
+};
+use fish_wcstringutil::{IsPrefix, is_prefix};
+use libc::{
+    _POSIX_VDISABLE, ECHO, EINTR, EIO, EISDIR, ENOTTY, EPERM, ESRCH, FLUSHO, ICANON, ICRNL, IEXTEN,
+    INLCR, IXOFF, IXON, O_NONBLOCK, O_RDONLY, ONLCR, OPOST, SIGINT, STDERR_FILENO, STDIN_FILENO,
+    STDOUT_FILENO, TCSANOW, VMIN, VQUIT, VSUSP, VTIME, c_char,
+};
+use nix::{
+    fcntl::OFlag,
+    sys::{
+        signal::{Signal, killpg},
+        stat::Mode,
+    },
+    unistd::getpgrp,
+};
+use std::{
+    borrow::Cow,
+    cell::UnsafeCell,
+    cmp,
+    io::BufReader,
+    mem::MaybeUninit,
+    num::NonZeroUsize,
+    ops::{ControlFlow, Range},
+    os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
+    pin::Pin,
+    sync::{
+        Arc, LazyLock, Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 /// A description of where fish is in the process of exiting.
@@ -1018,7 +1022,7 @@ pub fn reader_init(will_restore_foreground_pgroup: bool) {
 
     // Set up our fixed terminal modes once,
     // so we don't get flow control just because we inherited it.
-    if is_interactive_session() && getpgrp() == unsafe { libc::tcgetpgrp(STDIN_FILENO) } {
+    if is_interactive_session() && getpgrp().as_raw() == unsafe { libc::tcgetpgrp(STDIN_FILENO) } {
         term_donate(/*quiet=*/ true);
     }
 }
@@ -1036,7 +1040,7 @@ pub fn reader_deinit(restore_foreground_pgroup: bool) {
 /// otherwise we won't think we own the terminal.
 /// THIS FUNCTION IS CALLED FROM A SIGNAL HANDLER. IT MUST BE ASYNC-SIGNAL-SAFE.
 pub fn safe_restore_term_mode() {
-    if !is_interactive_session() || getpgrp() != unsafe { libc::tcgetpgrp(STDIN_FILENO) } {
+    if !is_interactive_session() || getpgrp().as_raw() != unsafe { libc::tcgetpgrp(STDIN_FILENO) } {
         return;
     }
     if let Some(modes) = safe_get_terminal_mode_on_startup() {
@@ -4920,8 +4924,7 @@ fn acquire_tty_or_exit(shell_pgid: libc::pid_t) {
             }
 
             // Try stopping us.
-            let ret = unsafe { libc::killpg(shell_pgid, SIGTTIN) };
-            if ret < 0 {
+            if killpg(nix::unistd::Pid::from_raw(shell_pgid), Signal::SIGTTIN).is_err() {
                 perror("killpg(shell_pgid, SIGTTIN)");
                 exit_without_destructors(1);
             }
@@ -4933,7 +4936,7 @@ fn acquire_tty_or_exit(shell_pgid: libc::pid_t) {
 fn reader_interactive_init() {
     assert_is_main_thread();
 
-    let mut shell_pgid = getpgrp();
+    let mut shell_pgid = getpgrp().as_raw();
     let shell_pid = getpid();
 
     // Ensure interactive signal handling is enabled.

@@ -15,6 +15,7 @@ use crate::flog;
 use errno::errno;
 use fish_wcstringutil::{join_strings, str2bytes_callback};
 use fish_widestring::{IntoCharIter, L, WExt, WString, wstr};
+use nix::unistd::AccessFlags;
 use std::ffi::{CStr, OsStr};
 use std::fs::{self, canonicalize};
 use std::io::{self, Write};
@@ -53,15 +54,15 @@ pub fn fstat(fd: impl AsRawFd) -> io::Result<fs::Metadata> {
 }
 
 /// Wide character version of access().
-pub fn waccess(file_name: &wstr, mode: libc::c_int) -> libc::c_int {
-    let tmp = wcs2zstring(file_name);
-    unsafe { libc::access(tmp.as_ptr(), mode) }
+pub fn waccess(file_name: &wstr, amode: AccessFlags) -> nix::Result<()> {
+    let tmp = wcs2osstring(file_name);
+    nix::unistd::access(tmp.as_os_str(), amode)
 }
 
 /// Wide character version of unlink().
-pub fn wunlink(file_name: &wstr) -> libc::c_int {
-    let tmp = wcs2zstring(file_name);
-    unsafe { libc::unlink(tmp.as_ptr()) }
+pub fn wunlink(file_name: &wstr) -> io::Result<()> {
+    let tmp = wcs2osstring(file_name);
+    fs::remove_file(tmp)
 }
 
 pub fn wperror(s: &wstr) {
@@ -103,23 +104,14 @@ pub fn wgetcwd() -> WString {
 
 /// Wide character version of readlink().
 pub fn wreadlink(file_name: &wstr) -> Option<WString> {
-    let md = lwstat(file_name).ok()?;
-    let bufsize = usize::try_from(md.len()).unwrap() + 1;
-    let mut target_buf = vec![b'\0'; bufsize];
-    let tmp = wcs2zstring(file_name);
-    let nbytes = unsafe { libc::readlink(tmp.as_ptr(), target_buf.as_mut_ptr().cast(), bufsize) };
-    if nbytes == -1 {
-        perror("readlink");
-        return None;
+    let _ = lwstat(file_name).ok()?;
+    match fs::read_link(wcs2osstring(file_name)) {
+        Ok(target) => Some(osstr2wcstring(target)),
+        Err(e) => {
+            perror_io("readlink", &e);
+            None
+        }
     }
-    // The link might have been modified after our call to lstat.  If the link now points to a path
-    // that's longer than the original one, we can't read everything in our buffer.  Simply give
-    // up. We don't need to report an error since our only caller will already fall back to ENOENT.
-    let nbytes = usize::try_from(nbytes).unwrap();
-    if nbytes == bufsize {
-        return None;
-    }
-    Some(bytes2wcstring(&target_buf[0..nbytes]))
 }
 
 /// Wide character realpath. The last path component does not need to be valid. If an error occurs,
@@ -353,10 +345,10 @@ pub fn wbasename(mut path: &wstr) -> &wstr {
 }
 
 /// Wide character version of rename.
-pub fn wrename(old_name: &wstr, new_name: &wstr) -> libc::c_int {
-    let old_narrow = wcs2zstring(old_name);
-    let new_narrow = wcs2zstring(new_name);
-    unsafe { libc::rename(old_narrow.as_ptr(), new_narrow.as_ptr()) }
+pub fn wrename(old_name: &wstr, new_name: &wstr) -> io::Result<()> {
+    let old_narrow = wcs2osstring(old_name);
+    let new_narrow = wcs2osstring(new_name);
+    fs::rename(old_narrow, new_narrow)
 }
 
 pub fn write_to_fd(input: &[u8], fd: RawFd) -> nix::Result<usize> {
@@ -471,12 +463,11 @@ mod tests {
     use crate::common::bytes2wcstring;
     use crate::prelude::*;
     use crate::tests::prelude::*;
-    use libc::{O_CREAT, O_RDWR, O_TRUNC, SEEK_SET};
     use rand::Rng;
     use std::{
-        ffi::CString,
-        os::fd::{AsRawFd, FromRawFd, OwnedFd},
-        ptr,
+        fs::OpenOptions,
+        io::{Read, Seek},
+        os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
     };
 
     mod test_path_normalize_for_cd {
@@ -654,38 +645,30 @@ mod tests {
     fn test_wwrite_to_fd() {
         let _cleanup = test_init();
         let temp_file = fish_tempfile::new_file().unwrap();
-        let filename = CString::new(temp_file.path().to_str().unwrap()).unwrap();
         let mut rng = rand::rng();
         let sizes = [1, 2, 3, 5, 13, 23, 64, 128, 255, 4096, 4096 * 2];
         for &size in &sizes {
-            let fd = unsafe {
-                let res = libc::open(filename.as_ptr(), O_RDWR | O_TRUNC | O_CREAT, 0o666);
-                OwnedFd::from_raw_fd(res)
-            };
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o666)
+                .open(temp_file.path())
+                .unwrap();
             let mut input = Vec::new();
             for _i in 0..size {
                 input.push(rng.random());
             }
 
             let amt =
-                unescape_bytes_and_write_to_fd(&bytes2wcstring(&input), fd.as_raw_fd()).unwrap();
+                unescape_bytes_and_write_to_fd(&bytes2wcstring(&input), file.as_raw_fd()).unwrap();
             assert_eq!(amt, input.len());
 
-            assert!(unsafe { libc::lseek(fd.as_raw_fd(), 0, SEEK_SET) } >= 0);
+            file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
-            let mut contents = vec![0u8; input.len()];
-            let read_amt = unsafe {
-                libc::read(
-                    fd.as_raw_fd(),
-                    if size == 0 {
-                        ptr::null_mut()
-                    } else {
-                        contents.as_mut_ptr().cast()
-                    },
-                    input.len(),
-                )
-            };
-            assert_eq!(usize::try_from(read_amt).unwrap(), input.len());
+            let mut contents = vec![];
+            file.read_to_end(&mut contents).unwrap();
             assert_eq!(&contents, &input);
         }
     }

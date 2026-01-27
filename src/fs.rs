@@ -340,13 +340,12 @@ where
 
     /// Renames a file from `old_name` to `new_name`.
     fn rename(old_name: &wstr, new_name: &wstr) -> std::io::Result<()> {
-        if wrename(old_name, new_name) == -1 {
-            let error_number = errno::errno();
+        if let Err(e) = wrename(old_name, new_name) {
             flog!(
                 error,
-                wgettext_fmt!("Error when renaming file: %s", error_number.to_string())
+                wgettext_fmt!("Error when renaming file: %s", e.to_string())
             );
-            return Err(std::io::Error::from(error_number));
+            return Err(e);
         }
         Ok(())
     }
@@ -478,7 +477,7 @@ where
             .as_ref()
             .is_ok_and(|(_file_id, potential_update)| !potential_update.do_save)
     {
-        wunlink(&tmp_name);
+        let _ = wunlink(&tmp_name);
     }
     result
 }
