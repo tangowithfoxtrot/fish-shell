@@ -4612,6 +4612,9 @@ msgstr ""
 msgid ", & -w have little effect in conjunction with -b, -h, -R, and"
 msgstr "et -w n’ont que peu d’effet, combinées avec -b, -h, -R et"
 
+msgid "--disable-sandbox-filesystem and --disable-sandbox-syscalls"
+msgstr ""
+
 msgid "--ed  Output an ed script."
 msgstr ""
 
@@ -5710,6 +5713,9 @@ msgstr ""
 msgid "Add a noise pattern to the image with specific amplitudes [NxN]"
 msgstr ""
 
+msgid "Add a package from a file or URL"
+msgstr ""
+
 msgid "Add a package lock"
 msgstr "Ajouter un verrou de paquet"
 
@@ -5938,9 +5944,6 @@ msgstr "Ajouter le contenu des fichiers à l’index"
 msgid "Add file contents to the staging area"
 msgstr ""
 
-msgid "Add file(s) to the topmost/named patch"
-msgstr ""
-
 msgid "Add files and directories to an archive"
 msgstr ""
 
@@ -5949,6 +5952,9 @@ msgstr ""
 
 msgid "Add files to checkout"
 msgstr "Ajouter des fichiers à valider"
+
+msgid "Add files to patch"
+msgstr ""
 
 msgid "Add files to template."
 msgstr ""
@@ -5987,6 +5993,9 @@ msgid "Add header search directory"
 msgstr ""
 
 msgid "Add header search directory for #include \"file\""
+msgstr ""
+
+msgid "Add headers to reply to the message"
 msgstr ""
 
 msgid "Add imir property"
@@ -6097,6 +6106,9 @@ msgstr ""
 msgid "Add or reduce noise in an image [geometry]"
 msgstr ""
 
+msgid "Add or replace diffstat section to header"
+msgstr ""
+
 msgid "Add or update keys from <file>"
 msgstr "Ajouter ou mettre à jour des clés depuis le fichier spécifié"
 
@@ -6113,6 +6125,9 @@ msgid "Add pasp property"
 msgstr ""
 
 msgid "Add password"
+msgstr ""
+
+msgid "Add patch name to output"
 msgstr ""
 
 msgid "Add path to head of function search path"
@@ -7252,6 +7267,9 @@ msgstr ""
 msgid "Alternate architecture"
 msgstr "Architecture alternative"
 
+msgid "Alternate bracketed prefix for the subject"
+msgstr ""
+
 msgid "Alternate config file"
 msgstr "Fichier de configuration secondaire"
 
@@ -7446,6 +7464,9 @@ msgstr ""
 
 msgid "Always use v4 key signatures even on v3 keys"
 msgstr "Toujours utiliser des signatures au format v4 même sur des clés au format v3"
+
+msgid "Always verify if the patch removes cleanly"
+msgstr ""
 
 msgid "Always/never read list of files from STDIN"
 msgstr ""
@@ -7699,6 +7720,15 @@ msgstr "Ajouter le port à l’URL de base"
 msgid "Append random data to sent packets"
 msgstr ""
 
+msgid "Append recipient in the Bcc header"
+msgstr ""
+
+msgid "Append recipient in the Cc header"
+msgstr ""
+
+msgid "Append recipient in the To header"
+msgstr ""
+
 msgid "Append ref names and object names"
 msgstr "Ajouter les noms des références et ceux des objets"
 
@@ -7707,6 +7737,9 @@ msgstr "Ajouter les règles à la fin d’une chaîne"
 
 msgid "Append string to config file"
 msgstr "Suffixer le fichier de configuration avec la chaîne spécifiée"
+
+msgid "Append the signature to message"
+msgstr ""
 
 msgid "Append the specified repository to the top of the list"
 msgstr ""
@@ -7721,6 +7754,9 @@ msgid "Append to end of file"
 msgstr ""
 
 msgid "Append to existing recording"
+msgstr ""
+
+msgid "Append to patch header"
 msgstr ""
 
 msgid "Append to rather than clobber output files"
@@ -7768,6 +7804,9 @@ msgstr ""
 msgid "Apply <file> patch"
 msgstr "Appliquer le patch <fichier>"
 
+msgid "Apply N patches"
+msgstr ""
+
 msgid "Apply Paeth rotation to the image [degrees]"
 msgstr ""
 
@@ -7785,6 +7824,9 @@ msgstr ""
 
 msgid "Apply a digital filter to enhance a noisy image"
 msgstr "Appliquer un filtre numérique pour dé-bruiter une image"
+
+msgid "Apply a filter before passing the spec file to rpmbuild"
+msgstr ""
 
 msgid "Apply a filter to detect edges in the image [factor]"
 msgstr "Appliquer un filtre pour détecter les bords dans une image [facteur]"
@@ -7820,6 +7862,9 @@ msgid "Apply a single stashed state"
 msgstr "Appliquer un état remisé"
 
 msgid "Apply a unidiff patch to the working copy"
+msgstr ""
+
+msgid "Apply all patches in the series file"
 msgstr ""
 
 msgid "Apply all style fixes"
@@ -7969,16 +8014,19 @@ msgstr ""
 msgid "Apply patch as another user using sudo"
 msgstr "Appliquer le patch comme un utilisateur tiers en utilisant sudo"
 
+msgid "Apply patch in reverse"
+msgstr ""
+
 msgid "Apply patch to index"
 msgstr ""
 
 msgid "Apply patch to index and working tree"
 msgstr ""
 
-msgid "Apply patch(es) from the series file"
+msgid "Apply patches from a mailbox"
 msgstr ""
 
-msgid "Apply patches from a mailbox"
+msgid "Apply patches from the series"
 msgstr ""
 
 msgid "Apply patches suggested by lint"
@@ -8052,6 +8100,9 @@ msgstr ""
 
 msgid "Apply uncommitted changes from a working copy, instead of branch changes"
 msgstr "Appliquer les modifications non validées d’une copie de travail, au lieu de celles d’une branche"
+
+msgid "Apply up to"
+msgstr ""
 
 msgid "Approx max SIZE of bag combining chunk objects"
 msgstr ""
@@ -8756,6 +8807,9 @@ msgid "Automatically import digital camera photos"
 msgstr ""
 
 msgid "Automatically orient (rotate) image"
+msgstr ""
+
+msgid "Automatically refresh every patch after it gets applied"
 msgstr ""
 
 msgid "Automatically remove unneeded dependencies"
@@ -9959,6 +10013,9 @@ msgid "Cancel the operation and return to pre-sequence state"
 msgstr ""
 
 msgid "Cancels a job or build"
+msgstr ""
+
+msgid "Cancels a previous --noconfirm"
 msgstr ""
 
 msgid "Cancels all jobs on the named destination"
@@ -11644,6 +11701,12 @@ msgstr "Combiner un jeu de lignes de deux fichiers à l’aide d’opérateurs b
 msgid "Combine two image to create a stereo anaglyph [geometry]"
 msgstr "Combiner deux image pour créer un anaglyphe [géométrie]"
 
+msgid "Combined diff between this patch and -P"
+msgstr ""
+
+msgid "Combined listing between this patch and -P"
+msgstr ""
+
 msgid "Combined username/groupname mapping"
 msgstr ""
 
@@ -12295,6 +12358,9 @@ msgstr ""
 msgid "Compute clusters"
 msgstr ""
 
+msgid "Compute dependencies by the lines the patches modify"
+msgstr ""
+
 msgid "Compute object ID and optionally create an object"
 msgstr ""
 
@@ -12692,6 +12758,12 @@ msgid "Content type to create"
 msgstr "Type de contenu à créer"
 
 msgid "Contents of padding byte"
+msgstr ""
+
+msgid "Context diff (3 lines of context)"
+msgstr ""
+
+msgid "Context diff (N lines of context)"
 msgstr ""
 
 msgid "Context diffs (default)"
@@ -13558,6 +13630,9 @@ msgstr ""
 msgid "Create a new orphan branch"
 msgstr ""
 
+msgid "Create a new patch with the changes"
+msgstr ""
+
 msgid "Create a new sbt project from the given template"
 msgstr ""
 
@@ -13918,9 +13993,6 @@ msgstr ""
 msgid "Create links"
 msgstr ""
 
-msgid "Create mail messages from patches in the series file, stores/sends them"
-msgstr ""
-
 msgid "Create makefile"
 msgstr ""
 
@@ -13961,6 +14033,9 @@ msgid "Create or access encrypted archive with password X"
 msgstr ""
 
 msgid "Create or dump unbound (no assigned data segment) LUKS2 keyslot"
+msgstr ""
+
+msgid "Create or send mail messages from patches"
 msgstr ""
 
 msgid "Create or update BOSH environment"
@@ -14185,9 +14260,6 @@ msgstr ""
 msgid "Creates an html-based, cross referenced version of Java source code for a project's test sources"
 msgstr ""
 
-msgid "Creates new patch with the given name, inserts it after topmost patch"
-msgstr ""
-
 msgid "Creates the HTML report for a test run based on XSLT"
 msgstr ""
 
@@ -14240,6 +14312,9 @@ msgid "Custom command"
 msgstr "Commande personnalisée"
 
 msgid "Custom connection ordering"
+msgstr ""
+
+msgid "Custom diff command"
 msgstr ""
 
 msgid "Custom display format"
@@ -15289,6 +15364,9 @@ msgstr ""
 msgid "Delete the logfile when done"
 msgstr "Supprimer le journal une fois le travail terminé"
 
+msgid "Delete the next patch after topmost"
+msgstr ""
+
 msgid "Delete the optional user-defined chain specified"
 msgstr "Supprimer la chaîne personnalisée spécifiée, ou toutes si rien n’est précisé"
 
@@ -15841,8 +15919,14 @@ msgstr ""
 msgid "Diff against deployments' base"
 msgstr ""
 
+msgid "Diff against snapshot"
+msgstr ""
+
 msgid "Diff command invoked when using -d"
 msgstr "Commande diff invoquée lors de l’utilisation de « -d »"
+
+msgid "Diff files in patch"
+msgstr ""
 
 msgid "Diff rev1/date1 against date2."
 msgstr ""
@@ -15886,6 +15970,9 @@ msgstr ""
 msgid "Directly control the scanning rate"
 msgstr ""
 
+msgid "Directly produce a PostScript output file"
+msgstr ""
+
 msgid "Directly sign a key from the passphrase"
 msgstr ""
 
@@ -15926,6 +16013,9 @@ msgid "Directory for client-side plugins"
 msgstr ""
 
 msgid "Directory for incomplete downloads"
+msgstr ""
+
+msgid "Directory for package sources"
 msgstr ""
 
 msgid "Directory for site-specific, non-platform-specific files"
@@ -16930,6 +17020,9 @@ msgstr ""
 msgid "Disable the eval extension"
 msgstr ""
 
+msgid "Disable the filesystem restrictions"
+msgstr ""
+
 msgid "Disable the generation of ISEL instructions"
 msgstr ""
 
@@ -16970,6 +17063,9 @@ msgid "Disable the spinner"
 msgstr "Désactiver l’indicateur d’activité"
 
 msgid "Disable the string normalize extension"
+msgstr ""
+
+msgid "Disable the syscall filtering"
 msgstr ""
 
 msgid "Disable the systemd unit for a profile"
@@ -19783,6 +19879,12 @@ msgstr ""
 msgid "Do not ignore the postscript EOF comment while scanning documents"
 msgstr "Ne pas ignorer le commentaire EOF de Postscript lors de la numérisation"
 
+msgid "Do not include 'Index: lines' in header"
+msgstr ""
+
+msgid "Do not include 'Index: lines' in headers"
+msgstr ""
+
 msgid "Do not include Phoenix.LiveDashboard"
 msgstr ""
 
@@ -19817,6 +19919,12 @@ msgid "Do not include the default Win32 manifest"
 msgstr ""
 
 msgid "Do not include the default library file (lib.d.ts)"
+msgstr ""
+
+msgid "Do not include timestamps in header"
+msgstr ""
+
+msgid "Do not include timestamps in headers"
 msgstr ""
 
 msgid "Do not init if restore fails"
@@ -23308,6 +23416,9 @@ msgstr ""
 msgid "Edit file contents"
 msgstr ""
 
+msgid "Edit files in $EDITOR"
+msgstr ""
+
 msgid "Edit files in-place"
 msgstr "Éditer les fichiers sur place"
 
@@ -23318,6 +23429,9 @@ msgid "Edit files on nvim server specified with --server"
 msgstr ""
 
 msgid "Edit global config"
+msgstr ""
+
+msgid "Edit header in $EDITOR"
 msgstr ""
 
 msgid "Edit mode for the interface. [default: insert]"
@@ -23357,9 +23471,6 @@ msgid "Edit the file containing a tag"
 msgstr "Éditer le fichier contenant une étiquette"
 
 msgid "Edit the flag on an object"
-msgstr ""
-
-msgid "Edit the given file(s) in $EDITOR"
 msgstr ""
 
 msgid "Edit the hosts file"
@@ -23405,6 +23516,9 @@ msgid "Eliminate duplication of root folder"
 msgstr ""
 
 msgid "Eliminate implicit rules"
+msgstr ""
+
+msgid "Eliminate transitive edges from the graph"
 msgstr ""
 
 msgid "Email address for user"
@@ -26425,6 +26539,9 @@ msgstr "Le nom du fichier correspond à l’expression régulière"
 msgid "File name prefix digit precision"
 msgstr ""
 
+msgid "File name style in patch"
+msgstr ""
+
 msgid "File name when recording"
 msgstr ""
 
@@ -26959,6 +27076,9 @@ msgstr ""
 msgid "First page to convert"
 msgstr ""
 
+msgid "First patch to include"
+msgstr ""
+
 msgid "First remove existing destination files"
 msgstr ""
 
@@ -27445,6 +27565,9 @@ msgstr ""
 msgid "Force an update to the stable channel"
 msgstr ""
 
+msgid "Force apply, even if the patch has rejects"
+msgstr ""
+
 msgid "Force base for symbol sizes"
 msgstr ""
 
@@ -27780,6 +27903,9 @@ msgstr ""
 
 msgid "Force reloading configuration"
 msgstr "Forcer le rechargement de la configuration"
+
+msgid "Force remove and restore state from backup files"
+msgstr ""
 
 msgid "Force rename branch"
 msgstr ""
@@ -29263,9 +29389,6 @@ msgstr ""
 msgid "Generates a diff between the specified database and the reference database"
 msgstr ""
 
-msgid "Generates a dot directed graph of patch dependencies"
-msgstr ""
-
 msgid "Generates a full dependency graph of the target package."
 msgstr ""
 
@@ -29980,9 +30103,6 @@ msgstr ""
 msgid "Give string constants type \"char *\" without const"
 msgstr ""
 
-msgid "Give the config file to use"
-msgstr ""
-
 msgid "Give the output in a stable, easy-to-parse format"
 msgstr "Mettre la sortie à un format stable, facile à analyser"
 
@@ -30128,9 +30248,6 @@ msgid "Greedy cow"
 msgstr "Vache cupide"
 
 msgid "Grep through a set of files to find text strings and fail build if matches are found"
-msgstr ""
-
-msgid "Grep through source files recursively"
 msgstr ""
 
 msgid "Group commits by author (default)"
@@ -31732,6 +31849,9 @@ msgstr ""
 msgid "Include additional statistics"
 msgstr "Inclure des statistiques supplémentaires"
 
+msgid "Include all applied patches and their dependencies"
+msgstr ""
+
 msgid "Include all capabilitys"
 msgstr ""
 
@@ -32326,7 +32446,7 @@ msgstr "Initialiser, mettre à jour ou inspecter des sous-modules"
 msgid "Initializes a TypeScript project and creates a tsconfig.json file"
 msgstr ""
 
-msgid "Initializes a source tree from an rpm spec or a quilt series file"
+msgid "Initializes a source tree from an rpm spec or a quilt series"
 msgstr ""
 
 msgid "Initially turn on alternate macro syntax"
@@ -32929,7 +33049,7 @@ msgstr ""
 msgid "Integrate all simple functions into their callers"
 msgstr "Intégrer toutes les fonctions simples à leur appelant"
 
-msgid "Integrate the patch read from standard input into the topmost patch"
+msgid "Integrate patch from stdin into the topmost patch"
 msgstr ""
 
 msgid "Integrate with system-installed Darling"
@@ -33469,6 +33589,9 @@ msgstr ""
 msgid "Label characters for jump and jump-accept"
 msgstr ""
 
+msgid "Label graph edges with the file names"
+msgstr ""
+
 msgid "Land feature branch onto a branch other than the default"
 msgstr ""
 
@@ -33488,6 +33611,9 @@ msgid "Last modified (committed or modified report)"
 msgstr "Dernière modification (validée ou avec rapport modifié)"
 
 msgid "Last page to convert"
+msgstr ""
+
+msgid "Last patch to include"
 msgstr ""
 
 msgid "Launch GUI"
@@ -33542,6 +33668,9 @@ msgid "Leak-check on exit"
 msgstr ""
 
 msgid "Leave an Ad-Hoc network"
+msgstr ""
+
+msgid "Leave around the reject files patch produced"
 msgstr ""
 
 msgid "Leave checkpoint generations at the end of backup"
@@ -34324,6 +34453,9 @@ msgstr "Lister tous les billets expirés"
 msgid "List all files"
 msgstr ""
 
+msgid "List all files in all applied patches"
+msgstr ""
+
 msgid "List all files in backup (as it was at <age>, default: now)"
 msgstr "Lister tous les fichiers inclus dans la sauvegarde (tels qu’ils étaient au moment spécifié, maintenant par défaut)"
 
@@ -34447,6 +34579,9 @@ msgstr ""
 msgid "List all packages with newer versions, even uninstalled"
 msgstr ""
 
+msgid "List all patches in the series"
+msgstr ""
+
 msgid "List all patches, not only the needed ones"
 msgstr "Lister tous les patchs, pas seulement ceux requis"
 
@@ -34565,6 +34700,9 @@ msgid "List all xsv commands"
 msgstr ""
 
 msgid "List applications"
+msgstr ""
+
+msgid "List applied patches in the stack"
 msgstr ""
 
 msgid "List archive"
@@ -35029,6 +35167,9 @@ msgstr ""
 msgid "List files belonging to package(s)"
 msgstr ""
 
+msgid "List files changed by patch"
+msgstr ""
+
 msgid "List files changed since latest backup"
 msgstr "Lister les fichiers modifiés depuis la dernière sauvegarde"
 
@@ -35189,6 +35330,9 @@ msgid "List installed packages only"
 msgstr ""
 
 msgid "List installed packages only (enabled by default, only present for BC)"
+msgstr ""
+
+msgid "List installed packages only found in sync database"
 msgstr ""
 
 msgid "List installed packages that do not meet the DFSG"
@@ -35431,6 +35575,9 @@ msgstr "Lister seulement les paquets non-explicitement installés (dépendances)
 msgid "List only out-of-date packages"
 msgstr "Lister seulement les paquets obsolètes"
 
+msgid "List only packages that are part of a group"
+msgstr ""
+
 msgid "List only patches from the specified repository"
 msgstr "Lister seulement les patchs du dépôt spécifié"
 
@@ -35626,7 +35773,7 @@ msgstr ""
 msgid "List patches in the repository"
 msgstr "Lister les patchs du dépôt"
 
-msgid "List patches not applied or patches that follow the patch in the series file"
+msgid "List patches that modify the file(s)"
 msgstr ""
 
 msgid "List persistent domains"
@@ -36097,6 +36244,9 @@ msgstr "Lister les certificats de confiance"
 msgid "List trusted keys"
 msgstr "Lister les clés de confiance"
 
+msgid "List unapplied patches in the series"
+msgstr ""
+
 msgid "List units in failed state"
 msgstr ""
 
@@ -36325,7 +36475,7 @@ msgstr ""
 msgid "Lists environment variables that can be consumed by perforce"
 msgstr ""
 
-msgid "Lists files that the topmost/given patch changes"
+msgid "Lists files changed by patch"
 msgstr ""
 
 msgid "Lists files that will be pushed by 'push' subcommand"
@@ -37903,6 +38053,9 @@ msgstr "Durée maximale de l’arrêt gracieux"
 msgid "Maximum forward scroll"
 msgstr "Défilement avant maximal"
 
+msgid "Maximum fuzz factor (in lines)"
+msgstr ""
+
 msgid "Maximum iterations"
 msgstr "Maximum d’itérations avant extinction"
 
@@ -38060,6 +38213,9 @@ msgid "Merge the current branch and contents of the working tree into a new bran
 msgstr ""
 
 msgid "Merge the given notes ref to current notes ref"
+msgstr ""
+
+msgid "Merge the patch file into the original files"
 msgstr ""
 
 msgid "Merge the superproject's commit into the current branch of the submodule"
@@ -38758,6 +38914,12 @@ msgstr ""
 msgid "Name of patch"
 msgstr "Nom du patch"
 
+msgid "Name of patch after the topmost/given patch"
+msgstr ""
+
+msgid "Name of patch before the topmost/given patch"
+msgstr ""
+
 msgid "Name of profile to use"
 msgstr ""
 
@@ -38788,6 +38950,9 @@ msgstr ""
 msgid "Name of the launch profile to use"
 msgstr ""
 
+msgid "Name of the new patch"
+msgstr ""
+
 msgid "Name of the new user's login shell"
 msgstr "Nom du shell de connexion de l’utilisateur"
 
@@ -38810,6 +38975,9 @@ msgid "Name of the test mode to run(required)"
 msgstr ""
 
 msgid "Name of the test table (default: sbtest)"
+msgstr ""
+
+msgid "Name of topmost patch in the stack"
 msgstr ""
 
 msgid "Name of version"
@@ -39274,6 +39442,9 @@ msgstr ""
 msgid "Number of completely trusted users to introduce a new key signer (defaults to 1)"
 msgstr "Nombre d’utilisateurs doté d’une confiance complète pour ajouter un nouveau signataire de clé (1 par défaut)"
 
+msgid "Number of components to strip from paths"
+msgstr ""
+
 msgid "Number of compression threads for multithread compression"
 msgstr ""
 
@@ -39293,6 +39464,9 @@ msgid "Number of days to enable the speed scheduler"
 msgstr ""
 
 msgid "Number of decompression threads for multithread compression"
+msgstr ""
+
+msgid "Number of directories to strip"
 msgstr ""
 
 msgid "Number of downloads at which to switch from random to rarest first"
@@ -40089,6 +40263,9 @@ msgstr ""
 
 msgid "Only remove Fossil temporary files"
 msgstr "Supprimer uniquement les fichiers temporaires de Fossil"
+
+msgid "Only remove current snapshot"
+msgstr ""
 
 msgid "Only remove targets not required by PACKAGE"
 msgstr "Supprimer uniquement les cibles non requises par PAQUET"
@@ -41200,6 +41377,9 @@ msgstr "Afficher le patch dans le bête format diff"
 msgid "Output patched files to FILE"
 msgstr ""
 
+msgid "Output paths of config files"
+msgstr ""
+
 msgid "Output percentages as files are unpacked from the package archive"
 msgstr ""
 
@@ -41758,6 +41938,9 @@ msgstr ""
 msgid "Overwrite without prompting"
 msgstr ""
 
+msgid "Overwrite/update existing patches"
+msgstr ""
+
 msgid "PBKDF algorithm (for LUKS2): argon2i, argon2id, pbkdf2"
 msgstr ""
 
@@ -41823,6 +42006,12 @@ msgstr ""
 
 msgid "Package .gem files into the vendor/cache directory"
 msgstr "Empaqueter les gemmes dans le dossier vendor/cache"
+
+msgid "Package File"
+msgstr ""
+
+msgid "Package Group"
+msgstr ""
 
 msgid "Package a running vagrant environment into a box"
 msgstr ""
@@ -42208,8 +42397,35 @@ msgstr ""
 msgid "Password-based Key Derivation Function to use"
 msgstr ""
 
+msgid "Patch filename to use inside quilt"
+msgstr ""
+
 msgid "Patch local changes"
 msgstr "Patcher les modifications locales"
+
+msgid "Patch to add files to"
+msgstr ""
+
+msgid "Patch to assume as top"
+msgstr ""
+
+msgid "Patch to diff"
+msgstr ""
+
+msgid "Patch to graph dependencies"
+msgstr ""
+
+msgid "Patch to import"
+msgstr ""
+
+msgid "Patch to refresh"
+msgstr ""
+
+msgid "Patch to remove"
+msgstr ""
+
+msgid "Patch to rename"
+msgstr ""
 
 msgid "Path containing probing policy and assemblies to probe"
 msgstr ""
@@ -42243,6 +42459,9 @@ msgstr ""
 
 msgid "Path or URL to SRT or VTT file"
 msgstr "Chemin ou URL du fichier SRT ou VTT"
+
+msgid "Path prefix for the resulting source tree"
+msgstr ""
 
 msgid "Path to Cargo.toml"
 msgstr ""
@@ -43171,7 +43390,13 @@ msgstr "Pool duquel régler le paramètre"
 msgid "Pool which status is to be displayed"
 msgstr "Pool duquel afficher l’état"
 
+msgid "Pop N patches"
+msgstr ""
+
 msgid "Pop current pkg"
+msgstr ""
+
+msgid "Pop down to"
 msgstr ""
 
 msgid "Pop last stash"
@@ -43600,6 +43825,9 @@ msgstr ""
 msgid "Pretty format string or preset name"
 msgstr ""
 
+msgid "Pretty output"
+msgstr ""
+
 msgid "Pretty-print JSON"
 msgstr ""
 
@@ -43933,9 +44161,6 @@ msgstr "Afficher un message d’aide et quitter"
 msgid "Print a help message for this build"
 msgstr ""
 
-msgid "Print a list of applied patches"
-msgstr ""
-
 msgid "Print a list of attached screen sessions"
 msgstr ""
 
@@ -44139,9 +44364,6 @@ msgstr ""
 
 msgid "Print alsactl version number"
 msgstr "Afficher le numéro de version d’alsactl"
-
-msgid "Print an annotated listing of the given file"
-msgstr ""
 
 msgid "Print an empty line between matches from different files"
 msgstr ""
@@ -45721,9 +45943,6 @@ msgstr ""
 msgid "Print the list of installed importers and exit"
 msgstr "Lister les importateurs installés et quitter"
 
-msgid "Print the list of patches that modify the given file"
-msgstr ""
-
 msgid "Print the list of ports the argument expands to"
 msgstr ""
 
@@ -45758,9 +45977,6 @@ msgid "Print the name of the zone the source is bound to"
 msgstr ""
 
 msgid "Print the names of all configured repositories"
-msgstr ""
-
-msgid "Print the names of all patches in the series file"
 msgstr ""
 
 msgid "Print the number of backward hops"
@@ -46126,6 +46342,12 @@ msgstr ""
 msgid "Print what would be done"
 msgstr ""
 
+msgid "Print whether the current working directory is in the .git directory"
+msgstr ""
+
+msgid "Print whether the current working directory is in the work tree of the repository"
+msgstr ""
+
 msgid "Print who owns the file"
 msgstr ""
 
@@ -46150,7 +46372,10 @@ msgstr ""
 msgid "Print your jest config and then exits"
 msgstr "Afficher votre configuration jest et quitter"
 
-msgid "Print/change the header of the topmost/given patch"
+msgid "Print/change header of patch"
+msgstr ""
+
+msgid "Print/change the header of patch"
 msgstr ""
 
 msgid "Print/set UTC time"
@@ -46262,15 +46487,6 @@ msgid "Prints information about the service cache"
 msgstr "Afficher des informations sur le cache service"
 
 msgid "Prints memory stats of the node"
-msgstr ""
-
-msgid "Prints name of patch after the topmost/given patch in the series file"
-msgstr ""
-
-msgid "Prints name of patch before the topmost/given patch in the series file"
-msgstr ""
-
-msgid "Prints name of the topmost patch in the current stack of applied patches"
 msgstr ""
 
 msgid "Prints only filenames"
@@ -46784,9 +47000,6 @@ msgid "Produce terse output (pids only, no header)"
 msgstr "Affichage laconique (seulement les PID, pas d’en-tête)"
 
 msgid "Produce the stub file, do not compile the resulting stub"
-msgstr ""
-
-msgid "Produces a diff of the given file(s) in the topmost/given patch"
 msgstr ""
 
 msgid "Produces debugging information"
@@ -47404,6 +47617,9 @@ msgstr ""
 msgid "Query font from this X server [server]"
 msgstr ""
 
+msgid "Query for packages that own FILE"
+msgstr ""
+
 msgid "Query gem information in local or remote repositories"
 msgstr "Obtenir les informations sur les gemmes des dépôts courant ou distant"
 
@@ -47473,9 +47689,6 @@ msgstr "Interroger la base de données des paquets"
 msgid "Query the package names only"
 msgstr "Obtenir seulement les noms de paquet"
 
-msgid "Query the package that owns FILE"
-msgstr ""
-
 msgid "Query the specified service"
 msgstr ""
 
@@ -47532,6 +47745,9 @@ msgstr ""
 
 msgid "Quiet mode. Refresh interval 2 seconds"
 msgstr "Mode silencieux. Intervalle de rafraîchissement de 2 secondes"
+
+msgid "Quiet operation"
+msgstr ""
 
 msgid "Quiet output"
 msgstr ""
@@ -48069,6 +48285,9 @@ msgstr ""
 
 msgid "Read the filenames to process from file"
 msgstr "Lire les noms des fichiers à traiter depuis le fichier spécifié"
+
+msgid "Read the introduction from file"
+msgstr ""
 
 msgid "Read the key from a file"
 msgstr ""
@@ -48625,6 +48844,9 @@ msgstr ""
 msgid "Refresh IP address"
 msgstr ""
 
+msgid "Refresh a patch that is not on top"
+msgstr ""
+
 msgid "Refresh a pool"
 msgstr ""
 
@@ -48646,6 +48868,9 @@ msgstr ""
 msgid "Refresh current index"
 msgstr ""
 
+msgid "Refresh every patch before it gets unapplied"
+msgstr ""
+
 msgid "Refresh interval 10 per second"
 msgstr ""
 
@@ -48654,9 +48879,6 @@ msgstr "Ne rafraîchir que les dépôts spécifiés"
 
 msgid "Refresh the files database"
 msgstr "Rafraîchir la base de données des fichiers"
-
-msgid "Refresh the given patch, or the topmost patch by default"
-msgstr ""
 
 msgid "Refresh working copy from history"
 msgstr ""
@@ -49168,6 +49390,9 @@ msgstr ""
 msgid "Remove a working tree"
 msgstr ""
 
+msgid "Remove all applied patches"
+msgstr ""
+
 msgid "Remove all associated storage volumes"
 msgstr ""
 
@@ -49378,6 +49603,9 @@ msgstr ""
 msgid "Remove device"
 msgstr ""
 
+msgid "Remove diffstat from the header"
+msgstr ""
+
 msgid "Remove directories as well"
 msgstr ""
 
@@ -49431,6 +49659,12 @@ msgstr "Supprimer les fichiers d’un système de fichiers virtuel"
 
 msgid "Remove files from destination not found in static directories"
 msgstr "Supprimer les fichiers de destination introuvables dans les dossiers statiques"
+
+msgid "Remove files from named patch"
+msgstr ""
+
+msgid "Remove files from the patch"
+msgstr ""
 
 msgid "Remove files from the working tree and from the index"
 msgstr "Supprimer des fichiers de la copie de travail et de l’index"
@@ -49558,9 +49792,6 @@ msgstr ""
 msgid "Remove old site_dir before building (the default)"
 msgstr ""
 
-msgid "Remove one or more files from the topmost/named patch"
-msgstr ""
-
 msgid "Remove one or more packages"
 msgstr "Supprimer un ou plusieurs paquets"
 
@@ -49633,7 +49864,10 @@ msgstr "Supprimer uniquement les paquets nécessaires pendant l’installation"
 msgid "Remove password"
 msgstr "Supprimer le mot de passe"
 
-msgid "Remove patch(es) from the stack of applied patches"
+msgid "Remove patch file from the patches directory as well"
+msgstr ""
+
+msgid "Remove patch from the series"
 msgstr ""
 
 msgid "Remove pending deployment"
@@ -49738,6 +49972,9 @@ msgstr "Supprimer l’étiquette des soumissions"
 msgid "Remove target from local repository"
 msgstr "Supprimer la cible du dépôt local"
 
+msgid "Remove targets not required by any package"
+msgstr ""
+
 msgid "Remove temporary data from running the Canoo WebTests"
 msgstr ""
 
@@ -49818,9 +50055,6 @@ msgstr ""
 
 msgid "Remove the test directory"
 msgstr "Supprimer le dossier de test"
-
-msgid "Remove the topmost/given patch from the series file"
-msgstr ""
 
 msgid "Remove the user from the whitelist"
 msgstr ""
@@ -50020,6 +50254,12 @@ msgstr ""
 msgid "Rename module"
 msgstr "Renommer un module"
 
+msgid "Rename old patch file to patch~"
+msgstr ""
+
+msgid "Rename old version of a patch as patch~"
+msgstr ""
+
 msgid "Rename only filename component"
 msgstr ""
 
@@ -50041,7 +50281,10 @@ msgstr ""
 msgid "Rename tag/branch"
 msgstr ""
 
-msgid "Rename the topmost/named patch"
+msgid "Rename the patch file to patch~"
+msgstr ""
+
+msgid "Rename the topmost/given patch"
 msgstr ""
 
 msgid "Rename the user specified chain to the user supplied name"
@@ -50231,6 +50474,9 @@ msgid "Replace only the last occurrence"
 msgstr ""
 
 msgid "Replace packages in the base layer"
+msgstr ""
+
+msgid "Replace patch header"
 msgstr ""
 
 msgid "Replace path prefix for relocatable binary packages with NEWPATH"
@@ -51355,6 +51601,9 @@ msgstr ""
 msgid "Retrieve multi session info in a form suitable for mkisofs-1.10 or later"
 msgstr "Récupérer les informations de multi-session dans un format utilisable par mkisofs-1.10 ou ultérieur"
 
+msgid "Retrieve packages but do not install"
+msgstr ""
+
 msgid "Retrieve packages required to build listed packages"
 msgstr "Récupérer les paquets requis pour construire ceux listés"
 
@@ -51604,6 +51853,9 @@ msgstr ""
 msgid "Reuse log message and authorship of an existing commit"
 msgstr ""
 
+msgid "Reverse diff"
+msgstr ""
+
 msgid "Reverse image sequence"
 msgstr ""
 
@@ -51648,6 +51900,12 @@ msgstr "Inverser une validation existante"
 
 msgid "Revert back to given revision"
 msgstr "Revenir à la révision spécifiée"
+
+msgid "Revert changes in patch"
+msgstr ""
+
+msgid "Revert file changes in patch"
+msgstr ""
 
 msgid "Revert to an older installation of composer"
 msgstr ""
@@ -52714,9 +52972,6 @@ msgstr ""
 msgid "Runs the JWSC compiler task for web service enabled code"
 msgstr ""
 
-msgid "Runs the command in bash trace mode (-x). For internal debugging"
-msgstr ""
-
 msgid "Runs the datanucleus enhancer"
 msgstr ""
 
@@ -53710,6 +53965,9 @@ msgstr ""
 msgid "Search this repo for input and target files not in the local directory tree"
 msgstr ""
 
+msgid "Search through source files"
+msgstr ""
+
 msgid "Search trackers with anime content only"
 msgstr ""
 
@@ -54503,6 +54761,9 @@ msgid "Send stop command to an already running create_ap"
 msgstr ""
 
 msgid "Send the debug log to Support"
+msgstr ""
+
+msgid "Send the messages directly"
 msgstr ""
 
 msgid "Send the ownertrust values to stdout"
@@ -60277,6 +60538,9 @@ msgstr ""
 msgid "Show which option controls a diagnostic"
 msgstr ""
 
+msgid "Show which patches modify which lines in file"
+msgstr ""
+
 msgid "Show which refs can't be reached from any other"
 msgstr ""
 
@@ -61303,6 +61567,9 @@ msgstr "Trier les fichiers selon leur horodatage de dernière modification"
 msgid "Sort files by last status change time"
 msgstr ""
 
+msgid "Sort files by name"
+msgstr ""
+
 msgid "Sort languages based on column"
 msgstr ""
 
@@ -62159,6 +62426,9 @@ msgid "Specify a member module of the workspace"
 msgstr ""
 
 msgid "Specify a message"
+msgstr ""
+
+msgid "Specify a message encoding"
 msgstr ""
 
 msgid "Specify a minimum bitrate in kbps"
@@ -63844,6 +64114,9 @@ msgstr ""
 msgid "Start a new scrub. If a scrub is already running, the new one fails."
 msgstr ""
 
+msgid "Start a new topmost patch"
+msgstr ""
+
 msgid "Start a package"
 msgstr "Démarrer un paquet"
 
@@ -64405,6 +64678,9 @@ msgstr ""
 msgid "Stop borrowing objects from reference repositories after clone"
 msgstr ""
 
+msgid "Stop checking for changes at the specified patch"
+msgstr ""
+
 msgid "Stop colorizing output"
 msgstr ""
 
@@ -64630,6 +64906,9 @@ msgstr ""
 msgid "Store the maven core version in a property maven.version"
 msgstr ""
 
+msgid "Store the messages in an MBox file"
+msgstr ""
+
 msgid "Store the stack frame pointer"
 msgstr ""
 
@@ -64718,6 +64997,9 @@ msgid "Strip targets on install"
 msgstr ""
 
 msgid "Strip trailing carriage return at the end of an input line"
+msgstr ""
+
+msgid "Strip whitespace at the end of lines"
 msgstr ""
 
 msgid "Strongname (sign) the output assembly using the key pair"
@@ -65512,7 +65794,7 @@ msgstr ""
 msgid "Take a screenshot of a current domain console and store it into a file"
 msgstr ""
 
-msgid "Take a snapshot of the current working state"
+msgid "Take a snapshot of the working state"
 msgstr ""
 
 msgid "Take addr from filename, default /etc/ethers"
@@ -65615,6 +65897,9 @@ msgid "Target network name"
 msgstr ""
 
 msgid "Target pane"
+msgstr ""
+
+msgid "Target patch"
 msgstr ""
 
 msgid "Target port number for TCP SCTP or UDP"
@@ -66058,6 +66343,9 @@ msgstr ""
 msgid "Text editor for writing check-in comments"
 msgstr "Éditeur de texte pour l’écriture des commentaires de soumission"
 
+msgid "Text to use in the introduction"
+msgstr ""
+
 msgid "Texture name to tile onto the image background [filename]"
 msgstr ""
 
@@ -66216,6 +66504,9 @@ msgstr ""
 
 msgid "The encrypted password, as returned by crypt(3)"
 msgstr "Mot de passe chiffré, comme renvoyé par crypt(3)"
+
+msgid "The envelope sender address to use"
+msgstr ""
 
 msgid "The etag of the file being overwritten"
 msgstr ""
@@ -67033,6 +67324,9 @@ msgstr ""
 msgid "Trace delegation down from root"
 msgstr "Tracer les délégations jusqu’à la racine"
 
+msgid "Trace internal shell commands (bash -x)"
+msgstr ""
+
 msgid "Trace only system calls accessing path"
 msgstr ""
 
@@ -67837,6 +68131,9 @@ msgstr ""
 msgid "Unaligned table output mode"
 msgstr ""
 
+msgid "Unapply patches from the stack"
+msgstr ""
+
 msgid "Unassign a quota from a space"
 msgstr ""
 
@@ -67977,6 +68274,12 @@ msgstr ""
 
 msgid "Unified diff"
 msgstr "Utiliser le format diff unifié"
+
+msgid "Unified diff (3 lines of context)"
+msgstr ""
+
+msgid "Unified diff (N lines of context)"
+msgstr ""
 
 msgid "Unignore an instance"
 msgstr ""
@@ -68269,6 +68572,9 @@ msgstr ""
 msgid "Untrust device"
 msgstr ""
 
+msgid "Up to and including"
+msgstr ""
+
 msgid "Update a NuGet source"
 msgstr ""
 
@@ -68465,6 +68771,9 @@ msgid "Update packages"
 msgstr ""
 
 msgid "Update parts of an existing network's configuration"
+msgstr ""
+
+msgid "Update patch with changes from source"
 msgstr ""
 
 msgid "Update permissions"
@@ -68713,7 +69022,7 @@ msgstr "Mettre à jour les paquets installés vers leur version la plus récente
 msgid "Upgrade library to v2"
 msgstr ""
 
-msgid "Upgrade meta-data in a working tree to the current version of quilt"
+msgid "Upgrade meta-data from older version of quilt"
 msgstr ""
 
 msgid "Upgrade or add a local package"
@@ -70255,6 +70564,9 @@ msgstr ""
 msgid "Use new encoder heuristics"
 msgstr ""
 
+msgid "Use new method to process the spec file"
+msgstr ""
+
 msgid "Use new unified core codepath"
 msgstr ""
 
@@ -70310,6 +70622,9 @@ msgid "Use openssh if available"
 msgstr ""
 
 msgid "Use original SCP protocol instead of SFTP"
+msgstr ""
+
+msgid "Use original method to process the spec file"
 msgstr ""
 
 msgid "Use other string as result field separator instead of :"
@@ -70682,6 +70997,9 @@ msgid "Use swap files for recovery"
 msgstr "Utiliser les fichiers d’échanges pour récupération de données après un plantage"
 
 msgid "Use symlinks in dir-diff mode"
+msgstr ""
+
+msgid "Use syntax coloring"
 msgstr ""
 
 msgid "Use syslog for messages"
@@ -71302,6 +71620,9 @@ msgstr "Valider un fichier composer.json"
 msgid "Validates database tables required for a set of JDO MetaData files for correct structure"
 msgstr ""
 
+msgid "Value for the From header"
+msgstr ""
+
 msgid "Value is 'true' or 'false'"
 msgstr ""
 
@@ -71368,6 +71689,9 @@ msgstr ""
 msgid "VeraCrypt personal iterations multiplier stop"
 msgstr ""
 
+msgid "Verbose debug output"
+msgstr ""
+
 msgid "Verbose debugging; takes a comma-joined list of levels and tags"
 msgstr ""
 
@@ -71408,6 +71732,9 @@ msgid "Verbose mode. A lot more information output"
 msgstr ""
 
 msgid "Verbose mode: print compilation status to stdout"
+msgstr ""
+
+msgid "Verbose operation"
 msgstr ""
 
 msgid "Verbose output"
@@ -71659,6 +71986,9 @@ msgstr ""
 msgid "View text, image and string resources"
 msgstr ""
 
+msgid "View the ChangeLog of PACKAGE"
+msgstr ""
+
 msgid "View the Makepkg conf"
 msgstr ""
 
@@ -71714,6 +72044,9 @@ msgid "Virtualization type (/domain/@type)"
 msgstr ""
 
 msgid "Visible overlay"
+msgstr ""
+
+msgid "Visualize patch dependencies using dot"
 msgstr ""
 
 msgid "Visually show diff of changes in the index"
@@ -72469,6 +72802,9 @@ msgstr ""
 msgid "Which generation to restore"
 msgstr ""
 
+msgid "Which header to keep on overwrite"
+msgstr ""
+
 msgid "Which mount point to trim"
 msgstr ""
 
@@ -73016,6 +73352,9 @@ msgid "Write to repository .git/config"
 msgstr ""
 
 msgid "Write to specified log file"
+msgstr ""
+
+msgid "Write to stdout"
 msgstr ""
 
 msgid "Write to stdout instead of file"
@@ -76409,9 +76748,6 @@ msgid "list installed applications"
 msgstr ""
 
 msgid "list installed packages"
-msgstr ""
-
-msgid "list installed packages only found in sync database"
 msgstr ""
 
 msgid "list local changes and/or changes in a scratch org"
