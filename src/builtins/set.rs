@@ -186,7 +186,7 @@ impl Options {
                     // implicit drop(w); here
                     if args[optind - 1].starts_with("-o") {
                         // TODO: translate this
-                        streams.err.appendln(sprintf!(
+                        streams.err.appendln(&sprintf!(
                             "Fish does not have shell options. See `help %s`.",
                             help_section!("fish_for_bash_users")
                         ));
@@ -234,14 +234,14 @@ impl Options {
     ) -> Result<(), ErrorCode> {
         // Can't query and erase or list.
         if opts.query && (opts.erase || opts.list) {
-            streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+            streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
 
         // We can't both list and erase variables.
         if opts.erase && opts.list {
-            streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+            streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
@@ -255,7 +255,9 @@ impl Options {
             // ..unless we are erasing a variable, in which case we can erase from several in one go.
             && !opts.erase
         {
-            streams.err.append(&wgettext_fmt!(BUILTIN_ERR_GLOCAL, cmd));
+            streams
+                .err
+                .appendln(&wgettext_fmt!(BUILTIN_ERR_GLOCAL, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
@@ -264,7 +266,7 @@ impl Options {
         if opts.exportv && opts.unexport {
             streams
                 .err
-                .append(&wgettext_fmt!(BUILTIN_ERR_EXPUNEXP, cmd));
+                .appendln(&wgettext_fmt!(BUILTIN_ERR_EXPUNEXP, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
@@ -273,14 +275,14 @@ impl Options {
         if opts.pathvar && opts.unpathvar {
             streams
                 .err
-                .append(&wgettext_fmt!(BUILTIN_ERR_PATHUNPATH, cmd));
+                .appendln(&wgettext_fmt!(BUILTIN_ERR_PATHUNPATH, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
 
         // Trying to erase and (un)export at the same time doesn't make sense.
         if opts.erase && (opts.exportv || opts.unexport) {
-            streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+            streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
@@ -295,7 +297,7 @@ impl Options {
                 || opts.exportv
                 || opts.universal)
         {
-            streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+            streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
@@ -303,7 +305,7 @@ impl Options {
         if args.len() == optind && opts.erase {
             streams
                 .err
-                .append(&wgettext_fmt!(BUILTIN_ERR_MISSING, cmd, L!("--erase")));
+                .appendln(&wgettext_fmt!(BUILTIN_ERR_MISSING, cmd, L!("--erase")));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
@@ -574,7 +576,7 @@ fn list(opts: &Options, parser: &Parser, streams: &mut IoStreams) -> BuiltinResu
                     if i > 1 {
                         val.push(' ');
                     }
-                    val += &expand_escape_string(history.item_at_index(i).unwrap().str())[..]
+                    val += &expand_escape_string(history.item_at_index(i).unwrap().str())[..];
                 }
             } else if let Some(var) = parser.vars().getf_unless_empty(&key, opts.env_mode()) {
                 val = expand_escape_variable(&var);
@@ -677,19 +679,20 @@ fn show_scope(var_name: &wstr, scope: EnvMode, streams: &mut IoStreams, vars: &d
     if EnvVar::flags_for(var_name).contains(EnvVarFlags::READ_ONLY) {
         streams.out.append(wgettext!(" (read-only)\n"));
     } else {
-        streams.out.append_char('\n');
+        streams.out.append('\n');
     }
 
     for i in 0..vals.len() {
         if vals.len() > 100 {
             if i == 50 {
                 // try to print a mid-line ellipsis because we are eliding lines not words
-                streams.out.append(if u32::from(get_ellipsis_char()) > 256 {
-                    L!("\u{22EF}")
-                } else {
-                    get_ellipsis_str()
-                });
-                streams.out.append_char('\n');
+                streams
+                    .out
+                    .appendln(if u32::from(get_ellipsis_char()) > 256 {
+                        L!("\u{22EF}")
+                    } else {
+                        get_ellipsis_str()
+                    });
             }
             if i >= 50 && i < vals.len() - 50 {
                 continue;
@@ -950,7 +953,7 @@ fn set_internal(
     if argv.is_empty() {
         streams
             .err
-            .append(&wgettext_fmt!(BUILTIN_ERR_MIN_ARG_COUNT1, cmd, 1));
+            .appendln(&wgettext_fmt!(BUILTIN_ERR_MIN_ARG_COUNT1, cmd, 1));
         builtin_print_error_trailer(parser, streams.err, cmd);
         return Err(STATUS_INVALID_ARGS);
     }

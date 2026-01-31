@@ -24,14 +24,14 @@ impl StringSubCommand<'_> for Repeat {
                     fish_wcstol(arg.unwrap())?
                         .try_into()
                         .map_err(|_| invalid_args!("%s: Invalid count value '%s'\n", name, arg))?,
-                )
+                );
             }
             'm' => {
                 self.max = Some(
                     fish_wcstol(arg.unwrap())?
                         .try_into()
                         .map_err(|_| invalid_args!("%s: Invalid max value '%s'\n", name, arg))?,
-                )
+                );
             }
             'q' => self.quiet = true,
             'N' => self.no_newline = true,
@@ -59,7 +59,7 @@ impl StringSubCommand<'_> for Repeat {
         *optind += 1;
 
         let Ok(Ok(count)) = fish_wcstol(arg).map(|count| count.try_into()) else {
-            string_error!(streams, "%s: Invalid count value '%s'\n", name, arg);
+            string_error!(streams, "%s: Invalid count value '%s'", name, arg);
             return Err(STATUS_INVALID_ARGS);
         };
 
@@ -102,7 +102,7 @@ impl StringSubCommand<'_> for Repeat {
             }
 
             if !first {
-                streams.out.append_char('\n');
+                streams.out.append('\n');
             }
             first = false;
 
@@ -165,7 +165,7 @@ impl StringSubCommand<'_> for Repeat {
 
         // Historical behavior is to never append a newline if all strings were empty.
         if !self.quiet && !self.no_newline && !all_empty && print_trailing_newline {
-            streams.out.append_char('\n');
+            streams.out.append('\n');
         }
 
         if all_empty {

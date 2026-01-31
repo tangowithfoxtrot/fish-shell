@@ -142,7 +142,7 @@ fn parse_cmd_opts(
     }
 
     if have_scale && opts.scale != 0 && opts.base != 10 {
-        streams.err.append(&wgettext_fmt!(
+        streams.err.appendln(&wgettext_fmt!(
             BUILTIN_ERR_COMBO2,
             cmd,
             "non-zero scale value only valid
@@ -287,7 +287,7 @@ pub fn math(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
     let mut expression = WString::new();
     for InputValue { arg, .. } in Arguments::new(argv, &mut optind, streams, MATH_CHUNK_SIZE) {
         if !expression.is_empty() {
-            expression.push(' ')
+            expression.push(' ');
         }
         expression.push_utfstr(&arg);
     }
@@ -295,7 +295,7 @@ pub fn math(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
     if expression.is_empty() {
         streams
             .err
-            .append(&wgettext_fmt!(BUILTIN_ERR_MIN_ARG_COUNT1, cmd, 1, 0));
+            .appendln(&wgettext_fmt!(BUILTIN_ERR_MIN_ARG_COUNT1, cmd, 1, 0));
         return Err(STATUS_CMD_ERROR);
     }
 

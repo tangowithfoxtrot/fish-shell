@@ -50,7 +50,7 @@ impl<'args> StringSubCommand<'args> for Shorten<'args> {
                     fish_wcstol(arg.unwrap())?
                         .try_into()
                         .map_err(|_| invalid_args!("%s: Invalid max value '%s'\n", name, arg))?,
-                )
+                );
             }
             'N' => self.no_newline = true,
             'l' => self.shorten_from = Direction::Left,
@@ -82,7 +82,7 @@ impl<'args> StringSubCommand<'args> for Shorten<'args> {
             //     echo whatever
             // end
             for InputValue { arg, .. } in iter {
-                streams.out.appendln(arg);
+                streams.out.appendln(&arg);
             }
             return Ok(());
         }
@@ -182,7 +182,7 @@ impl<'args> StringSubCommand<'args> for Shorten<'args> {
                         res
                     }
                 };
-                streams.out.appendln(output);
+                streams.out.appendln(&output);
                 continue;
             } else {
                 /* shorten the right side */
@@ -221,7 +221,7 @@ impl<'args> StringSubCommand<'args> for Shorten<'args> {
             }
 
             if pos == line.len() {
-                streams.out.appendln(line);
+                streams.out.appendln(&line);
                 continue;
             }
 

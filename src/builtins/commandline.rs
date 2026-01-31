@@ -155,12 +155,12 @@ fn write_part(
     let pos = cursor_pos - range.start;
 
     let Some(token_mode) = token_mode else {
-        if cut_at_cursor {
-            streams.out.append(&buffer[range.start..range.start + pos]);
+        let range = if cut_at_cursor {
+            range.start..range.start + pos
         } else {
-            streams.out.append(&buffer[range]);
-        }
-        streams.out.append_char('\n');
+            range
+        };
+        streams.out.appendln(&buffer[range]);
         return;
     };
 
@@ -232,7 +232,7 @@ fn write_part(
     }
 
     for arg in args {
-        streams.out.appendln(arg.completion);
+        streams.out.appendln(&arg.completion);
     }
 }
 
@@ -310,7 +310,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
             'f' => function_mode = true,
             'x' | '\x02' | 'o' => {
                 if token_mode.is_some() {
-                    streams.err.append(&wgettext_fmt!(
+                    streams.err.appendln(&wgettext_fmt!(
                         BUILTIN_ERR_COMBO2,
                         cmd,
                         wgettext!("--tokens options are mutually exclusive")
@@ -323,7 +323,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
                     '\x02' => TokenOutputMode::Raw,
                     'o' => TokenOutputMode::Unescaped,
                     _ => unreachable!(),
-                })
+                });
             }
             'I' => {
                 // A historical, undocumented feature. TODO: consider removing this.
@@ -377,7 +377,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
             || selection_start_mode
             || selection_end_mode
         {
-            streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+            streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
@@ -422,7 +422,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
     if (selection_start_mode || selection_end_mode) && positional_args != 0 {
         streams
             .err
-            .append(&wgettext_fmt!(BUILTIN_ERR_TOO_MANY_ARGUMENTS, cmd));
+            .appendln(&wgettext_fmt!(BUILTIN_ERR_TOO_MANY_ARGUMENTS, cmd));
         builtin_print_error_trailer(parser, streams.err, cmd);
         return Err(STATUS_INVALID_ARGS);
     }
@@ -432,7 +432,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
     {
         streams
             .err
-            .append(&wgettext_fmt!(BUILTIN_ERR_TOO_MANY_ARGUMENTS, cmd));
+            .appendln(&wgettext_fmt!(BUILTIN_ERR_TOO_MANY_ARGUMENTS, cmd));
         builtin_print_error_trailer(parser, streams.err, cmd);
         return Err(STATUS_INVALID_ARGS);
     }
@@ -442,13 +442,13 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
         // Special case - we allow to get/set cursor position relative to the process/job/token.
         && ((buffer_part.is_none() && !search_field_mode) || !cursor_mode)
     {
-        streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+        streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
         builtin_print_error_trailer(parser, streams.err, cmd);
         return Err(STATUS_INVALID_ARGS);
     }
 
     if (token_mode.is_some() || cut_at_cursor) && positional_args != 0 {
-        streams.err.append(&wgettext_fmt!(
+        streams.err.appendln(&wgettext_fmt!(
             BUILTIN_ERR_COMBO2,
             cmd,
             "--cut-at-cursor and token options can not be used when setting the commandline"
@@ -458,7 +458,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
     }
 
     if search_field_mode && (buffer_part.is_some() || token_mode.is_some()) {
-        streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+        streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
         builtin_print_error_trailer(parser, streams.err, cmd);
         return Err(STATUS_INVALID_ARGS);
     }
@@ -475,7 +475,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
 
     if append_mode == AppendMode::InsertSmart {
         if search_field_mode {
-            streams.err.append(&wgettext_fmt!(
+            streams.err.appendln(&wgettext_fmt!(
                 BUILTIN_ERR_COMBO2_EXCLUSIVE,
                 cmd,
                 "--insert-smart",
@@ -488,7 +488,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
             TextScope::String | TextScope::Job | TextScope::Process => (),
             TextScope::Token => {
                 // To-do: we can support it in command position.
-                streams.err.append(&wgettext_fmt!(
+                streams.err.appendln(&wgettext_fmt!(
                     BUILTIN_ERR_COMBO2_EXCLUSIVE,
                     cmd,
                     "--insert-smart",
@@ -507,7 +507,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
                 Err(_) => {
                     streams
                         .err
-                        .append(&wgettext_fmt!(BUILTIN_ERR_NOT_NUMBER, cmd, arg));
+                        .appendln(&wgettext_fmt!(BUILTIN_ERR_NOT_NUMBER, cmd, arg));
                     builtin_print_error_trailer(parser, streams.err, cmd);
                     0
                 }
@@ -702,7 +702,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
                 Err(_) => {
                     streams
                         .err
-                        .append(&wgettext_fmt!(BUILTIN_ERR_NOT_NUMBER, cmd, arg));
+                        .appendln(&wgettext_fmt!(BUILTIN_ERR_NOT_NUMBER, cmd, arg));
                     builtin_print_error_trailer(parser, streams.err, cmd);
                     0
                 }

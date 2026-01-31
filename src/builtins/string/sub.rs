@@ -22,25 +22,24 @@ impl StringSubCommand<'_> for Sub {
     fn parse_opt(&mut self, name: &wstr, c: char, arg: Option<&wstr>) -> Result<(), StringError> {
         match c {
             'l' => {
-                self.length = Some(
-                    fish_wcstol(arg.unwrap())?
-                        .try_into()
-                        .map_err(|_| invalid_args!("%s: Invalid length value '%s'\n", name, arg))?,
-                )
+                self.length =
+                    Some(fish_wcstol(arg.unwrap())?.try_into().map_err(|_| {
+                        invalid_args!("%s: Invalid length value '%s'\n", name, arg)
+                    })?);
             }
             's' => {
                 self.start = Some(
                     fish_wcstol(arg.unwrap())?
                         .try_into()
                         .map_err(|_| invalid_args!("%s: Invalid start value '%s'\n", name, arg))?,
-                )
+                );
             }
             'e' => {
                 self.end = Some(
                     fish_wcstol(arg.unwrap())?
                         .try_into()
                         .map_err(|_| invalid_args!("%s: Invalid end value '%s'\n", name, arg))?,
-                )
+                );
             }
             'q' => self.quiet = true,
             _ => return Err(StringError::UnknownOption),
@@ -57,7 +56,7 @@ impl StringSubCommand<'_> for Sub {
     ) -> Result<(), ErrorCode> {
         let cmd = args[0];
         if self.length.is_some() && self.end.is_some() {
-            streams.err.append(&wgettext_fmt!(
+            streams.err.appendln(&wgettext_fmt!(
                 BUILTIN_ERR_COMBO2,
                 cmd,
                 wgettext!("--end and --length are mutually exclusive")
@@ -98,7 +97,7 @@ impl StringSubCommand<'_> for Sub {
                     .out
                     .append(&arg[start..usize::min(start + count, arg.len())]);
                 if want_newline {
-                    streams.out.append_char('\n');
+                    streams.out.append('\n');
                 }
             }
             nsub += 1;

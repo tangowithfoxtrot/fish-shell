@@ -95,7 +95,7 @@ impl<'args> StringSubCommand<'args> for Match<'args> {
         let cmd = args[0];
 
         if self.entire && self.index {
-            streams.err.append(&wgettext_fmt!(
+            streams.err.appendln(&wgettext_fmt!(
                 BUILTIN_ERR_COMBO2,
                 cmd,
                 wgettext!("--entire and --index are mutually exclusive")
@@ -104,7 +104,7 @@ impl<'args> StringSubCommand<'args> for Match<'args> {
         }
 
         if self.invert_match && self.groups_only {
-            streams.err.append(&wgettext_fmt!(
+            streams.err.appendln(&wgettext_fmt!(
                 BUILTIN_ERR_COMBO2,
                 cmd,
                 wgettext!("--invert and --groups-only are mutually exclusive")
@@ -113,7 +113,7 @@ impl<'args> StringSubCommand<'args> for Match<'args> {
         }
 
         if self.entire && self.groups_only {
-            streams.err.append(&wgettext_fmt!(
+            streams.err.appendln(&wgettext_fmt!(
                 BUILTIN_ERR_COMBO2,
                 cmd,
                 wgettext!("--entire and --groups-only are mutually exclusive")
@@ -131,7 +131,7 @@ impl<'args> StringSubCommand<'args> for Match<'args> {
 
         for InputValue { arg, .. } in arguments(args, optind, streams) {
             if let Err(e) = matcher.report_matches(arg.as_ref(), streams) {
-                flog!(error, "pcre2_match unexpected error:", e.error_message())
+                flog!(error, "pcre2_match unexpected error:", e.error_message());
             }
             let match_count = matcher.match_count();
             if self.quiet && match_count > 0

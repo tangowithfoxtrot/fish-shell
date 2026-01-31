@@ -413,7 +413,7 @@ pub fn complete(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) ->
 
     if result_mode.no_files && result_mode.force_files {
         if !have_x {
-            streams.err.append(&wgettext_fmt!(
+            streams.err.appendln(&wgettext_fmt!(
                 BUILTIN_ERR_COMBO2,
                 "complete",
                 "'--no-files' and '--force-files'"
@@ -421,7 +421,7 @@ pub fn complete(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) ->
         } else {
             // The reason for us not wanting files is `-x`,
             // which is short for `-rf`.
-            streams.err.append(&wgettext_fmt!(
+            streams.err.appendln(&wgettext_fmt!(
                 BUILTIN_ERR_COMBO2,
                 "complete",
                 "'--exclusive' and '--force-files'"
@@ -441,7 +441,7 @@ pub fn complete(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) ->
         } else {
             streams
                 .err
-                .append(&wgettext_fmt!(BUILTIN_ERR_TOO_MANY_ARGUMENTS, cmd));
+                .appendln(&wgettext_fmt!(BUILTIN_ERR_TOO_MANY_ARGUMENTS, cmd));
             builtin_print_error_trailer(parser, streams.err, cmd);
             return Err(STATUS_INVALID_ARGS);
         }
@@ -452,13 +452,12 @@ pub fn complete(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) ->
         if detect_parse_errors(condition_string, Some(&mut errors), false).is_err() {
             for error in errors {
                 let prefix = cmd.to_owned() + L!(": -n '") + &condition_string[..] + L!("': ");
-                streams.err.append(&error.describe_with_prefix(
+                streams.err.appendln(&error.describe_with_prefix(
                     condition_string,
                     &prefix,
                     parser.is_interactive(),
                     false,
                 ));
-                streams.err.append_char('\n');
             }
             return Err(STATUS_CMD_ERROR);
         }
@@ -475,8 +474,7 @@ pub fn complete(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) ->
                 cmd,
                 comp
             ));
-            streams.err.append(&err_text);
-            streams.err.append_char('\n');
+            streams.err.appendln(&err_text);
             return Err(STATUS_CMD_ERROR);
         }
     }

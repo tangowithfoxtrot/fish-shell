@@ -1,5 +1,5 @@
 use crate::builtins::shared::{STATUS_CMD_ERROR, STATUS_CMD_OK, STATUS_READ_TOO_MUCH};
-use crate::common::{bytes2wcstring, str2wcstring, wcs2bytes};
+use crate::common::{bytes2wcstring, wcs2bytes};
 use crate::fd_monitor::{Callback, FdMonitor, FdMonitorItemId};
 use crate::fds::{
     BorrowedFdFile, PIPE_ERROR, make_autoclose_pipes, make_fd_nonblocking, wopen_cloexec,
@@ -204,7 +204,7 @@ impl IoData for IoClose {
         -1
     }
     fn print(&self) {
-        eprintf!("close %d\n", self.fd)
+        eprintf!("close %d\n", self.fd);
     }
 }
 
@@ -230,7 +230,7 @@ impl IoData for IoFd {
         self.source_fd
     }
     fn print(&self) {
-        eprintf!("FD map %d -> %d\n", self.source_fd, self.fd)
+        eprintf!("FD map %d -> %d\n", self.source_fd, self.fd);
     }
 }
 
@@ -259,7 +259,7 @@ impl IoData for IoFile {
         self.file.as_raw_fd()
     }
     fn print(&self) {
-        eprintf!("file %d -> %d\n", self.file.as_raw_fd(), self.fd)
+        eprintf!("file %d -> %d\n", self.file.as_raw_fd(), self.fd);
     }
 }
 
@@ -296,7 +296,7 @@ impl IoData for IoPipe {
             self.source_fd(),
             if self.is_input { "yes" } else { "no" },
             self.fd
-        )
+        );
     }
 }
 
@@ -383,7 +383,7 @@ impl IoData for IoBufferfill {
             "bufferfill %d -> %d\n",
             self.write_fd.as_raw_fd(),
             self.fd()
-        )
+        );
     }
     fn as_bufferfill(&self) -> Option<&IoBufferfill> {
         Some(self)
@@ -518,7 +518,7 @@ impl IoChain {
         self.0.remove(idx);
     }
     pub fn clear(&mut self) {
-        self.0.clear()
+        self.0.clear();
     }
     pub fn push(&mut self, element: IoDataRef) {
         self.0.push(element);
@@ -690,12 +690,18 @@ impl OutputStream {
         }
     }
 
+    /// Append the given characters and a trailing newline.
+    pub fn appendln(&mut self, s: impl IntoCharIter) -> bool {
+        // Try calling "append" less - it might write() to an fd
+        self.append(s.chars().chain(std::iter::once('\n')))
+    }
+
     /// An optional override point. This is for explicit separation.
     /// \param want_newline this is true if the output item should be ended with a newline. This
     /// is only relevant if we are printing the output to a stream,
     pub fn append_with_separation(
         &mut self,
-        s: &wstr,
+        s: impl IntoCharIter,
         typ: SeparationType,
         want_newline: bool,
     ) -> bool {
@@ -703,10 +709,7 @@ impl OutputStream {
             OutputStream::Buffered(stream) => stream.append_with_separation(s, typ, want_newline),
             OutputStream::Fd(_) | OutputStream::Null | OutputStream::String(_) => {
                 if typ == SeparationType::explicitly && want_newline {
-                    // Try calling "append" less - it might write() to an fd
-                    let mut buf = s.to_owned();
-                    buf.push('\n');
-                    self.append(&buf)
+                    self.appendln(s)
                 } else {
                     self.append(s)
                 }
@@ -714,19 +717,6 @@ impl OutputStream {
         }
     }
 
-    /// Append a &wstr or WString with a newline
-    pub fn appendln(&mut self, s: impl Into<WString>) -> bool {
-        let s = s.into() + L!("\n");
-        self.append(&s)
-    }
-
-    pub fn append_char(&mut self, c: char) -> bool {
-        self.append(wstr::from_char_slice(&[c]))
-    }
-
-    pub fn append_narrow(&mut self, s: &str) -> bool {
-        self.append(&str2wcstring(s))
-    }
     // Append data from a narrow buffer, widening it.
     pub fn append_narrow_buffer(&mut self, buffer: &SeparatedBuffer) -> bool {
         for rhs_elem in buffer.elements() {
@@ -840,7 +830,7 @@ impl BufferedOutputStream {
     }
     fn append_with_separation(
         &mut self,
-        s: &wstr,
+        s: impl IntoCharIter,
         typ: SeparationType,
         _want_newline: bool,
     ) -> bool {

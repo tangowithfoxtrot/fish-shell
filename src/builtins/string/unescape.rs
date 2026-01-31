@@ -23,7 +23,7 @@ impl StringSubCommand<'_> for Unescape {
                 self.style = arg
                     .unwrap()
                     .try_into()
-                    .map_err(|_| invalid_args!("%s: Invalid style value '%s'\n", name, arg))?
+                    .map_err(|_| invalid_args!("%s: Invalid style value '%s'\n", name, arg))?;
             }
             _ => return Err(StringError::UnknownOption),
         }
@@ -42,7 +42,7 @@ impl StringSubCommand<'_> for Unescape {
             if let Some(res) = unescape_string(&arg, self.style) {
                 streams.out.append(&res);
                 if want_newline {
-                    streams.out.append_char('\n');
+                    streams.out.append('\n');
                 }
                 nesc += 1;
             }

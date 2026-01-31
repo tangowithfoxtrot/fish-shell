@@ -136,13 +136,13 @@ pub fn functions(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -
         .count()
         > 1
     {
-        streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+        streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
         builtin_print_error_trailer(parser, streams.err, cmd);
         return Err(STATUS_INVALID_ARGS);
     }
 
     if opts.report_metadata && opts.no_metadata {
-        streams.err.append(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
+        streams.err.appendln(&wgettext_fmt!(BUILTIN_ERR_COMBO, cmd));
         builtin_print_error_trailer(parser, streams.err, cmd);
         return Err(STATUS_INVALID_ARGS);
     }
@@ -182,7 +182,7 @@ pub fn functions(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -
 
     if opts.report_metadata {
         if args.len() != 1 {
-            streams.err.append(&wgettext_fmt!(
+            streams.err.appendln(&wgettext_fmt!(
                 BUILTIN_ERR_ARG_COUNT2,
                 cmd,
                 // This error is
@@ -208,7 +208,7 @@ pub fn functions(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -
         } else {
             L!("n/a").to_owned()
         };
-        streams.out.appendln(def_file);
+        streams.out.appendln(&def_file);
 
         if opts.verbose {
             let copy_place = match props.as_ref() {
@@ -223,20 +223,20 @@ pub fn functions(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -
                 Some(p) if !p.is_autoload.load() => L!("not-autoloaded").to_owned(),
                 _ => L!("n/a").to_owned(),
             };
-            streams.out.appendln(copy_place);
+            streams.out.appendln(&copy_place);
             let line = if let Some(p) = props.as_ref() {
                 p.definition_lineno()
             } else {
                 0
             };
-            streams.out.appendln(line.to_wstring());
+            streams.out.appendln(&line.to_wstring());
 
             let shadow = match props.as_ref() {
                 Some(p) if p.shadow_scope => L!("scope-shadowing").to_owned(),
                 Some(p) if !p.shadow_scope => L!("no-scope-shadowing").to_owned(),
                 _ => L!("n/a").to_owned(),
             };
-            streams.out.appendln(shadow);
+            streams.out.appendln(&shadow);
 
             let desc = match props.as_ref() {
                 Some(p) => {
@@ -254,7 +254,7 @@ pub fn functions(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -
                 }
                 _ => L!("n/a").to_owned(),
             };
-            streams.out.appendln(desc);
+            streams.out.appendln(&desc);
         }
         // Historical - this never failed?
         return Ok(SUCCESS);
@@ -297,7 +297,7 @@ pub fn functions(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -
                 .append(&reformat_for_screen(&buff, &termsize_last()));
         } else {
             for name in names {
-                streams.out.appendln(name);
+                streams.out.appendln(&name);
             }
         }
         return Ok(SUCCESS);
@@ -373,7 +373,7 @@ pub fn functions(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -
             // Extract this into a helper.
             match props.definition_file() {
                 Some(path) if path == "-" => {
-                    comment.push_utfstr(&wgettext!("Defined via `source`"))
+                    comment.push_utfstr(&wgettext!("Defined via `source`"));
                 }
                 Some(path) => {
                     comment.push_utfstr(&wgettext_fmt!(
@@ -388,7 +388,7 @@ pub fn functions(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -
             if props.is_copy() {
                 match props.copy_definition_file() {
                     Some(path) if path == "-" => {
-                        comment.push_utfstr(&wgettext!(", copied via `source`"))
+                        comment.push_utfstr(&wgettext!(", copied via `source`"));
                     }
                     Some(path) => {
                         comment.push_utfstr(&wgettext_fmt!(

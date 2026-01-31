@@ -104,7 +104,7 @@ impl<'args> StringSubCommand<'args> for Replace<'args> {
                 Err(e) => {
                     string_error!(
                         streams,
-                        "%s: Regular expression substitute error: %s\n",
+                        "%s: Regular expression substitute error: %s",
                         cmd,
                         e.error_message()
                     );
@@ -116,7 +116,7 @@ impl<'args> StringSubCommand<'args> for Replace<'args> {
             if !self.quiet && (!self.filter || replaced) {
                 streams.out.append(&result);
                 if want_newline {
-                    streams.out.append_char('\n');
+                    streams.out.append('\n');
                 }
             }
 

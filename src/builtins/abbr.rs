@@ -32,22 +32,22 @@ impl Options {
         // Duplicate options?
         let mut cmds = vec![];
         if self.add {
-            cmds.push(L!("add"))
+            cmds.push(L!("add"));
         }
         if self.rename {
-            cmds.push(L!("rename"))
+            cmds.push(L!("rename"));
         }
         if self.show {
-            cmds.push(L!("show"))
+            cmds.push(L!("show"));
         }
         if self.list {
-            cmds.push(L!("list"))
+            cmds.push(L!("list"));
         }
         if self.erase {
-            cmds.push(L!("erase"))
+            cmds.push(L!("erase"));
         }
         if self.query {
-            cmds.push(L!("query"))
+            cmds.push(L!("query"));
         }
 
         if cmds.len() > 1 {
@@ -358,8 +358,8 @@ fn abbr_add(opts: &Options, streams: &mut IoStreams) -> BuiltinResult {
         let result = builder.build(to_boxed_chars(regex_pattern));
 
         if let Err(error) = result {
-            streams.err.append(&wgettext_fmt!(
-                "%s: Regular expression compile error: %s\n",
+            streams.err.appendln(&wgettext_fmt!(
+                BUILTIN_ERR_REGEX_COMPILE,
                 CMD,
                 error.error_message(),
             ));
@@ -393,7 +393,7 @@ fn abbr_add(opts: &Options, streams: &mut IoStreams) -> BuiltinResult {
     if opts.function.is_some() && opts.args.len() > 1 {
         streams
             .err
-            .append(&wgettext_fmt!(BUILTIN_ERR_TOO_MANY_ARGUMENTS, L!("abbr")));
+            .appendln(&wgettext_fmt!(BUILTIN_ERR_TOO_MANY_ARGUMENTS, L!("abbr")));
         return Err(STATUS_INVALID_ARGS);
     }
     let replacement = if let Some(ref function) = opts.function {
@@ -412,7 +412,7 @@ fn abbr_add(opts: &Options, streams: &mut IoStreams) -> BuiltinResult {
         let mut replacement = WString::new();
         for iter in opts.args.iter().skip(1) {
             if !replacement.is_empty() {
-                replacement.push(' ')
+                replacement.push(' ');
             }
             replacement.push_utfstr(iter);
         }
@@ -428,7 +428,7 @@ fn abbr_add(opts: &Options, streams: &mut IoStreams) -> BuiltinResult {
         }
     });
     if !opts.commands.is_empty() && position == Position::Command {
-        streams.err.appendln(wgettext_fmt!(
+        streams.err.appendln(&wgettext_fmt!(
             "%s: --command cannot be combined with --position=command",
             CMD,
         ));
@@ -447,7 +447,7 @@ fn abbr_add(opts: &Options, streams: &mut IoStreams) -> BuiltinResult {
             set_cursor_marker: opts.set_cursor_marker.clone(),
             from_universal: false,
             commands: opts.commands.clone(),
-        })
+        });
     });
 
     Ok(SUCCESS)
@@ -476,7 +476,7 @@ fn abbr_erase(opts: &Options, parser: &Parser) -> BuiltinResult {
                         parser.remove_var(&var_name, ParserEnvSetMode::new(EnvMode::UNIVERSAL));
 
                     if ret == EnvStackSetResult::Ok {
-                        result = Ok(SUCCESS)
+                        result = Ok(SUCCESS);
                     }
                 }
             }
@@ -534,7 +534,7 @@ pub fn abbr(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> Bui
                 // For example, `abbr e emacs -nw` works, because `-nw` occurs after the second
                 // non-option, and --add is implied.
                 if let Some(arg) = w.woptarg {
-                    opts.args.push(arg.to_owned())
+                    opts.args.push(arg.to_owned());
                 }
                 if opts.args.len() >= 2
                     && !(opts.rename || opts.show || opts.list || opts.erase || opts.query)
