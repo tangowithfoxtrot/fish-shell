@@ -130,7 +130,7 @@ use libc::{
     _POSIX_VDISABLE, EIO, EISDIR, ENOTTY, EPERM, ESRCH, O_NONBLOCK, O_RDONLY, SIGINT,
     STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO, VMIN, VQUIT, VSUSP, VTIME, c_char,
 };
-use nix::sys::termios::{self, SetArg, Termios, tcgetattr};
+use nix::sys::termios::{self, SetArg, Termios, tcgetattr, tcsetattr};
 use nix::{
     fcntl::OFlag,
     sys::{
@@ -228,7 +228,7 @@ fn redirect_tty_after_sighup() {
     for stdfd in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
         if matches!(
             tcgetattr(unsafe { BorrowedFd::borrow_raw(stdfd) }),
-            Err(e) if matches!(e, nix::Error::EIO | nix::Error::ENOTTY)
+            Err(nix::Error::EIO | nix::Error::ENOTTY)
         ) {
             unsafe { libc::dup2(fd, stdfd) };
         }
@@ -2640,7 +2640,7 @@ impl<'a> Reader<'a> {
             // The order of the two conditions below is important. Try to restore the mode
             // in all cases, but only complain if interactive.
             if let Some(old_modes) = old_modes {
-                if termios::tcsetattr(
+                if tcsetattr(
                     unsafe { BorrowedFd::borrow_raw(self.conf.inputfd) },
                     SetArg::TCSANOW,
                     &old_modes,
@@ -3653,55 +3653,44 @@ impl<'a> Reader<'a> {
                     }
                 }
             }
-            rl::BackwardKillWord
-            | rl::BackwardKillPathComponent
-            | rl::BackwardKillBigword
-            | rl::BackwardKillWordEnd
-            | rl::BackwardKillBigwordEnd => {
+            rl::BackwardKillWord | rl::BackwardKillPathComponent | rl::BackwardKillBigword => {
                 let style = match c {
-                    rl::BackwardKillWord | rl::BackwardKillWordEnd => MoveWordStyle::Punctuation,
-                    rl::BackwardKillBigword | rl::BackwardKillBigwordEnd => {
-                        MoveWordStyle::Whitespace
-                    }
+                    rl::BackwardKillWord => MoveWordStyle::Punctuation,
+                    rl::BackwardKillBigword => MoveWordStyle::Whitespace,
                     rl::BackwardKillPathComponent => MoveWordStyle::PathComponents,
                     _ => unreachable!(),
                 };
-                let to_word_end = matches!(c, rl::BackwardKillWordEnd | rl::BackwardKillBigwordEnd);
                 // Is this the same killring item as the last kill?
                 let newv = !matches!(
                     self.rls().last_cmd,
                     Some(rl::BackwardKillWord | rl::BackwardKillBigword)
                 );
+                let elt = self.active_edit_line_tag();
                 self.data.move_word(
-                    self.active_edit_line_tag(),
+                    elt,
                     MoveWordDir::Left,
                     /*erase=*/ true,
                     style,
                     newv,
-                    to_word_end,
+                    /*to_word_end=*/ false,
                 );
             }
-            rl::KillWordVi
-            | rl::KillBigwordVi
-            | rl::KillPathComponent
-            | rl::KillWordEnd
-            | rl::KillBigwordEnd => {
+            rl::KillWordVi | rl::KillBigwordVi | rl::KillPathComponent => {
                 // The "bigword" functions differ only in that they move to the next whitespace, not
                 // punctuation.
                 let style = match c {
-                    rl::KillWordVi | rl::KillWordEnd => MoveWordStyle::Punctuation,
-                    rl::KillBigwordVi | rl::KillBigwordEnd => MoveWordStyle::Whitespace,
+                    rl::KillWordVi => MoveWordStyle::Punctuation,
+                    rl::KillBigwordVi => MoveWordStyle::Whitespace,
                     rl::KillPathComponent => MoveWordStyle::PathComponents,
                     _ => unreachable!(),
                 };
-                let to_word_end = matches!(c, rl::KillWordEnd | rl::KillBigwordEnd);
                 self.data.move_word(
                     self.active_edit_line_tag(),
                     MoveWordDir::Right,
                     /*erase=*/ true,
                     style,
                     self.rls().last_cmd != Some(c),
-                    to_word_end,
+                    /*to_word_end=*/ false,
                 );
             }
             rl::KillInnerWord | rl::KillInnerBigWord => {
@@ -4165,6 +4154,9 @@ impl<'a> Reader<'a> {
                 let newv = self.rls().last_cmd != Some(rl::KillSelection);
                 if let Some(selection) = self.get_selection() {
                     self.kill(EditableLineTag::Commandline, selection, Kill::Append, newv);
+                }
+                if self.is_at_end() {
+                    self.update_buff_pos(self.active_edit_line_tag(), None);
                 }
             }
             rl::InsertLineOver => {
@@ -4782,7 +4774,7 @@ fn term_fix_external_modes(modes: &mut Termios) {
 /// Give up control of terminal.
 fn term_donate(quiet: bool /* = false */) {
     loop {
-        match termios::tcsetattr(
+        match tcsetattr(
             unsafe { BorrowedFd::borrow_raw(STDIN_FILENO) },
             SetArg::TCSANOW,
             &TTY_MODES_FOR_EXTERNAL_CMDS.lock().unwrap(),
@@ -4822,7 +4814,7 @@ pub fn term_copy_modes() {
 
 pub fn set_shell_modes(fd: RawFd, whence: &str) -> bool {
     let ok = loop {
-        match termios::tcsetattr(
+        match tcsetattr(
             unsafe { BorrowedFd::borrow_raw(fd) },
             SetArg::TCSANOW,
             &shell_modes(),
