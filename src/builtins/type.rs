@@ -135,8 +135,11 @@ pub fn r#type(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> B
                             streams.out.appendln(path);
                         }
                     } else if !opts.short_output {
-                        streams.out.append(&wgettext_fmt!("%s is a function", arg));
-                        streams.out.appendln(wgettext!(" with definition"));
+                        streams.out.append(&sprintf!(
+                            "%s %s\n",
+                            wgettext_fmt!("%s is a function", arg),
+                            wgettext!("with definition")
+                        ));
                         let mut def = WString::new();
                         def.push_utfstr(&sprintf!(
                             "# %s\n%s",
@@ -158,7 +161,8 @@ pub fn r#type(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> B
                         }
                     } else {
                         streams.out.append(&wgettext_fmt!("%s is a function", arg));
-                        streams.out.append(&wgettext_fmt!(" (%s)\n", comment));
+                        streams.out.append(" ");
+                        streams.out.appendln(&wgettext_fmt!("(%s)", comment));
                     }
                 } else if opts.get_type {
                     streams.out.appendln(L!("function"));
@@ -176,7 +180,7 @@ pub fn r#type(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> B
                 return Ok(SUCCESS);
             }
             if !opts.get_type {
-                streams.out.append(&wgettext_fmt!("%s is a builtin\n", arg));
+                streams.out.appendln(&wgettext_fmt!("%s is a builtin", arg));
             } else if opts.get_type {
                 streams.out.append(L!("builtin\n"));
             }
@@ -204,7 +208,7 @@ pub fn r#type(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> B
                 if opts.path || opts.force_path {
                     streams.out.appendln(path);
                 } else {
-                    streams.out.append(&wgettext_fmt!("%s is %s\n", arg, path));
+                    streams.out.appendln(&wgettext_fmt!("%s is %s", arg, path));
                 }
             } else if opts.get_type {
                 streams.out.appendln(L!("file"));
@@ -222,7 +226,7 @@ pub fn r#type(parser: &Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> B
         if found == 0 && !opts.query && !opts.path {
             streams
                 .err
-                .append(&wgettext_fmt!("%s: Could not find '%s'\n", L!("type"), arg));
+                .appendln(&wgettext_fmt!("%s: Could not find '%s'", L!("type"), arg));
         }
     }
 

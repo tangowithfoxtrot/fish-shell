@@ -1,6 +1,9 @@
 fish ?.?.? (released ???)
 =========================
 
+fish 4.4.0 (released February 03, 2026)
+=======================================
+
 Deprecations and removed features
 ---------------------------------
 - The default fossil prompt has been disabled (:issue:`12342`).
@@ -18,6 +21,10 @@ New or improved bindings
 - New special input functions to support these movements: ``forward-word-vi``, ``kill-word-vi``, ``forward-bigword-vi``, ``kill-bigword-vi``, ````forward-word-end``, ``backward-word-end``, ``forward-bigword-end``, ``backward-bigword-end``, ````kill-a-word``, ``kill-inner-word``, ``kill-a-bigword``, and ``kill-inner-bigword``.
 - Vi mode key bindings now support counts for movement and deletion commands (e.g. `d3w` or `3l`), via a new operator mode (:issue:`2192`).
 - New ``catpuccin-*`` color themes.
+
+Improved terminal support
+-------------------------
+- ``set_color`` learned the strikethrough (``--strikethrough`` or ``-s``) modifier.
 
 For distributors and developers
 -------------------------------

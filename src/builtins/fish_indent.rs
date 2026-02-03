@@ -1008,7 +1008,7 @@ fn do_indent(
             }
             'v' => {
                 streams.out.appendln(&wgettext_fmt!(
-                    "%s, version %s",
+                    VERSION_STRING_TEMPLATE,
                     get_program_name(),
                     crate::BUILD_VERSION
                 ));
@@ -1051,8 +1051,9 @@ fn do_indent(
     while i < args.len() || (args.is_empty() && i == 0) {
         if args.is_empty() && i == 0 {
             if output_type == OutputType::File {
-                streams.err.appendln(&wgettext_fmt!(
-                    "Expected file path to read/write for -w:\n\n $ %s -w foo.fish",
+                streams.err.append(&sprintf!(
+                    "%s\n\n $ %s -w foo.fish\n",
+                    wgettext!("Expected file path to read/write for -w:"),
                     get_program_name()
                 ));
                 return Err(STATUS_CMD_ERROR);
@@ -1061,7 +1062,7 @@ fn do_indent(
                 let cmd = "fish_indent";
                 streams
                     .err
-                    .append(&wgettext_fmt!("%s: stdin is closed\n", cmd));
+                    .appendln(&wgettext_fmt!(BUILTIN_ERR_STDIN_CLOSED, cmd));
                 return Err(STATUS_CMD_ERROR);
             };
             let mut buf = vec![];
