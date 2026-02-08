@@ -1,6 +1,13 @@
 fish ?.?.? (released ???)
 =========================
 
+Regression fixes:
+-----------------
+- (from 4.4.0) Vi mode ``d,f`` key binding (:issue:`12417`).
+- (from 4.4.0) Vi mode crash on ``c,i,w`` after accepting autosuggestion (:issue:`12430`).
+- (from 4.4.0) ``fish_vi_key_bindings`` called with mode argument (:issue:`12413`).
+- (from 4.0.0) Build on Illumos (:issue:`12410`).
+
 fish 4.4.0 (released February 03, 2026)
 =======================================
 
@@ -18,7 +25,7 @@ Interactive improvements
 New or improved bindings
 ------------------------
 - Vi mode word movements (``w``, ``W``, ``e``, and ``E``) are now largely in line with Vim. The only exception is that underscores are treated as word separators (:issue:`12269`).
-- New special input functions to support these movements: ``forward-word-vi``, ``kill-word-vi``, ``forward-bigword-vi``, ``kill-bigword-vi``, ````forward-word-end``, ``backward-word-end``, ``forward-bigword-end``, ``backward-bigword-end``, ````kill-a-word``, ``kill-inner-word``, ``kill-a-bigword``, and ``kill-inner-bigword``.
+- New special input functions to support these movements: ``forward-word-vi``, ``kill-word-vi``, ``forward-bigword-vi``, ``kill-bigword-vi``, ``forward-word-end``, ``backward-word-end``, ``forward-bigword-end``, ``backward-bigword-end``, ``kill-a-word``, ``kill-inner-word``, ``kill-a-bigword``, and ``kill-inner-bigword``.
 - Vi mode key bindings now support counts for movement and deletion commands (e.g. `d3w` or `3l`), via a new operator mode (:issue:`2192`).
 - New ``catpuccin-*`` color themes.
 

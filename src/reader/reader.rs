@@ -546,13 +546,13 @@ enum Kill {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum JumpDirection {
+pub enum JumpDirection {
     Forward,
     Backward,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum JumpPrecision {
+pub enum JumpPrecision {
     Till,
     To,
 }
@@ -1173,6 +1173,15 @@ pub fn reader_execute_readline_cmd(parser: &Parser, ch: CharEvent) {
     }
     data.save_screen_state();
     let _ = data.handle_char_event(Some(ch));
+}
+
+pub fn reader_jump(direction: JumpDirection, precision: JumpPrecision, target: char) -> bool {
+    let Some(data) = current_data() else {
+        return false;
+    };
+    data.save_screen_state();
+    let elt = data.active_edit_line_tag();
+    data.jump_and_remember_last_jump(direction, precision, elt, target, false)
 }
 
 pub fn reader_showing_suggestion(parser: &Parser) -> bool {
@@ -2311,11 +2320,11 @@ impl ReaderData {
 
     fn delete_a_word(&mut self, elt: EditableLineTag, style: MoveWordStyle, newv: bool) {
         let el = self.edit_line(elt);
-        if el.is_empty() {
+        let pos = el.position();
+        if pos == el.len() {
             return;
         }
         let text_slice = el.text().as_char_slice();
-        let pos = el.position();
         let on_blank = is_blank(text_slice[pos]);
 
         if on_blank {
@@ -2387,10 +2396,10 @@ impl ReaderData {
     fn delete_inner_word(&mut self, elt: EditableLineTag, style: MoveWordStyle, newv: bool) {
         let el = self.edit_line(elt);
         let len = el.len();
-        if len == 0 {
+        let pos = el.position();
+        if pos == len {
             return;
         }
-        let pos = el.position();
         let text_slice = el.text().as_char_slice();
         if is_blank(text_slice[pos]) {
             // Cursor is on whitespace: delete whitespace only
@@ -4346,7 +4355,7 @@ impl<'a> Reader<'a> {
             rl::ScrollbackPush => {
                 self.screen.push_to_scrollback();
             }
-            rl::SelfInsert | rl::SelfInsertNotFirst | rl::FuncAnd | rl::FuncOr => {
+            rl::SelfInsert | rl::SelfInsertNotFirst | rl::GetKey | rl::FuncAnd | rl::FuncOr => {
                 // This can be reached via `commandline -f and` etc
                 // panic!("should have been handled by inputter_t::readch");
             }
@@ -5674,6 +5683,7 @@ impl<'a> Reader<'a> {
         };
         self.data
             .replace_substring(EditableLineTag::Commandline, range, replacement);
+        self.update_buff_pos(self.active_edit_line_tag(), None);
     }
 }
 
@@ -6220,6 +6230,7 @@ fn command_ends_paging(c: ReadlineCmd, focused_on_search_field: bool) -> bool {
         | rl::BackwardKillBigword
         | rl::BackwardKillToken
         | rl::SelfInsert
+        | rl::GetKey
         | rl::SelfInsertNotFirst
         | rl::TransposeChars
         | rl::TransposeWords

@@ -321,7 +321,7 @@ expect_prompt("echo two three")
 # Now test that exactly the expected bind modes are defined
 sendline("bind --list-modes")
 expect_prompt(
-    "default\r\ninsert\r\noperator\r\nreplace\r\nreplace_one\r\nvisual\r\n",
+    "F\r\nT\r\ndefault\r\nf\r\ninsert\r\noperator\r\nreplace\r\nreplace_one\r\nt\r\nvisual\r\n",
     unmatched="Unexpected vi bind modes",
 )
 
@@ -665,6 +665,22 @@ sendline("bind ctrl-g 'sleep 1' history-pager")
 expect_prompt()
 send("\x07")  # ctrl-g
 send("\x1b[27u")  # escape, to close pager
+
+sendline("bind ctrl-g kill-inner-word")
+expect_prompt()
+send("echo foo-bar")
+send("\x07")  # ctrl-g
+sendline("baz")
+expect_str("foo-barbaz")
+expect_prompt()
+
+sendline("bind ctrl-g kill-a-word")
+expect_prompt()
+send("echo foo-bar")
+send("\x07")  # ctrl-g
+sendline("qux")
+expect_str("foo-barqux")
+expect_prompt()
 
 # Check that the builtin version of `exit` works
 # (for obvious reasons this MUST BE LAST)
