@@ -1,6 +1,22 @@
 fish ?.?.? (released ???)
 =========================
 
+Interactive improvements
+------------------------
+- :kbd:`ctrl-l` no longer cancels history search (:issue:`12436`).
+
+Deprecations and removed features
+---------------------------------
+- fish no longer reads the terminfo database to alter behaviour based on the :envvar:`TERM` environment variable, and does not depend on ncurses or terminfo. The ``ignore-terminfo`` feature flag, introduced and enabled by default in fish 4.1, is now permanently enabled. fish may no longer work correctly on Data General Dasher D220 and Wyse WY-350 terminals, but should continue to work on all known terminal emulators released in the 21st century.
+
+Regression fixes:
+-----------------
+- (from 4.4.0) Vi mode ``d,f`` key binding did not work (:issue:`12417`).
+- (from 4.4.0) Vi mode ``c,w`` key binding wrongly deleted trailing spaces (:issue:`12443`).
+- (from 4.4.0) Vi mode crash on ``c,i,w`` after accepting autosuggestion (:issue:`12430`).
+- (from 4.4.0) ``fish_vi_key_bindings`` called with a mode argument produced an error (:issue:`12413`).
+- (from 4.0.0) Build on Illumos (:issue:`12410`).
+
 fish 4.4.0 (released February 03, 2026)
 =======================================
 
@@ -18,7 +34,7 @@ Interactive improvements
 New or improved bindings
 ------------------------
 - Vi mode word movements (``w``, ``W``, ``e``, and ``E``) are now largely in line with Vim. The only exception is that underscores are treated as word separators (:issue:`12269`).
-- New special input functions to support these movements: ``forward-word-vi``, ``kill-word-vi``, ``forward-bigword-vi``, ``kill-bigword-vi``, ````forward-word-end``, ``backward-word-end``, ``forward-bigword-end``, ``backward-bigword-end``, ````kill-a-word``, ``kill-inner-word``, ``kill-a-bigword``, and ``kill-inner-bigword``.
+- New special input functions to support these movements: ``forward-word-vi``, ``kill-word-vi``, ``forward-bigword-vi``, ``kill-bigword-vi``, ``forward-word-end``, ``backward-word-end``, ``forward-bigword-end``, ``backward-bigword-end``, ``kill-a-word``, ``kill-inner-word``, ``kill-a-bigword``, and ``kill-inner-bigword``.
 - Vi mode key bindings now support counts for movement and deletion commands (e.g. `d3w` or `3l`), via a new operator mode (:issue:`2192`).
 - New ``catpuccin-*`` color themes.
 

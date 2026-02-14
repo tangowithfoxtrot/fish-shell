@@ -96,12 +96,12 @@ msgid "%s %s: unrecognized feature '%s'"
 msgstr ""
 
 #, c-format
-msgid "%s (line %d):"
-msgstr "%s (linia %d):"
+msgid "%s (line %d)"
+msgstr "%s (linia %d)"
 
 #, c-format
-msgid "%s (line %u):"
-msgstr "%s (linia %u):"
+msgid "%s (line %u)"
+msgstr "%s (linia %u)"
 
 #, c-format
 msgid "%s and %s are mutually exclusive"
@@ -1456,11 +1456,11 @@ msgid "Standard input"
 msgstr "Standardowe wejście"
 
 #, c-format
-msgid "Standard input (line %d):"
+msgid "Standard input (line %d)"
 msgstr ""
 
 #, c-format
-msgid "Startup (line %d):"
+msgid "Startup (line %d)"
 msgstr ""
 
 msgid "State"
@@ -6338,9 +6338,6 @@ msgid "After reverting, change state to running"
 msgstr ""
 
 msgid "Aggregate sources for all modules in an aggregator project"
-msgstr ""
-
-msgid "Aggregate the consumed space of one or more directories or files"
 msgstr ""
 
 msgid "Aggressive scan options"
@@ -13171,9 +13168,6 @@ msgstr ""
 msgid "Count hard links multiple times"
 msgstr ""
 
-msgid "Count hard-linked files each time they are seen"
-msgstr ""
-
 msgid "Count hidden files, too"
 msgstr ""
 
@@ -16297,6 +16291,9 @@ msgstr ""
 msgid "Disable chat search background indexer"
 msgstr ""
 
+msgid "Disable check for unique upload"
+msgstr ""
+
 msgid "Disable color"
 msgstr ""
 
@@ -17425,9 +17422,6 @@ msgstr ""
 msgid "Display answers as exclamation points and missing packets as dots"
 msgstr ""
 
-msgid "Display apparent size instead of disk usage"
-msgstr ""
-
 msgid "Display architecture specific information"
 msgstr ""
 
@@ -17575,6 +17569,9 @@ msgstr ""
 msgid "Display debugging information"
 msgstr ""
 
+msgid "Display debugging messages"
+msgstr ""
+
 msgid "Display deduplication histogram"
 msgstr ""
 
@@ -17708,9 +17705,6 @@ msgid "Display help about darcs and darcs commands"
 msgstr ""
 
 msgid "Display help and debug options"
-msgstr ""
-
-msgid "Display help and exit\t"
 msgstr ""
 
 msgid "Display help for Git Sizer"
@@ -18059,6 +18053,9 @@ msgid "Display histogram of bucket list lengths"
 msgstr ""
 
 msgid "Display hook variables"
+msgstr ""
+
+msgid "Display hosts listed in configuration"
 msgstr ""
 
 msgid "Display image centered on a backdrop"
@@ -19303,9 +19300,6 @@ msgstr ""
 msgid "Do not compress the uid/gid table"
 msgstr ""
 
-msgid "Do not compute total column for multiple inputs"
-msgstr ""
-
 msgid "Do not configure any interfaces"
 msgstr ""
 
@@ -20476,9 +20470,6 @@ msgstr ""
 msgid "Do not sort file arguments"
 msgstr ""
 
-msgid "Do not sort paths by their size in bytes"
-msgstr ""
-
 msgid "Do not sort the result"
 msgstr ""
 
@@ -20630,6 +20621,9 @@ msgid "Do not upgrade packages"
 msgstr ""
 
 msgid "Do not upload binaries"
+msgstr ""
+
+msgid "Do not upload the files"
 msgstr ""
 
 msgid "Do not use \"abshi2\" pattern"
@@ -20855,6 +20849,9 @@ msgid "Do not write #: filename:line lines"
 msgstr ""
 
 msgid "Do not write FETCH_HEAD file"
+msgstr ""
+
+msgid "Do not write a log file for uploads"
 msgstr ""
 
 msgid "Do not write a ~/.fehbg file"
@@ -21224,6 +21221,9 @@ msgid "Don't check if commit belongs on the same branch"
 msgstr ""
 
 msgid "Don't check if travis client is up to date"
+msgstr ""
+
+msgid "Don't check the signatures or upload the files"
 msgstr ""
 
 msgid "Don't clear the playlist"
@@ -24421,6 +24421,9 @@ msgstr ""
 msgid "Enable the JIT compiler"
 msgstr ""
 
+msgid "Enable the Lintian verification check"
+msgstr ""
+
 msgid "Enable the bitrate management engine"
 msgstr ""
 
@@ -24452,6 +24455,9 @@ msgid "Enable the live reloading in the development server (this is the default)
 msgstr ""
 
 msgid "Enable the live reloading in the development server, but only re-build files that have changed"
+msgstr ""
+
+msgid "Enable the local install check"
 msgstr ""
 
 msgid "Enable the necessary sparse-checkout config settings"
@@ -30841,9 +30847,6 @@ msgstr ""
 msgid "If project list is specified, also build projects that depend on projects on the list"
 msgstr ""
 
-msgid "If set, we will not cross filesystems or traverse mount points"
-msgstr ""
-
 msgid "If source path is a directory, publish all its content recursively"
 msgstr ""
 
@@ -33476,9 +33479,6 @@ msgid "Launch python shell"
 msgstr ""
 
 msgid "Launch the Protontricks GUI"
-msgstr ""
-
-msgid "Launch the terminal user interface"
 msgstr ""
 
 msgid "Launch utility at startup and reload on file change"
@@ -39718,9 +39718,6 @@ msgstr ""
 msgid "One or more Kitchen Driver gems to be installed or added to a Gemfile "
 msgstr ""
 
-msgid "One or more absolute directories to ignore"
-msgstr ""
-
 msgid "Only  match  processes  whose  effective  user ID is listed"
 msgstr ""
 
@@ -44104,9 +44101,6 @@ msgstr ""
 msgid "Print additional fields"
 msgstr ""
 
-msgid "Print additional statistics about the file traversal to stderr"
-msgstr ""
-
 msgid "Print all active monitors"
 msgstr ""
 
@@ -44684,9 +44678,6 @@ msgid "Print help message"
 msgstr ""
 
 msgid "Print help message and exit"
-msgstr ""
-
-msgid "Print help message or the help of the given subcommand(s)"
 msgstr ""
 
 msgid "Print help of uncommon options"
@@ -45683,6 +45674,9 @@ msgid "Print the description of a key"
 msgstr ""
 
 msgid "Print the domain's hostname"
+msgstr ""
+
+msgid "Print the dput configuration"
 msgstr ""
 
 msgid "Print the drive capabilities for SCSI-3/mmc compliant drives"
@@ -50618,6 +50612,9 @@ msgid "Request debug info and also use level to specify how much information"
 msgstr ""
 
 msgid "Request distinct server name"
+msgstr ""
+
+msgid "Request dry-run of dinstall after upload"
 msgstr ""
 
 msgid "Request given address in DHCP DISCOVER message"
@@ -66238,9 +66235,6 @@ msgstr ""
 msgid "The age recipient the new group should contain. Can be specified more than once"
 msgstr ""
 
-msgid "The amount of threads to use"
-msgstr ""
-
 msgid "The architecture reported by uname in the container"
 msgstr ""
 
@@ -66350,9 +66344,6 @@ msgid "The format to convert from"
 msgstr ""
 
 msgid "The format to convert to"
-msgstr ""
-
-msgid "The format with which to print byte counts"
 msgstr ""
 
 msgid "The full cost-based query optimiser is enabled."
@@ -68944,6 +68935,9 @@ msgstr ""
 msgid "Upload finished packages"
 msgstr ""
 
+msgid "Upload host"
+msgstr ""
+
 msgid "Upload locally saved terminal session to asciinema.org"
 msgstr ""
 
@@ -68957,6 +68951,9 @@ msgid "Upload release"
 msgstr ""
 
 msgid "Upload stemcell"
+msgstr ""
+
+msgid "Upload to a delayed queue"
 msgstr ""
 
 msgid "Upload to server"
@@ -70466,6 +70463,9 @@ msgid "Use packages from REPO"
 msgstr ""
 
 msgid "Use paired-single floating-point instructions"
+msgstr ""
+
+msgid "Use passive mode for FTP"
 msgstr ""
 
 msgid "Use passive mode for data transfers"
@@ -78553,7 +78553,7 @@ msgstr ""
 msgid "reset branch name to parent branch name"
 msgstr ""
 
-msgid "reset cache (DNS\t)"
+msgid "reset cache"
 msgstr ""
 
 msgid "reset terminal state"
