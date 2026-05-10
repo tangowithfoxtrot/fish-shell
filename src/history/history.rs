@@ -15,42 +15,16 @@
 //!    fallback solution attempts to detect races and retries if a race is detected.
 
 use crate::{
-    common::cstr2wcstring,
-    env::{EnvSetMode, EnvVar},
-    fs::{
-        LOCKED_FILE_MODE, LockedFile, LockingMode, PotentialUpdate, WriteMethod, lock_and_load,
-        rewrite_via_temporary_file,
-    },
-    threads::ThreadPool,
-};
-use fish_wcstringutil::{subsequence_in_string, trim};
-use fish_widestring::subslice_position;
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, HashMap, HashSet},
-    ffi::{CStr, CString},
-    fs::File,
-    io::{BufRead, BufWriter, Read, Write},
-    mem::MaybeUninit,
-    num::NonZeroUsize,
-    ops::ControlFlow,
-    sync::{Arc, Mutex, MutexGuard},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
-use bitflags::bitflags;
-use lru::LruCache;
-use nix::{fcntl::OFlag, sys::stat::Mode};
-use rand::Rng;
-
-use crate::{
-    ast::{self, Kind, Node},
-    common::{CancelChecker, UnescapeStringStyle, bytes2wcstring, unescape_string, valid_var_name},
-    env::{EnvMode, EnvStack, Environment},
+    ast::{self, Kind, Node as _},
+    common::{CancelChecker, valid_var_name},
+    env::{EnvMode, EnvSetMode, EnvStack, EnvVar, Environment},
     expand::{ExpandFlags, expand_one},
     fds::wopen_cloexec,
     flog::{flog, flogf},
-    fs::fsync,
+    fs::{
+        LOCKED_FILE_MODE, LockedFile, LockingMode, PotentialUpdate, WriteMethod, fsync,
+        lock_and_load, rewrite_via_temporary_file,
+    },
     highlight::highlight_and_colorize,
     history::file::{HistoryFile, RawHistoryFile},
     io::IoStreams,
@@ -61,9 +35,28 @@ use crate::{
     parser::Parser,
     path::{path_get_config, path_get_data, path_is_valid},
     prelude::*,
-    threads::assert_is_background_thread,
-    wildcard::{ANY_STRING, wildcard_match},
+    threads::{ThreadPool, assert_is_background_thread},
+    wildcard::wildcard_match,
     wutil::{FileId, INVALID_FILE_ID, file_id_for_file, wrealpath, wstat, wunlink},
+};
+use bitflags::bitflags;
+use fish_common::{UnescapeStringStyle, unescape_string};
+use fish_wcstringutil::{subsequence_in_string, trim};
+use fish_widestring::{ANY_STRING, bytes2wcstring, cstr2wcstring, subslice_position};
+use lru::LruCache;
+use nix::{fcntl::OFlag, sys::stat::Mode};
+use rand::Rng as _;
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashMap, HashSet},
+    ffi::{CStr, CString},
+    fs::File,
+    io::{BufRead, BufWriter, Read as _, Write as _},
+    mem::MaybeUninit,
+    num::NonZeroUsize,
+    ops::ControlFlow,
+    sync::{Arc, Mutex, MutexGuard},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,7 +276,19 @@ impl HistoryItem {
     }
 }
 
-static HISTORIES: Mutex<BTreeMap<WString, Arc<History>>> = Mutex::new(BTreeMap::new());
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MemoryHistoryId {
+    PrivateMode,
+    BuiltinRead,
+}
+
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub enum HistoryId {
+    Memory(MemoryHistoryId),
+    Disk { session_id: WString },
+}
+
+static HISTORIES: Mutex<BTreeMap<HistoryId, Arc<History>>> = Mutex::new(BTreeMap::new());
 
 /// When deleting, whether the deletion should be only for this session or for all sessions.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -295,6 +300,9 @@ enum DeletionScope {
 struct HistoryImpl {
     /// The name of this list. Used for picking a suitable filename and for switching modes.
     name: WString,
+    /// Optional custom directory for the history file. If None, uses path_get_data().
+    /// Primarily for testing.
+    custom_directory: Option<WString>,
     /// New items. Note that these are NOT discarded on save. We need to keep these around so we can
     /// distinguish between items in our history and items in the history of other shells that were
     /// started after we were started.
@@ -333,7 +341,11 @@ impl HistoryImpl {
             return Ok(None);
         }
 
-        let Some(mut path) = path_get_data() else {
+        let mut path = if let Some(custom_dir) = &self.custom_directory {
+            custom_dir.clone()
+        } else if let Some(data_path) = path_get_data() {
+            data_path
+        } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "Error obtaining data directory. This is a manually constructed error which does not indicate why this happened.",
@@ -343,7 +355,11 @@ impl HistoryImpl {
         path.push('/');
         path.push_utfstr(&self.name);
         path.push_utfstr(L!("_history"));
-        if let Some(canonicalized_path) = wrealpath(&path) {
+
+        // For custom directories, skip wrealpath since file may not exist yet
+        if self.custom_directory.is_some() {
+            Ok(Some(path))
+        } else if let Some(canonicalized_path) = wrealpath(&path) {
             Ok(Some(canonicalized_path))
         } else {
             Err(std::io::Error::other(format!(
@@ -736,9 +752,10 @@ impl HistoryImpl {
         self.save(vacuum);
     }
 
-    fn new(name: WString) -> Self {
+    fn new(name: WString, custom_directory: Option<WString>) -> Self {
         Self {
             name,
+            custom_directory,
             new_items: vec![],
             first_unwritten_new_item_index: 0,
             has_pending_item: false,
@@ -1139,11 +1156,7 @@ fn format_history_record(
 
     let mut command = item.str().to_owned();
     if color_enabled {
-        command = bytes2wcstring(&highlight_and_colorize(
-            &command,
-            &parser.context(),
-            parser.vars(),
-        ));
+        command = bytes2wcstring(&highlight_and_colorize(&command, &parser.context()));
     }
 
     result.push_utfstr(&command);
@@ -1210,19 +1223,32 @@ impl History {
         imp.add(item, false, true);
     }
 
-    pub fn new(name: &wstr) -> Arc<Self> {
-        Arc::new(Self(Mutex::new(HistoryImpl::new(name.to_owned()))))
+    /// Creates a new History with a custom directory path.
+    /// The history file will be stored at `{directory}/{name}_history`.
+    /// If the directory is None, it will be stored at path_get_data().
+    fn new_with_directory(id: HistoryId, directory: Option<WString>) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(HistoryImpl::new(
+            match id {
+                HistoryId::Memory(_) => WString::new(),
+                HistoryId::Disk {
+                    session_id: filename,
+                } => filename,
+            },
+            directory,
+        ))))
     }
 
-    /// Returns history with the given name, creating it if necessary.
-    pub fn with_name(name: &wstr) -> Arc<Self> {
+    /// Returns the history with the given name, creating it if necessary, using the default data directory.
+    /// This uses the HISTORIES global collection. Note it is possible to create a history without
+    /// placing it into this collection.
+    pub fn new(id: HistoryId) -> Arc<Self> {
         let mut histories = HISTORIES.lock().unwrap();
 
-        if let Some(hist) = histories.get(name) {
+        if let Some(hist) = histories.get(&id) {
             Arc::clone(hist)
         } else {
-            let hist = Self::new(name);
-            histories.insert(name.to_owned(), Arc::clone(&hist));
+            let hist = Self::new_with_directory(id.clone(), None);
+            histories.insert(id, Arc::clone(&hist));
             hist
         }
     }
@@ -1360,7 +1386,6 @@ impl History {
         case_sensitive: bool,
         null_terminate: bool,
         reverse: bool,
-        cancel_check: &CancelChecker,
         color_enabled: bool,
     ) -> bool {
         let mut remaining = max_items;
@@ -1394,6 +1419,8 @@ impl History {
             }
             ControlFlow::Continue(())
         };
+
+        let cancel_check = &parser.context().cancel_checker;
 
         if search_args.is_empty() {
             // The user had no search terms; just append everything.
@@ -1680,17 +1707,23 @@ pub fn save_all() {
 }
 
 /// Return the prefix for the files to be used for command and read history.
-pub fn history_session_id(vars: &dyn Environment) -> WString {
-    history_session_id_from_var(vars.get(L!("fish_history")))
+pub fn history_id(vars: &dyn Environment) -> HistoryId {
+    history_id_from_var(vars.get(L!("fish_history")))
 }
 
-pub fn history_session_id_from_var(history_name_var: Option<EnvVar>) -> WString {
+pub fn history_id_from_var(history_name_var: Option<EnvVar>) -> HistoryId {
+    use HistoryId::*;
+    let default = || Disk {
+        session_id: DFLT_FISH_HISTORY_SESSION_ID.to_owned(),
+    };
     let Some(var) = history_name_var else {
-        return DFLT_FISH_HISTORY_SESSION_ID.to_owned();
+        return default();
     };
     let session_id = var.as_string();
-    if session_id.is_empty() || valid_var_name(&session_id) {
-        session_id
+    if session_id.is_empty() {
+        Memory(MemoryHistoryId::PrivateMode)
+    } else if valid_var_name(&session_id) {
+        Disk { session_id }
     } else {
         flog!(
             error,
@@ -1700,7 +1733,7 @@ pub fn history_session_id_from_var(history_name_var: Option<EnvVar>) -> WString 
                 DFLT_FISH_HISTORY_SESSION_ID
             ),
         );
-        DFLT_FISH_HISTORY_SESSION_ID.to_owned()
+        default()
     }
 }
 
@@ -1786,21 +1819,25 @@ mod tests {
         History, HistoryItem, HistorySearch, PathList, PersistenceMode, SearchDirection,
         SearchFlags, SearchType, VACUUM_FREQUENCY,
     };
-    use crate::common::{ESCAPE_TEST_CHAR, ScopeGuard, osstr2wcstring, wcs2bytes, wcs2osstring};
-    use crate::env::{EnvMode, EnvSetMode, EnvStack};
-    use crate::fs::{LockedFile, WriteMethod};
-    use crate::path::path_get_data;
-    use crate::prelude::*;
-    use crate::tests::prelude::*;
+    use crate::{
+        common::ESCAPE_TEST_CHAR,
+        env::{EnvMode, EnvSetMode, EnvStack},
+        fs::{LockedFile, WriteMethod},
+        history::HistoryId,
+        prelude::*,
+        tests::prelude::test_init,
+    };
     use fish_build_helper::workspace_root;
     use fish_wcstringutil::{string_prefixes_string, string_prefixes_string_case_insensitive};
-    use rand::Rng;
-    use rand::rngs::ThreadRng;
-    use std::collections::VecDeque;
-    use std::io::BufReader;
-    use std::sync::Arc;
-    use std::time::UNIX_EPOCH;
-    use std::time::{Duration, SystemTime};
+    use fish_widestring::{osstr2wcstring, wcs2bytes};
+    use rand::{Rng as _, rngs::ThreadRng};
+    use std::{
+        collections::VecDeque,
+        ffi::OsString,
+        io::BufReader,
+        sync::Arc,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     fn history_contains(history: &History, txt: &wstr) -> bool {
         for i in 1.. {
@@ -1816,6 +1853,16 @@ mod tests {
         false
     }
 
+    // Helper to create a history with a custom directory, for testing.
+    fn create_test_history(name: &wstr, custom_dir: &wstr) -> Arc<History> {
+        History::new_with_directory(
+            HistoryId::Disk {
+                session_id: name.to_owned(),
+            },
+            Some(custom_dir.to_owned()),
+        )
+    }
+
     fn random_string(rng: &mut ThreadRng) -> WString {
         let mut result = WString::new();
         let max = rng.random_range(1..=32);
@@ -1829,9 +1876,10 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_history() {
-        let _cleanup = test_init();
+        let tmpdir = fish_tempfile::new_dir().unwrap();
+        let hist_dir = osstr2wcstring(tmpdir.path());
+
         macro_rules! test_history_matches {
             ($search:expr, $expected:expr) => {
                 let expected: Vec<&wstr> = $expected;
@@ -1858,7 +1906,7 @@ mod tests {
         let nocase = SearchFlags::IGNORE_CASE;
 
         // Populate a history.
-        let history = History::with_name(L!("test_history"));
+        let history = create_test_history(L!("test_history"), &hist_dir);
         history.clear();
         for s in items {
             history.add_commandline(s.to_owned());
@@ -2010,9 +2058,9 @@ mod tests {
         result
     }
 
-    fn pound_on_history(item_count: usize, idx: usize) -> Arc<History> {
+    fn write_history_entries(dir: &wstr, item_count: usize, idx: usize) -> Arc<History> {
         // Called in child thread to modify history.
-        let hist = History::new(L!("race_test"));
+        let hist = create_test_history(L!("race_test"), dir);
         let hist_lines = generate_history_lines(item_count, idx);
         for line in hist_lines {
             hist.add_commandline(line);
@@ -2022,23 +2070,16 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_history_races() {
-        let _cleanup = test_init();
+        // Place history in a temp directory.
+        let tmpdir = fish_tempfile::new_dir().unwrap();
+        let hist_dir = osstr2wcstring(tmpdir.path());
 
-        let tmp_path = std::env::current_dir()
-            .unwrap()
-            .join("history-races-test-balloon");
-        std::fs::write(&tmp_path, []).unwrap();
-        let _cleanup = ScopeGuard::new((), |()| {
-            std::fs::remove_file(&tmp_path).unwrap();
-        });
-        if LockedFile::new(
-            crate::fs::LockingMode::Exclusive(WriteMethod::RenameIntoPlace),
-            &osstr2wcstring(&tmp_path),
-        )
-        .is_err()
-        {
+        // Skip tests if we can't get an exclusive lock on a file in that directory.
+        let tmp_balloon = tmpdir.path().join("history-races-test-balloon");
+        std::fs::write(&tmp_balloon, []).unwrap();
+        let mode = crate::fs::LockingMode::Exclusive(WriteMethod::RenameIntoPlace);
+        if LockedFile::new(mode, &osstr2wcstring(&tmp_balloon)).is_err() {
             return;
         }
 
@@ -2052,12 +2093,13 @@ mod tests {
         const ITEM_COUNT: usize = 256;
 
         // Ensure history is clear.
-        History::new(L!("race_test")).clear();
+        create_test_history(L!("race_test"), &hist_dir).clear();
 
         let mut children = Vec::with_capacity(RACE_COUNT);
         for i in 0..RACE_COUNT {
+            let hist_dir = hist_dir.clone();
             children.push(std::thread::spawn(move || {
-                pound_on_history(ITEM_COUNT, i);
+                write_history_entries(&hist_dir, ITEM_COUNT, i);
             }));
         }
 
@@ -2074,7 +2116,7 @@ mod tests {
         time_barrier();
 
         // Ensure that we got sane, sorted results.
-        let hist = History::new(L!("race_test"));
+        let hist = create_test_history(L!("race_test"), &hist_dir);
 
         // History is enumerated from most recent to least
         // Every item should be the last item in some array
@@ -2128,25 +2170,26 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_history_external_rewrites() {
-        let _cleanup = test_init();
+        // Place history in a temp directory.
+        let tmpdir = fish_tempfile::new_dir().unwrap();
+        let hist_dir = osstr2wcstring(tmpdir.path());
 
         // Write some history to disk.
         {
-            let hist = pound_on_history(VACUUM_FREQUENCY / 2, 0);
+            let hist = write_history_entries(&hist_dir, VACUUM_FREQUENCY / 2, 0);
             hist.add_commandline("needle".into());
             hist.save();
         }
         std::thread::sleep(Duration::from_secs(1));
 
         // Read history from disk.
-        let hist = History::new(L!("race_test"));
+        let hist = create_test_history(L!("race_test"), &hist_dir);
         assert_eq!(hist.item_at_index(1).unwrap().str(), "needle");
 
         // Add items until we rewrite the file.
         // In practice this might be done by another shell.
-        pound_on_history(VACUUM_FREQUENCY, 0);
+        write_history_entries(&hist_dir, VACUUM_FREQUENCY, 0);
 
         for i in 1.. {
             if hist.item_at_index(i).unwrap().str() == "needle" {
@@ -2156,16 +2199,21 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_history_merge() {
-        let _cleanup = test_init();
+        let tmpdir = fish_tempfile::new_dir().unwrap();
+        let hist_dir = osstr2wcstring(tmpdir.path());
+
         // In a single fish process, only one history is allowed to exist with the given name But it's
         // common to have multiple history instances with the same name active in different processes,
         // e.g. when you have multiple shells open. We try to get that right and merge all their history
         // together. Test that case.
         const COUNT: usize = 3;
         let name = L!("merge_test");
-        let hists = [History::new(name), History::new(name), History::new(name)];
+        let hists = [
+            create_test_history(name, &hist_dir),
+            create_test_history(name, &hist_dir),
+            create_test_history(name, &hist_dir),
+        ];
         let texts = [L!("History 1"), L!("History 2"), L!("History 3")];
         let alt_texts = [
             L!("History Alt 1"),
@@ -2204,7 +2252,7 @@ mod tests {
         // Make a new history. It should contain everything. The time_barrier() is so that the timestamp
         // is newer, since we only pick up items whose timestamp is before the birth stamp.
         time_barrier();
-        let everything = History::new(name);
+        let everything = create_test_history(name, &hist_dir);
         for text in texts {
             assert!(history_contains(&everything, text));
         }
@@ -2265,10 +2313,13 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_history_path_detection() {
-        let _cleanup = test_init();
+        test_init();
         // Regression test for #7582.
+        // Temporary directory for the history files.
+        let hist_tmpdir = fish_tempfile::new_dir().unwrap();
+
+        // Temporary directory for the files we will detect.
         let tmpdir = fish_tempfile::new_dir().unwrap();
 
         // Place one valid file in the directory.
@@ -2283,7 +2334,8 @@ mod tests {
         test_vars.set_one(L!("PWD"), global_mode, wdir_path.clone());
         test_vars.set_one(L!("HOME"), global_mode, wdir_path.clone());
 
-        let history = History::with_name(L!("path_detection"));
+        let history =
+            create_test_history(L!("path_detection"), &osstr2wcstring(hist_tmpdir.path()));
         history.clear();
         assert_eq!(history.size(), 0);
         history.add_pending_with_file_detection(
@@ -2369,30 +2421,31 @@ mod tests {
         history.clear();
     }
 
-    fn install_sample_history(name: &wstr) {
-        let path = path_get_data().expect("Failed to get data directory");
+    fn install_sample_history(name: &wstr, hist_dir: &wstr) {
+        let dst_hist_path: OsString = format!("{}/{}_history", hist_dir, name).into();
         std::fs::copy(
             workspace_root()
                 .join("tests")
                 .join(std::str::from_utf8(&wcs2bytes(name)).unwrap()),
-            wcs2osstring(&(path + L!("/") + name + L!("_history"))),
+            dst_hist_path,
         )
         .unwrap();
     }
 
     #[test]
-    #[serial]
     fn test_history_formats() {
-        let _cleanup = test_init();
+        let tmpdir = fish_tempfile::new_dir().unwrap();
+        let hist_dir = osstr2wcstring(tmpdir.path());
+
         // Test inferring and reading legacy and bash history formats.
         let name = L!("history_sample_fish_2_0");
-        install_sample_history(name);
+        install_sample_history(name, &hist_dir);
         let expected: Vec<WString> = vec![
             "echo this has\\\nbackslashes".into(),
             "function foo\necho bar\nend".into(),
             "echo alpha".into(),
         ];
-        let test_history_imported = History::with_name(name);
+        let test_history_imported = create_test_history(name, &hist_dir);
         assert_eq!(test_history_imported.get_history(), expected);
         test_history_imported.clear();
 
@@ -2411,16 +2464,16 @@ mod tests {
             "history --help".into(),
             "echo foo".into(),
         ];
-        let test_history_imported_from_bash = History::with_name(L!("bash_import"));
+        let test_history_imported_from_bash = create_test_history(L!("bash_import"), &hist_dir);
         let file = std::fs::File::open(workspace_root().join("tests/history_sample_bash")).unwrap();
         test_history_imported_from_bash.populate_from_bash(BufReader::new(file));
         assert_eq!(test_history_imported_from_bash.get_history(), expected);
         test_history_imported_from_bash.clear();
 
         let name = L!("history_sample_corrupt1");
-        install_sample_history(name);
+        install_sample_history(name, &hist_dir);
         // We simply invoke get_string_representation. If we don't die, the test is a success.
-        let test_history_imported_from_corrupted = History::with_name(name);
+        let test_history_imported_from_corrupted = create_test_history(name, &hist_dir);
         let expected: Vec<WString> = vec![
             "no_newline_at_end_of_file".into(),
             "corrupt_prefix".into(),

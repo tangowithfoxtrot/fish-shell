@@ -1,8 +1,9 @@
 use crate::common::init_special_chars_once;
 use crate::complete::complete_invalidate_path;
 use crate::env::{DEFAULT_READ_BYTE_LIMIT, READ_BYTE_LIMIT};
-use crate::env::{EnvMode, EnvStack, Environment, setenv_lock, unsetenv_lock};
+use crate::env::{EnvMode, EnvStack, Environment as _, setenv_lock, unsetenv_lock};
 use crate::flog::flog;
+use crate::function;
 use crate::input_common::{update_wait_on_escape_ms, update_wait_on_sequence_key_ms};
 use crate::locale::{invalidate_numeric_locale, set_libc_locales};
 use crate::prelude::*;
@@ -11,14 +12,9 @@ use crate::reader::{
     reader_current_data, reader_schedule_prompt_repaint, reader_set_autosuggestion_enabled,
     reader_set_transient_prompt,
 };
-use crate::screen::{
-    IS_DUMB, LAYOUT_CACHE_SHARED, ONLY_GRAYSCALE, screen_set_midnight_commander_hack,
-};
+use crate::screen::{IS_DUMB, ONLY_GRAYSCALE, screen_set_midnight_commander_hack};
 use crate::terminal::ColorSupport;
-use crate::terminal::use_terminfo;
-use crate::tty_handoff::xtversion;
 use crate::wutil::fish_wcstoi;
-use crate::{function, terminal};
 use fish_wcstringutil::{bool_from_string, string_prefixes_string};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,11 +29,6 @@ const LOCALE_VARIABLES: [&wstr; 7] = [
     L!("LC_NUMERIC"),
     L!("LC_TIME"),
     L!("LOCPATH"),
-];
-
-#[rustfmt::skip]
-const CURSES_VARIABLES: [&wstr; 3] = [
-    L!("TERM"), L!("TERMINFO"), L!("TERMINFO_DIRS")
 ];
 
 /// Whether to use `posix_spawn()` when possible.
@@ -58,9 +49,7 @@ static VAR_DISPATCH_TABLE: once_cell::sync::Lazy<VarDispatchTable> =
             table.add_anon(name, vars!(handle_locale_change));
         }
 
-        for name in CURSES_VARIABLES {
-            table.add_anon(name, handle_term_change);
-        }
+        table.add_anon(L!("TERM"), handle_term_change);
 
         table.add(L!("TZ"), handle_tz_change);
         table.add_anon(L!("COLORTERM"), handle_fish_term_change);
@@ -71,7 +60,7 @@ static VAR_DISPATCH_TABLE: once_cell::sync::Lazy<VarDispatchTable> =
             L!("fish_sequence_key_delay_ms"),
             vars!(update_wait_on_sequence_key_ms),
         );
-        table.add_anon(L!("fish_emoji_width"), vars!(guess_emoji_width));
+        table.add_anon(L!("fish_emoji_width"), vars!(handle_emoji_width));
         table.add_anon(
             L!("fish_ambiguous_width"),
             vars!(handle_change_ambiguous_width),
@@ -169,51 +158,21 @@ fn handle_timezone(var_name: &wstr, vars: &EnvStack) {
 }
 
 /// Update the value of [`FISH_EMOJI_WIDTH`](fish_fallback::FISH_EMOJI_WIDTH).
-pub fn guess_emoji_width(vars: &EnvStack) {
+pub fn handle_emoji_width(vars: &EnvStack) {
     use fish_fallback::FISH_EMOJI_WIDTH;
 
     if let Some(width_str) = vars.get(L!("fish_emoji_width")) {
         // The only valid values are 1 or 2; we default to 1 if it was an invalid int.
-        let new_width = fish_wcstoi(&width_str.as_string()).unwrap_or(1).clamp(1, 2) as isize;
+        let new_width = fish_wcstoi(&width_str.as_string()).unwrap_or(1).clamp(1, 2);
+        let new_width = usize::try_from(new_width).unwrap_or_default();
         FISH_EMOJI_WIDTH.store(new_width, Ordering::Relaxed);
         flog!(
             term_support,
             "Overriding default fish_emoji_width w/",
             new_width
         );
-        return;
-    }
-
-    let term_program = vars
-        .get(L!("TERM_PROGRAM"))
-        .map_or_else(WString::new, |v| v.as_string());
-
-    // TODO(term-workaround)
-    if xtversion().unwrap_or(L!("")).starts_with(L!("iTerm2 ")) {
-        // iTerm2 now defaults to Unicode 9 sizes for anything after macOS 10.12
-        FISH_EMOJI_WIDTH.store(2, Ordering::Relaxed);
-        flog!(term_support, "default emoji width 2 for iTerm2");
-    } else if term_program == "Apple_Terminal" && {
-        let version = vars
-            .get(L!("TERM_PROGRAM_VERSION"))
-            .map(|v| v.as_string())
-            .and_then(|v| {
-                let mut consumed = 0;
-                crate::wutil::wcstod::wcstod(&v, '.', &mut consumed).ok()
-            })
-            .unwrap_or(0.0);
-        version as i32 >= 400
-    } {
-        // Apple Terminal on High Sierra
-        FISH_EMOJI_WIDTH.store(2, Ordering::Relaxed);
-        flog!(term_support, "default emoji width: 2 for", term_program);
     } else {
-        // Default to whatever the system's wcwidth gives for U+1F603, but only if it's at least
-        // 1 and at most 2.
-        #[cfg(not(cygwin))]
-        let width = fish_fallback::wcwidth('😃').clamp(1, 2);
-        #[cfg(cygwin)]
-        let width = 2_isize;
+        let width = 2_usize;
         FISH_EMOJI_WIDTH.store(width, Ordering::Relaxed);
         flog!(term_support, "default emoji width:", width);
     }
@@ -261,9 +220,9 @@ fn handle_change_ambiguous_width(vars: &EnvStack) {
         .map(|v| v.as_string())
         // We use the default value of 1 if it was an invalid int.
         .and_then(|fish_ambiguous_width| fish_wcstoi(&fish_ambiguous_width).ok())
-        .unwrap_or(1)
-        // Clamp in case of negative values.
-        .max(0) as isize;
+        .unwrap_or(1);
+    // Clamp in case of negative values.
+    let new_width = usize::try_from(new_width).unwrap_or_default();
     fish_fallback::FISH_AMBIGUOUS_WIDTH.store(new_width, Ordering::Relaxed);
 }
 
@@ -272,8 +231,8 @@ fn handle_term_size_change(vars: &EnvStack) {
 }
 
 fn handle_fish_history_change(vars: &EnvStack) {
-    let session_id = crate::history::history_session_id(vars);
-    reader_change_history(&session_id);
+    let history_id = crate::history::history_id(vars);
+    reader_change_history(history_id);
 }
 
 fn handle_fish_cursor_selection_mode_change(vars: &EnvStack) {
@@ -335,9 +294,7 @@ fn handle_locale_change(vars: &EnvStack) {
 }
 
 fn handle_term_change(vars: &EnvStack, suppress_repaint: bool) {
-    guess_emoji_width(vars);
     init_terminal(vars);
-    read_terminfo_database(vars);
     if !suppress_repaint {
         reader_schedule_prompt_repaint();
     }
@@ -404,7 +361,7 @@ fn run_inits(vars: &EnvStack) {
     init_locale(vars);
     init_special_chars_once();
     init_terminal(vars);
-    guess_emoji_width(vars);
+    handle_emoji_width(vars);
     update_wait_on_escape_ms(vars);
     update_wait_on_sequence_key_ms(vars);
     handle_read_limit_change(vars);
@@ -415,11 +372,13 @@ fn run_inits(vars: &EnvStack) {
 /// Updates our idea of whether we support term256 and term24bit (see issue #10222).
 fn update_fish_color_support(vars: &EnvStack) {
     // Detect or infer term256 support. If fish_term256 is set, we respect it. Otherwise, infer it
-    // from $TERM or use terminfo.
+    // from $TERM.
 
-    let term = vars.get_unless_empty(L!("TERM"));
-    let term = term.as_ref().map_or(L!(""), |term| &term.as_list()[0]);
-    let is_xterm_16color = term == "xterm-16color";
+    let is_xterm_16color = {
+        let term = vars.get_unless_empty(L!("TERM"));
+        let term = term.as_ref().map_or(L!(""), |term| &term.as_list()[0]);
+        term == "xterm-16color"
+    };
 
     let supports_256color = if let Some(fish_term256) = vars.get(L!("fish_term256")) {
         let ok = bool_from_string(&fish_term256.as_string());
@@ -512,32 +471,6 @@ fn init_terminal(vars: &EnvStack) {
     }
 
     update_fish_color_support(vars);
-}
-
-pub fn read_terminfo_database(vars: &EnvStack) {
-    if !use_terminfo() {
-        return;
-    }
-
-    // The current process' environment needs to be modified because the terminfo crate will
-    // read these variables
-    for var_name in CURSES_VARIABLES {
-        if let Some(value) = vars
-            .getf_unless_empty(var_name, EnvMode::EXPORT)
-            .map(|v| v.as_string())
-        {
-            flog!(term_support, "curses var", var_name, "=", value);
-            setenv_lock(var_name, &value, true);
-        } else {
-            flog!(term_support, "curses var", var_name, "is missing or empty");
-            unsetenv_lock(var_name);
-        }
-    }
-
-    terminal::setup();
-
-    // Invalidate the cached escape sequences since they may no longer be valid.
-    LAYOUT_CACHE_SHARED.lock().unwrap().clear();
 }
 
 /// Initialize the locale subsystem

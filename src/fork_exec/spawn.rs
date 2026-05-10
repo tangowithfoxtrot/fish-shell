@@ -5,7 +5,7 @@ use super::blocked_signals_for_job;
 use crate::exec::{PgroupPolicy, is_thompson_shell_script};
 use crate::proc::Job;
 use crate::redirection::Dup2List;
-use crate::signal::signals_to_default;
+use crate::signal::SIGNALS_TO_DEFAULT;
 use errno::Errno;
 use libc::{c_char, posix_spawn_file_actions_t, posix_spawnattr_t};
 use std::ffi::{CStr, CString};
@@ -116,7 +116,7 @@ impl PosixSpawner {
         };
 
         // Set our flags.
-        let mut flags: i32 = 0;
+        let mut flags = 0;
         flags |= libc::POSIX_SPAWN_SETSIGDEF;
         flags |= libc::POSIX_SPAWN_SETSIGMASK;
         if desired_pgid.is_some() {
@@ -129,7 +129,7 @@ impl PosixSpawner {
         }
 
         // Everybody gets default handlers.
-        attr.set_sigdefault(&signals_to_default)?;
+        attr.set_sigdefault(&SIGNALS_TO_DEFAULT)?;
 
         // Reset the sigmask.
         let mut sigmask = MaybeUninit::uninit();

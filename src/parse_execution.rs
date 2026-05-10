@@ -1,62 +1,65 @@
 //! Provides the "linkage" between an ast and actual execution structures (job_t, etc.).
 
-use crate::ast::{
-    self, BlockStatementHeader, Keyword, Leaf, Node, Statement, Token, unescape_keyword,
+use crate::{
+    ast::{
+        self, BlockStatementHeader, Keyword as _, Leaf as _, Node, Statement, Token as _,
+        unescape_keyword,
+    },
+    builtins::{
+        self,
+        error::Error,
+        shared::{
+            STATUS_CMD_ERROR, STATUS_CMD_OK, STATUS_CMD_UNKNOWN, STATUS_EXPAND_ERROR,
+            STATUS_ILLEGAL_CMD, STATUS_INVALID_ARGS, STATUS_NOT_EXECUTABLE,
+            STATUS_UNMATCHED_WILDCARD, builtin_exists,
+        },
+    },
+    common::valid_var_name,
+    complete::CompletionList,
+    env::{EnvMode, EnvStackSetResult, EnvVar, EnvVarFlags, Environment as _, Statuses},
+    err_fmt,
+    event::{self, Event},
+    exec::exec_job,
+    expand::{
+        ExpandFlags, ExpandResultCode, expand_one, expand_string, expand_to_command_and_args,
+    },
+    flog::flog,
+    function,
+    io::{IoChain, IoStreams, OutputStream, StringOutputStream},
+    job_group::JobGroup,
+    operation_context::OperationContext,
+    parse_constants::{
+        CALL_STACK_LIMIT_EXCEEDED_ERR_MSG, ERROR_TIME_BACKGROUND,
+        FAILED_EXPANSION_VARIABLE_NAME_ERR_MSG, ILLEGAL_FD_ERR_MSG,
+        INFINITE_FUNC_RECURSION_ERR_MSG, ParseError, ParseErrorCode, ParseErrorList, ParseKeyword,
+        ParseTokenType, StatementDecoration, parse_error_offset_source_start,
+    },
+    parse_tree::{NodeRef, ParsedSourceRef},
+    parse_util::{
+        MaybeParentheses::CommandSubstitution, locate_cmdsubst_range, unescape_wildcards,
+    },
+    parser::{
+        Block, BlockData, BlockId, BlockType, LoopStatus, Parser, ParserEnvSetMode, ProfileItem,
+    },
+    parser_keywords::parser_keywords_is_subcommand,
+    path::{path_as_implicit_cd, path_try_get_path},
+    prelude::*,
+    proc::{
+        ConcreteAssignment, Job, JobControl, JobProperties, JobRef, Process, ProcessType,
+        get_job_control_mode, job_reap, no_exec,
+    },
+    reader::fish_is_unwinding_for_exit,
+    redirection::{RedirectionMode, RedirectionSpec, RedirectionSpecList},
+    signal::Signal,
+    timer::push_timer,
+    tokenizer::{PipeOrRedir, TokenType, variable_assignment_equals_pos},
+    trace::{trace_if_enabled, trace_if_enabled_with_args},
+    wildcard::wildcard_match,
 };
-use crate::builtins;
-use crate::builtins::shared::{
-    BUILTIN_ERR_VARNAME, STATUS_CMD_ERROR, STATUS_CMD_OK, STATUS_CMD_UNKNOWN, STATUS_EXPAND_ERROR,
-    STATUS_ILLEGAL_CMD, STATUS_INVALID_ARGS, STATUS_NOT_EXECUTABLE, STATUS_UNMATCHED_WILDCARD,
-    builtin_exists,
-};
-use crate::common::{
-    ScopeGuard, ScopeGuarding, ScopedRefCell, escape, truncate_at_nul, valid_var_name,
-};
-use crate::complete::CompletionList;
-use crate::env::{EnvMode, EnvStackSetResult, EnvVar, EnvVarFlags, Environment, Statuses};
-use crate::event::{self, Event};
-use crate::exec::exec_job;
-use crate::expand::{
-    ExpandFlags, ExpandResultCode, expand_one, expand_string, expand_to_command_and_args,
-};
-use crate::flog::flog;
-use crate::function;
-use crate::io::{IoChain, IoStreams, OutputStream, StringOutputStream};
-use crate::job_group::JobGroup;
-use crate::operation_context::OperationContext;
-use crate::parse_constants::{
-    CALL_STACK_LIMIT_EXCEEDED_ERR_MSG, ERROR_TIME_BACKGROUND,
-    FAILED_EXPANSION_VARIABLE_NAME_ERR_MSG, ILLEGAL_FD_ERR_MSG, INFINITE_FUNC_RECURSION_ERR_MSG,
-    ParseError, ParseErrorCode, ParseErrorList, ParseKeyword, ParseTokenType, StatementDecoration,
-    parse_error_offset_source_start,
-};
-use crate::parse_tree::{NodeRef, ParsedSourceRef};
-use crate::parse_util::{
-    MaybeParentheses::CommandSubstitution, locate_cmdsubst_range, unescape_wildcards,
-};
-use crate::parser::{
-    Block, BlockData, BlockId, BlockType, LoopStatus, Parser, ParserEnvSetMode, ProfileItem,
-};
-use crate::parser_keywords::parser_keywords_is_subcommand;
-use crate::path::{path_as_implicit_cd, path_try_get_path};
-use crate::prelude::*;
-use crate::proc::{
-    ConcreteAssignment, Job, JobControl, JobProperties, JobRef, Process, ProcessType,
-    get_job_control_mode, job_reap, no_exec,
-};
-use crate::reader::fish_is_unwinding_for_exit;
-use crate::redirection::{RedirectionMode, RedirectionSpec, RedirectionSpecList};
-use crate::signal::Signal;
-use crate::timer::push_timer;
-use crate::tokenizer::{PipeOrRedir, TokenType, variable_assignment_equals_pos};
-use crate::trace::{trace_if_enabled, trace_if_enabled_with_args};
-use crate::wildcard::wildcard_match;
-use fish_common::help_section;
-use fish_widestring::WExt;
+use fish_common::{ScopeGuard, escape, help_section, truncate_at_nul};
+use fish_widestring::WExt as _;
 use libc::{ENOTDIR, EXIT_SUCCESS, STDERR_FILENO, STDOUT_FILENO, c_int};
-use std::io::ErrorKind;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::{io::ErrorKind, rc::Rc, sync::Arc};
 
 /// An eval_result represents evaluation errors including wildcards which failed to match, syntax
 /// errors, or other expansion errors. It also tracks when evaluation was skipped due to signal
@@ -76,17 +79,13 @@ pub enum EndExecutionReason {
     Error,
 }
 
-pub struct ExecutionContext<'a> {
+pub struct ExecutionContext {
     // The parsed source and its AST.
     pstree: ParsedSourceRef,
 
     // If set, one of our processes received a cancellation signal (INT or QUIT) so we are
     // unwinding.
     cancel_signal: Option<Signal>,
-
-    // The currently executing pipeline node.
-    // This is shared with the Parser so that the Parser can access the current line.
-    pipeline_node: &'a ScopedRefCell<Option<NodeRef<ast::JobPipeline>>>,
 
     /// The block IO chain.
     /// For example, in `begin; foo ; end < file.txt` this would have the 'file.txt' IO.
@@ -116,30 +115,26 @@ macro_rules! report_error_formatted {
     }};
 }
 
-pub fn varname_error(command: &wstr, bad_name: &wstr) -> WString {
-    let mut e = wgettext_fmt!(
-        BUILTIN_ERR_VARNAME,
-        command,
+pub fn varname_error<'a>(command: &'a wstr, bad_name: &'a wstr) -> Error<'a> {
+    err_fmt!(
+        Error::INVALID_VARNAME,
         bad_name,
         help_section!("language#shell-variable-and-function-names")
-    );
-    e.push('\n');
-    e
+    )
+    .cmd(command)
 }
 
-impl<'a> ExecutionContext<'a> {
+impl ExecutionContext {
     /// Construct a context in preparation for evaluating a node in a tree, with the given block_io.
     /// The execution context may access the parser and parent job group (if any) through ctx.
     pub fn new(
         pstree: ParsedSourceRef,
         block_io: IoChain,
-        pipeline_node: &'a ScopedRefCell<Option<NodeRef<ast::JobPipeline>>>,
         test_only_suppress_stderr: bool,
     ) -> Self {
         Self {
             pstree,
             cancel_signal: None,
-            pipeline_node,
             block_io,
             test_only_suppress_stderr,
         }
@@ -152,7 +147,7 @@ impl<'a> ExecutionContext<'a> {
     pub fn eval_node(
         &mut self,
         ctx: &OperationContext<'_>,
-        node: &'a dyn Node,
+        node: &dyn Node,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         match node.kind() {
@@ -167,7 +162,7 @@ impl<'a> ExecutionContext<'a> {
     fn eval_statement(
         &mut self,
         ctx: &OperationContext<'_>,
-        statement: &'a ast::Statement,
+        statement: &ast::Statement,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         // Note we only expect block-style statements here. No not statements.
@@ -185,7 +180,7 @@ impl<'a> ExecutionContext<'a> {
     fn eval_job_list(
         &mut self,
         ctx: &OperationContext<'_>,
-        job_list: &'a ast::JobList,
+        job_list: &ast::JobList,
         associated_block: BlockId,
     ) -> EndExecutionReason {
         // Check for infinite recursion: a function which immediately calls itself..
@@ -207,8 +202,8 @@ impl<'a> ExecutionContext<'a> {
         // Check for stack overflow in case of function calls (regular stack overflow) or string
         // substitution blocks, which can be recursively called with eval (issue #9302).
         let block_type = ctx.parser().block_with_id(associated_block).typ();
-        if (block_type == BlockType::top && ctx.parser().function_stack_is_overflowing())
-            || (block_type == BlockType::subst && ctx.parser().is_eval_depth_exceeded())
+        if (block_type == BlockType::Top && ctx.parser().function_stack_is_overflowing())
+            || (block_type == BlockType::Subst && ctx.parser().is_eval_depth_exceeded())
         {
             return report_error!(
                 self,
@@ -238,7 +233,7 @@ impl<'a> ExecutionContext<'a> {
         if ld.returning {
             return Some(EndExecutionReason::ControlFlow);
         }
-        if ld.loop_status != LoopStatus::normals {
+        if ld.loop_status != LoopStatus::Normals {
             return Some(EndExecutionReason::ControlFlow);
         }
         None
@@ -324,8 +319,12 @@ impl<'a> ExecutionContext<'a> {
         let mut event_args = vec![];
         {
             let args = Self::get_argument_nodes_no_redirs(&statement.args_or_redirs);
-            let arg_result =
-                self.expand_arguments_from_nodes(ctx, &args, &mut event_args, Globspec::failglob);
+            let arg_result = self.expand_arguments_from_nodes(
+                ctx,
+                &args,
+                &mut event_args,
+                WildcardNoMatchBehavior::Fail,
+            );
             if arg_result != EndExecutionReason::Ok {
                 return arg_result;
             }
@@ -352,7 +351,7 @@ impl<'a> ExecutionContext<'a> {
                 buffer.push_utfstr(&escape(arg));
             }
             let parser = ctx.parser();
-            let prev_statuses = parser.get_last_statuses();
+            let prev_statuses = parser.last_statuses();
 
             let event = Event::generic(L!("fish_command_not_found").to_owned());
             let b = parser.push_block(Block::event_block(event));
@@ -384,12 +383,12 @@ impl<'a> ExecutionContext<'a> {
         self.node_source(node).to_owned()
     }
 
-    fn infinite_recursive_statement_in_job_list<'b>(
+    fn infinite_recursive_statement_in_job_list<'a>(
         &self,
         ctx: &OperationContext<'_>,
-        jobs: &'b ast::JobList,
+        jobs: &'a ast::JobList,
         out_func_name: &mut WString,
-    ) -> Option<&'b ast::DecoratedStatement> {
+    ) -> Option<&'a ast::DecoratedStatement> {
         // This is a bit fragile. It is a test to see if we are inside of function call, but
         // not inside a block in that function call. If, in the future, the rules for what
         // block scopes are pushed on function invocation changes, then this check will break.
@@ -397,7 +396,7 @@ impl<'a> ExecutionContext<'a> {
         let parent;
         let parent_fn_name = {
             match (parser.block_at_index(0), parser.block_at_index(1)) {
-                (Some(current), Some(p)) if current.typ() == BlockType::top => {
+                (Some(current), Some(p)) if current.typ() == BlockType::Top => {
                     parent = p;
                     match parent.data() {
                         Some(BlockData::Function { name, .. }) => name,
@@ -416,7 +415,7 @@ impl<'a> ExecutionContext<'a> {
         let job = &jc.job;
 
         // Helper to return if a statement is infinitely recursive in this function.
-        let statement_recurses = |stat: &'b ast::Statement| -> Option<&'b ast::DecoratedStatement> {
+        let statement_recurses = |stat: &'a ast::Statement| -> Option<&'a ast::DecoratedStatement> {
             // Ignore non-decorated statements like `if`, etc.
             let Statement::Decorated(dc) = &stat else {
                 return None;
@@ -703,7 +702,7 @@ impl<'a> ExecutionContext<'a> {
         not_statement: &ast::NotStatement,
     ) -> EndExecutionReason {
         {
-            let mut flags = job.mut_flags();
+            let mut flags = job.flags_mut();
             flags.negate = !flags.negate;
         }
         self.populate_job_process(
@@ -803,9 +802,9 @@ impl<'a> ExecutionContext<'a> {
         } else {
             // Not implicit cd.
             let glob_behavior = if [L!("set"), L!("count"), L!("path")].contains(&&cmd[..]) {
-                Globspec::nullglob
+                WildcardNoMatchBehavior::Allow
             } else {
-                Globspec::failglob
+                WildcardNoMatchBehavior::Fail
             };
             // Form the list of arguments. The command is the first argument, followed by any arguments
             // from expanding the command, followed by the argument nodes themselves. E.g. if the
@@ -866,7 +865,7 @@ impl<'a> ExecutionContext<'a> {
     fn run_block_statement(
         &mut self,
         ctx: &OperationContext<'_>,
-        statement: &'a ast::BlockStatement,
+        statement: &ast::BlockStatement,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         let bh = &statement.header;
@@ -884,8 +883,8 @@ impl<'a> ExecutionContext<'a> {
     fn run_for_statement(
         &mut self,
         ctx: &OperationContext<'_>,
-        header: &'a ast::ForHeader,
-        block_contents: &'a ast::JobList,
+        header: &ast::ForHeader,
+        block_contents: &ast::JobList,
     ) -> EndExecutionReason {
         // Get the variable name: `for var_name in ...`. We expand the variable name. It better result
         // in just one.
@@ -908,15 +907,19 @@ impl<'a> ExecutionContext<'a> {
                 STATUS_INVALID_ARGS,
                 header.var_name,
                 "%s",
-                varname_error(L!("for"), &for_var_name)
+                &varname_error(L!("for"), &for_var_name).to_string()
             );
         }
 
         // Get the contents to iterate over.
         let mut arguments = vec![];
         let arg_nodes = Self::get_argument_nodes(&header.args);
-        let ret =
-            self.expand_arguments_from_nodes(ctx, &arg_nodes, &mut arguments, Globspec::nullglob);
+        let ret = self.expand_arguments_from_nodes(
+            ctx,
+            &arg_nodes,
+            &mut arguments,
+            WildcardNoMatchBehavior::Allow,
+        );
         if ret != EndExecutionReason::Ok {
             return ret;
         }
@@ -965,7 +968,7 @@ impl<'a> ExecutionContext<'a> {
             );
             event::fire(ctx.parser(), evt.clone());
 
-            ctx.parser().libdata_mut().loop_status = LoopStatus::normals;
+            ctx.parser().libdata_mut().loop_status = LoopStatus::Normals;
 
             // Push and pop the block again and again to clear variables
             let fb = ctx.parser().push_block(Block::for_block());
@@ -974,8 +977,8 @@ impl<'a> ExecutionContext<'a> {
 
             if self.check_end_execution(ctx) == Some(EndExecutionReason::ControlFlow) {
                 // Handle break or continue.
-                let do_break = ctx.parser().libdata().loop_status == LoopStatus::breaks;
-                ctx.parser().libdata_mut().loop_status = LoopStatus::normals;
+                let do_break = ctx.parser().libdata().loop_status == LoopStatus::Breaks;
+                ctx.parser().libdata_mut().loop_status = LoopStatus::Normals;
                 if do_break {
                     break;
                 }
@@ -989,7 +992,7 @@ impl<'a> ExecutionContext<'a> {
     fn run_if_statement(
         &mut self,
         ctx: &OperationContext<'_>,
-        statement: &'a ast::IfStatement,
+        statement: &ast::IfStatement,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         let mut result = EndExecutionReason::Ok;
@@ -1020,8 +1023,8 @@ impl<'a> ExecutionContext<'a> {
             if cond_ret == EndExecutionReason::Ok {
                 cond_ret = self.run_andor_job_list(ctx, &if_clause.andor_tail, associated_block);
             }
-            let take_branch = cond_ret == EndExecutionReason::Ok
-                && ctx.parser().get_last_status() == EXIT_SUCCESS;
+            let take_branch =
+                cond_ret == EndExecutionReason::Ok && ctx.parser().last_status() == EXIT_SUCCESS;
 
             if take_branch {
                 // Condition succeeded.
@@ -1079,7 +1082,7 @@ impl<'a> ExecutionContext<'a> {
     fn run_switch_statement(
         &mut self,
         ctx: &OperationContext<'_>,
-        statement: &'a ast::SwitchStatement,
+        statement: &ast::SwitchStatement,
     ) -> EndExecutionReason {
         // Get the switch variable.
         let switch_value = self.node_source_owned(&statement.argument);
@@ -1157,7 +1160,7 @@ impl<'a> ExecutionContext<'a> {
                 ctx,
                 &arg_nodes,
                 &mut case_args,
-                Globspec::failglob,
+                WildcardNoMatchBehavior::Fail,
             );
             if case_result == EndExecutionReason::Ok {
                 for arg in case_args {
@@ -1189,8 +1192,8 @@ impl<'a> ExecutionContext<'a> {
     fn run_while_statement(
         &mut self,
         ctx: &OperationContext<'_>,
-        header: &'a ast::WhileHeader,
-        contents: &'a ast::JobList,
+        header: &ast::WhileHeader,
+        contents: &ast::JobList,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         let mut ret = EndExecutionReason::Ok;
@@ -1215,7 +1218,7 @@ impl<'a> ExecutionContext<'a> {
             let cond_saved_status = if first_cond_check {
                 Statuses::just(EXIT_SUCCESS)
             } else {
-                ctx.parser().get_last_statuses()
+                ctx.parser().last_statuses()
             };
             first_cond_check = false;
 
@@ -1230,7 +1233,7 @@ impl<'a> ExecutionContext<'a> {
             // exit the loop.
             if cond_ret != EndExecutionReason::Ok {
                 break;
-            } else if ctx.parser().get_last_status() != EXIT_SUCCESS {
+            } else if ctx.parser().last_status() != EXIT_SUCCESS {
                 ctx.parser().set_last_statuses(cond_saved_status);
                 break;
             }
@@ -1242,7 +1245,7 @@ impl<'a> ExecutionContext<'a> {
             }
 
             // Push a while block and then check its cancellation reason.
-            ctx.parser().libdata_mut().loop_status = LoopStatus::normals;
+            ctx.parser().libdata_mut().loop_status = LoopStatus::Normals;
 
             let wb = ctx.parser().push_block(Block::while_block());
             self.run_job_list(ctx, contents, Some(wb));
@@ -1251,8 +1254,8 @@ impl<'a> ExecutionContext<'a> {
 
             if cancel_reason == Some(EndExecutionReason::ControlFlow) {
                 // Handle break or continue.
-                let do_break = ctx.parser().libdata().loop_status == LoopStatus::breaks;
-                ctx.parser().libdata_mut().loop_status = LoopStatus::normals;
+                let do_break = ctx.parser().libdata().loop_status == LoopStatus::Breaks;
+                ctx.parser().libdata_mut().loop_status = LoopStatus::Normals;
                 if do_break {
                     break;
                 } else {
@@ -1281,8 +1284,12 @@ impl<'a> ExecutionContext<'a> {
         let mut arguments = vec![];
         let mut arg_nodes = Self::get_argument_nodes(&header.args);
         arg_nodes.insert(0, &header.first_arg);
-        let result =
-            self.expand_arguments_from_nodes(ctx, &arg_nodes, &mut arguments, Globspec::failglob);
+        let result = self.expand_arguments_from_nodes(
+            ctx,
+            &arg_nodes,
+            &mut arguments,
+            WildcardNoMatchBehavior::Fail,
+        );
 
         if result != EndExecutionReason::Ok {
             return result;
@@ -1319,13 +1326,13 @@ impl<'a> ExecutionContext<'a> {
     fn run_begin_statement(
         &mut self,
         ctx: &OperationContext<'_>,
-        contents: &'a ast::JobList,
+        contents: &ast::JobList,
     ) -> EndExecutionReason {
         // Basic begin/end block. Push a scope block, run jobs, pop it
         trace_if_enabled(ctx.parser(), L!("begin"));
         let sb = ctx
             .parser()
-            .push_block(Block::scope_block(BlockType::begin));
+            .push_block(Block::scope_block(BlockType::Begin));
         let ret = self.run_job_list(ctx, contents, Some(sb));
         ctx.parser().pop_block(sb);
         trace_if_enabled(ctx.parser(), L!("end begin"));
@@ -1355,7 +1362,7 @@ impl<'a> ExecutionContext<'a> {
         ctx: &OperationContext<'_>,
         argument_nodes: &AstArgsList<'_>,
         out_arguments: &mut Vec<WString>,
-        glob_behavior: Globspec,
+        glob_behavior: WildcardNoMatchBehavior,
     ) -> EndExecutionReason {
         // Get all argument nodes underneath the statement. We guess we'll have that many arguments (but
         // may have more or fewer, if there are wildcards involved).
@@ -1383,7 +1390,7 @@ impl<'a> ExecutionContext<'a> {
                     return EndExecutionReason::Cancelled;
                 }
                 ExpandResultCode::wildcard_no_match => {
-                    if glob_behavior == Globspec::failglob {
+                    if glob_behavior == WildcardNoMatchBehavior::Fail {
                         // For no_exec, ignore the error - this might work at runtime.
                         if no_exec() {
                             return EndExecutionReason::Ok;
@@ -1520,7 +1527,7 @@ impl<'a> ExecutionContext<'a> {
     fn run_1_job(
         &mut self,
         ctx: &OperationContext<'_>,
-        job_node: &'a ast::JobPipeline,
+        job_node: &ast::JobPipeline,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         if let Some(ret) = self.check_end_execution(ctx) {
@@ -1537,14 +1544,31 @@ impl<'a> ExecutionContext<'a> {
 
         // Save the executing node.
         let executing_node = NodeRef::new(Arc::clone(self.pstree()), job_node);
-        let _saved_node = self.pipeline_node.scoped_replace(Some(executing_node));
+        let _saved_node = ctx
+            .parser()
+            .current_node()
+            .scoped_replace(Some(executing_node));
 
         // Profiling support.
-        let profile_item_id = ctx.parser().create_profile_item();
-        let start_time = if profile_item_id.is_some() {
-            ProfileItem::now()
-        } else {
-            0
+        let finalize_profile_item = {
+            let profile_item_id = ctx.parser().create_profile_item();
+            let start_time = if profile_item_id.is_some() {
+                ProfileItem::now()
+            } else {
+                0
+            };
+            move |ctx: &OperationContext<'_>, cmd: WString, skipped: bool| {
+                let Some(profile_item_id) = profile_item_id else {
+                    return;
+                };
+                let parser = ctx.parser();
+                let mut profile_items = parser.profile_items_mut();
+                let profile_item = &mut profile_items[profile_item_id];
+                profile_item.duration = ProfileItem::now() - start_time;
+                profile_item.level = ctx.parser().scope().eval_level;
+                profile_item.cmd = cmd;
+                profile_item.skipped = skipped;
+            }
         };
 
         let job_is_background = job_node.bg.is_some();
@@ -1597,16 +1621,11 @@ impl<'a> ExecutionContext<'a> {
                 };
             }
 
-            if let Some(profile_item_id) = profile_item_id {
-                let parser = ctx.parser();
-                let mut profile_items = parser.profile_items_mut();
-                let profile_item = &mut profile_items[profile_item_id];
-                profile_item.duration = ProfileItem::now() - start_time;
-                profile_item.level = ctx.parser().scope().eval_level;
-                profile_item.cmd =
-                    profiling_cmd_name_for_redirectable_block(statement, self.pstree());
-                profile_item.skipped = false;
-            }
+            finalize_profile_item(
+                ctx,
+                profiling_cmd_name_for_redirectable_block(statement, self.pstree()),
+                false,
+            );
 
             return result;
         }
@@ -1635,7 +1654,7 @@ impl<'a> ExecutionContext<'a> {
         // Populate the job. This may fail for reasons like command_not_found. If this fails, an error
         // will have been printed.
         let pop_result = self.populate_job_from_job_node(ctx, &mut job, job_node, associated_block);
-        ScopeGuarding::commit(_caller_id);
+        drop(_caller_id);
 
         // Clean up the job on failure or cancellation.
         if pop_result == EndExecutionReason::Ok {
@@ -1656,7 +1675,7 @@ impl<'a> ExecutionContext<'a> {
                 if !exec_job(parser, &job, self.block_io.clone()) {
                     // No process in the job successfully launched.
                     // Ensure statuses are set (#7540).
-                    if let Some(statuses) = job.get_statuses() {
+                    if let Some(statuses) = job.statuses() {
                         parser.set_last_statuses(statuses);
                         parser.libdata_mut().status_count += 1;
                     }
@@ -1674,15 +1693,11 @@ impl<'a> ExecutionContext<'a> {
             }
         }
 
-        if let Some(profile_item_id) = profile_item_id {
-            let parser = ctx.parser();
-            let mut profile_items = parser.profile_items_mut();
-            let profile_item = &mut profile_items[profile_item_id];
-            profile_item.duration = ProfileItem::now() - start_time;
-            profile_item.level = ctx.parser().scope().eval_level;
-            profile_item.cmd = job.command().to_owned();
-            profile_item.skipped = pop_result != EndExecutionReason::Ok;
-        }
+        finalize_profile_item(
+            ctx,
+            job.command().to_owned(),
+            pop_result != EndExecutionReason::Ok,
+        );
 
         job_reap(ctx.parser(), false, Some(&self.block_io)); // clean up jobs
         pop_result
@@ -1691,7 +1706,7 @@ impl<'a> ExecutionContext<'a> {
     fn test_and_run_1_job_conjunction(
         &mut self,
         ctx: &OperationContext<'_>,
-        jc: &'a ast::JobConjunction,
+        jc: &ast::JobConjunction,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         // Test this job conjunction if it has an 'and' or 'or' decorator.
@@ -1702,7 +1717,7 @@ impl<'a> ExecutionContext<'a> {
         // Maybe skip the job if it has a leading and/or.
         let mut skip = false;
         if let Some(deco) = &jc.decorator {
-            let last_status = ctx.parser().get_last_status();
+            let last_status = ctx.parser().last_status();
             match deco.keyword() {
                 ParseKeyword::And => {
                     // AND. Skip if the last job failed.
@@ -1726,7 +1741,7 @@ impl<'a> ExecutionContext<'a> {
     fn run_job_conjunction(
         &mut self,
         ctx: &OperationContext<'_>,
-        job_expr: &'a ast::JobConjunction,
+        job_expr: &ast::JobConjunction,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         if let Some(reason) = self.check_end_execution(ctx) {
@@ -1734,14 +1749,11 @@ impl<'a> ExecutionContext<'a> {
         }
         let mut result = self.run_1_job(ctx, &job_expr.job, associated_block);
         for jc in &job_expr.continuations {
-            if result != EndExecutionReason::Ok {
-                return result;
-            }
             if let Some(reason) = self.check_end_execution(ctx) {
                 return reason;
             }
             // Check the conjunction type.
-            let last_status = ctx.parser().get_last_status();
+            let last_status = ctx.parser().last_status();
             let skip = match jc.conjunction.token_type() {
                 ParseTokenType::AndAnd => {
                     // AND. Skip if the last job failed.
@@ -1763,7 +1775,7 @@ impl<'a> ExecutionContext<'a> {
     fn run_job_list(
         &mut self,
         ctx: &OperationContext<'_>,
-        job_list_node: &'a ast::JobList,
+        job_list_node: &ast::JobList,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         let mut result = EndExecutionReason::Ok;
@@ -1777,7 +1789,7 @@ impl<'a> ExecutionContext<'a> {
     fn run_andor_job_list(
         &mut self,
         ctx: &OperationContext<'_>,
-        job_list_node: &'a ast::AndorJobList,
+        job_list_node: &ast::AndorJobList,
         associated_block: Option<BlockId>,
     ) -> EndExecutionReason {
         let mut result = EndExecutionReason::Ok;
@@ -1888,7 +1900,7 @@ impl<'a> ExecutionContext<'a> {
             ));
         }
         j.group().is_foreground.store(!j.is_initially_background());
-        j.mut_flags().is_group_root = true;
+        j.flags_mut().is_group_root = true;
     }
 
     // Return whether we should apply job control to our processes.
@@ -1905,9 +1917,11 @@ impl<'a> ExecutionContext<'a> {
 }
 
 #[derive(Eq, PartialEq)]
-enum Globspec {
-    failglob,
-    nullglob,
+enum WildcardNoMatchBehavior {
+    /// failglob
+    Fail,
+    /// nullglob
+    Allow,
 }
 type AstArgsList<'a> = Vec<&'a ast::Argument>;
 

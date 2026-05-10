@@ -54,7 +54,7 @@ It also provides a large number of program specific scripted completions. Most o
 
 You can also write your own completions or install some you got from someone else. For that, see :doc:`Writing your own completions <completions>`.
 
-Completion scripts are loaded on demand, like :ref:`functions are <syntax-function-autoloading>`. The difference is the ``$fish_complete_path`` :ref:`list <variables-lists>` is used instead of ``$fish_function_path``. Typically you can drop new completions in ~/.config/fish/completions/name-of-command.fish and fish will find them automatically.
+Completion scripts are loaded on demand, like :ref:`functions are <syntax-function-autoloading>`. The difference is the ``$fish_complete_path`` :ref:`list <variables-lists>` is used instead of ``$fish_function_path``. Typically you can drop new completions in ``~/.config/fish/completions/<name-of-command>.fish`` and fish will find them automatically.
 
 .. _syntax-highlighting:
 
@@ -105,6 +105,7 @@ Syntax highlighting variables
 
 The colors used by fish for syntax highlighting can be configured by changing the values of various variables. The value of these variables can be one of the colors accepted by the :doc:`set_color <cmds/set_color>` command.
 Options accepted by ``set_color`` like
+``--foreground=``,
 ``--background=``,
 ``--bold``,
 ``--dim``,

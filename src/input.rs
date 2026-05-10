@@ -1,20 +1,23 @@
-use crate::common::{Named, escape, get_by_sorted_name};
-use crate::env::Environment;
-use crate::flog::flog;
-use crate::global_safety::RelaxedAtomicBool;
-use crate::input_common::{
-    CharEvent, CharInputStyle, ImplicitEvent, InputEventQueuer, KeyMatchQuality,
-    R_END_INPUT_FUNCTIONS, ReadlineCmd, match_key_event_to_key,
+use crate::{
+    env::Environment,
+    flog::flog,
+    global_safety::RelaxedAtomicBool,
+    input_common::{
+        CharEvent, CharInputStyle, ImplicitEvent, InputEventQueuer, KeyMatchQuality,
+        R_END_INPUT_FUNCTIONS, ReadlineCmd, match_key_event_to_key,
+    },
+    key::{self, Key, Modifiers, canonicalize_raw_escapes, ctrl},
+    prelude::*,
+    reader::{Reader, reader_reset_interrupted},
+    threads::assert_is_main_thread,
 };
-use crate::key::{self, Key, Modifiers, canonicalize_raw_escapes, ctrl};
-use crate::prelude::*;
-use crate::reader::{Reader, reader_reset_interrupted};
-use crate::threads::assert_is_main_thread;
-use fish_common::assert_sorted_by_name;
-use std::mem;
-use std::sync::{
-    LazyLock, Mutex, MutexGuard,
-    atomic::{AtomicU32, Ordering},
+use fish_common::{Named, assert_sorted_by_name, escape, get_by_sorted_name};
+use std::{
+    mem,
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 pub const FISH_BIND_MODE_VAR: &wstr = L!("fish_bind_mode");
@@ -162,6 +165,7 @@ const INPUT_FUNCTION_METADATA: &[InputFunctionMetadata] = &[
     make_md(L!("forward-word"), ReadlineCmd::ForwardWordEmacs),
     make_md(L!("forward-word-end"), ReadlineCmd::ForwardWordEnd),
     make_md(L!("forward-word-vi"), ReadlineCmd::ForwardWordVi),
+    make_md(L!("get-key"), ReadlineCmd::GetKey),
     make_md(L!("history-delete"), ReadlineCmd::HistoryDelete),
     make_md(L!("history-last-token-search-backward"), ReadlineCmd::HistoryLastTokenSearchBackward),
     make_md(L!("history-last-token-search-forward"), ReadlineCmd::HistoryLastTokenSearchForward),
@@ -238,10 +242,18 @@ pub struct InputMappingSet {
     preset_mapping_list: Vec<InputMapping>,
 }
 
+impl InputMappingSet {
+    const fn new() -> Self {
+        Self {
+            mapping_list: Vec::new(),
+            preset_mapping_list: Vec::new(),
+        }
+    }
+}
+
 /// Access the singleton input mapping set.
 pub fn input_mappings() -> MutexGuard<'static, InputMappingSet> {
-    static INPUT_MAPPINGS: LazyLock<Mutex<InputMappingSet>> =
-        LazyLock::new(|| Mutex::new(InputMappingSet::default()));
+    static INPUT_MAPPINGS: Mutex<InputMappingSet> = Mutex::new(InputMappingSet::new());
     INPUT_MAPPINGS.lock().unwrap()
 }
 
@@ -349,19 +361,19 @@ pub fn init_input() {
         };
 
         add(vec![], "self-insert");
-        add(vec![Key::from_raw(key::Enter)], "execute");
-        add(vec![Key::from_raw(key::Tab)], "complete");
+        add(vec![Key::from_raw(key::ENTER)], "execute");
+        add(vec![Key::from_raw(key::TAB)], "complete");
         add(vec![ctrl('c')], "cancel-commandline");
         add(vec![ctrl('d')], "exit");
         add(vec![ctrl('e')], "bind");
         add(vec![ctrl('s')], "pager-toggle-search");
         add(vec![ctrl('u')], "backward-kill-line");
-        add(vec![Key::from_raw(key::Backspace)], "backward-delete-char");
+        add(vec![Key::from_raw(key::BACKSPACE)], "backward-delete-char");
         // Arrows - can't have functions, so *-or-search isn't available.
-        add(vec![Key::from_raw(key::Up)], "up-line");
-        add(vec![Key::from_raw(key::Down)], "down-line");
-        add(vec![Key::from_raw(key::Right)], "forward-char");
-        add(vec![Key::from_raw(key::Left)], "backward-char");
+        add(vec![Key::from_raw(key::UP)], "up-line");
+        add(vec![Key::from_raw(key::DOWN)], "down-line");
+        add(vec![Key::from_raw(key::RIGHT)], "forward-char");
+        add(vec![Key::from_raw(key::LEFT)], "backward-char");
         // Emacs style
         add(vec![ctrl('p')], "up-line");
         add(vec![ctrl('n')], "down-line");
@@ -573,11 +585,11 @@ impl<'q, Queuer: InputEventQueuer + ?Sized> EventQueuePeeker<'q, Queuer> {
             !seq.is_empty(),
             "Empty sequence passed to try_peek_sequence"
         );
-        let mut prev = Key::from_raw(key::Invalid);
+        let mut prev = Key::from_raw(key::INVALID);
         for key in seq {
             // If we just read an escape, we need to add a timeout for the next char,
             // to distinguish between the actual escape key and an "alt"-modifier.
-            let escaped = *style != KeyNameStyle::Plain && prev == Key::from_raw(key::Escape);
+            let escaped = *style != KeyNameStyle::Plain && prev == Key::from_raw(key::ESCAPE);
             let Some(spec) = self.next_is_char(style, *key, escaped) else {
                 return false;
             };
@@ -638,7 +650,7 @@ impl<'q, Queuer: InputEventQueuer + ?Sized> EventQueuePeeker<'q, Queuer> {
             if self.try_peek_sequence(&m.key_name_style, &m.seq, &mut quality) {
                 // // A binding for just escape should also be deferred
                 // // so escape sequences take precedence.
-                let is_escape = m.seq == vec![Key::from_raw(key::Escape)];
+                let is_escape = m.seq == vec![Key::from_raw(key::ESCAPE)];
                 let is_perfect_match = quality
                     .iter()
                     .all(|key_match| *key_match == KeyMatchQuality::Exact);
@@ -698,7 +710,9 @@ impl<'a> Reader<'a> {
             let evt = self.readch();
             match evt {
                 CharEvent::Readline(ref readline_event) => match readline_event.cmd {
-                    ReadlineCmd::SelfInsert | ReadlineCmd::SelfInsertNotFirst => {
+                    ReadlineCmd::SelfInsert
+                    | ReadlineCmd::SelfInsertNotFirst
+                    | ReadlineCmd::GetKey => {
                         // Typically self-insert is generated by the generic (empty) binding.
                         // However if it is generated by a real sequence, then insert that sequence.
                         let seq = readline_event.seq.chars().map(CharEvent::from_char);
@@ -721,11 +735,25 @@ impl<'a> Reader<'a> {
                                 kevt.input_style = CharInputStyle::NotFirst;
                             }
                         }
+                        if readline_event.cmd == ReadlineCmd::GetKey {
+                            if let CharEvent::Key(kevt) = res {
+                                return CharEvent::Command(sprintf!(
+                                    "set -g fish_key %s",
+                                    escape(
+                                        &kevt
+                                            .key
+                                            .codepoint_text()
+                                            .map(|c| WString::from_chars(vec![c]))
+                                            .unwrap_or_default()
+                                    )
+                                ));
+                            }
+                        }
                         return res;
                     }
                     ReadlineCmd::FuncAnd | ReadlineCmd::FuncOr => {
                         // If previous function has bad status, skip all functions that follow us.
-                        let fs = self.get_function_status();
+                        let fs = self.function_status();
                         if (!fs && readline_event.cmd == ReadlineCmd::FuncAnd)
                             || (fs && readline_event.cmd == ReadlineCmd::FuncOr)
                         {

@@ -1,8 +1,8 @@
-use crate::common::wcs2bytes;
 use crate::prelude::*;
 use crate::wildcard::wildcard_match;
-use crate::wutil::write_to_fd;
 use crate::{parse_util::unescape_wildcards, wutil::unescape_bytes_and_write_to_fd};
+use fish_util::write_to_fd;
+use fish_widestring::wcs2bytes;
 use libc::c_int;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -222,7 +222,7 @@ macro_rules! flog {
     ($category:ident, $($elem:expr),+ $(,)*) => {
         if $crate::flog::categories::$category.enabled.load(std::sync::atomic::Ordering::Relaxed) {
             #[allow(unused_imports)]
-            use $crate::{flog::{FloggableDisplay, FloggableDebug}};
+            use $crate::{flog::{FloggableDisplay as _, FloggableDebug as _}};
             let mut output: Vec<u8> = Vec::new();
             output.extend($crate::flog::categories::$category.name.to_flog_str());
             output.push(b':');

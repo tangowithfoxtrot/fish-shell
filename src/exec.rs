@@ -7,63 +7,65 @@ use crate::builtins::shared::{
     ErrorCode, STATUS_CMD_ERROR, STATUS_CMD_UNKNOWN, STATUS_NOT_EXECUTABLE, STATUS_READ_TOO_MUCH,
     builtin_run,
 };
-use crate::common::{
-    ScopeGuard, bytes2wcstring, exit_without_destructors, truncate_at_nul, wcs2bytes, wcs2zstring,
-    write_loop,
-};
-use crate::env::{EnvMode, EnvSetMode, EnvStack, Environment, READ_BYTE_LIMIT, Statuses};
+use crate::env::{EnvMode, EnvSetMode, EnvStack, Environment as _, READ_BYTE_LIMIT, Statuses};
 #[cfg(have_posix_spawn)]
 use crate::env_dispatch::use_posix_spawn;
 use crate::fds::{
     BorrowedFdFile, PIPE_ERROR, make_autoclose_pipes, make_fd_blocking, open_cloexec,
 };
 use crate::flog::{flog, flogf};
-use crate::fork_exec::PATH_BSHELL;
-use crate::fork_exec::blocked_signals_for_job;
-use crate::fork_exec::postfork::{
-    child_setup_process, execute_fork, execute_setpgid, report_setpgid_error,
-    safe_report_exec_error,
-};
 #[cfg(have_posix_spawn)]
 use crate::fork_exec::spawn::PosixSpawner;
+use crate::fork_exec::{
+    PATH_BSHELL, blocked_signals_for_job,
+    postfork::{
+        child_setup_process, execute_fork, execute_setpgid, report_setpgid_error,
+        signal_safe_report_exec_error,
+    },
+};
 use crate::function::{self, FunctionProperties};
 use crate::io::{
     BufferedOutputStream, FdOutputStream, IoBufferfill, IoChain, IoClose, IoMode, IoPipe,
     IoStreams, OutputStream, SeparatedBuffer, StringOutputStream,
 };
-use crate::nix::{getpid, isatty};
+use crate::nix::isatty;
 use crate::null_terminated_array::OwningNullTerminatedArray;
 use crate::parser::{Block, BlockId, BlockType, EvalRes, Parser, ParserEnvSetMode};
 use crate::prelude::*;
-use crate::proc::Pid;
 use crate::proc::{
-    InternalProc, Job, JobGroupRef, ProcStatus, Process, ProcessType, hup_jobs,
+    InternalProc, Job, JobGroupRef, Pid, ProcStatus, Process, ProcessType, hup_jobs,
     is_interactive_session, jobs_requiring_warning_on_exit, no_exec, print_exit_warning_for_jobs,
 };
-use crate::reader::{reader_run_count, safe_restore_term_mode};
+use crate::reader::{reader_run_count, restore_term_mode};
 use crate::redirection::{Dup2List, dup2_list_resolve_chain};
 use crate::threads::{ThreadPool, is_forked_child};
 use crate::trace::trace_if_enabled_with_args;
 use crate::tty_handoff::TtyHandoff;
-use crate::wutil::{fish_wcstol, perror};
+use crate::wutil::{fish_wcstol, perror_io};
 use errno::{errno, set_errno};
-use fish_widestring::ToWString;
+use fish_common::{ScopeGuard, exit_without_destructors, truncate_at_nul, write_loop};
+use fish_widestring::{ToWString as _, bytes2wcstring, wcs2bytes, wcs2zstring};
 use libc::{
     EACCES, ENOENT, ENOEXEC, ENOTDIR, EPIPE, EXIT_FAILURE, EXIT_SUCCESS, STDERR_FILENO,
     STDIN_FILENO, STDOUT_FILENO,
 };
-use nix::fcntl::OFlag;
-use nix::sys::stat;
-use nix::unistd::getpgrp;
-use std::ffi::CStr;
-use std::io::{Read, Write};
-use std::mem::MaybeUninit;
-use std::num::NonZeroU32;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::slice;
-use std::sync::{
-    Arc, OnceLock,
-    atomic::{AtomicUsize, Ordering},
+use nix::{
+    fcntl::OFlag,
+    sys::stat,
+    unistd::{getpgrp, getpid},
+};
+use std::sync::LazyLock;
+use std::{
+    ffi::CStr,
+    io::{Read as _, Write as _},
+    mem::MaybeUninit,
+    num::NonZeroU32,
+    os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd},
+    slice,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 /// The singleton shared exec thread pool.
@@ -71,9 +73,10 @@ use std::sync::{
 /// to their target fds.
 /// TODO: this IO could be multiplexed using FdMonitor.
 fn exec_thread_pool() -> &'static Arc<ThreadPool> {
-    static EXEC_THREAD_POOL: OnceLock<Arc<ThreadPool>> = OnceLock::new();
     // Use an unbounded queue because otherwise we risk deadlock.
-    EXEC_THREAD_POOL.get_or_init(|| ThreadPool::new(1, usize::MAX))
+    static EXEC_THREAD_POOL: LazyLock<Arc<ThreadPool>> =
+        LazyLock::new(|| ThreadPool::new(1, usize::MAX));
+    &EXEC_THREAD_POOL
 }
 
 /// Execute the processes specified by `j` in the parser \p.
@@ -235,7 +238,7 @@ pub fn exec_job(parser: &Parser, job: &Job, block_io: IoChain) -> bool {
     // If exec_error then a backgrounded job would have been terminated before it was ever assigned
     // a pgroup, so error out before setting last_pid.
     if !job.is_foreground() {
-        if let Some(last_pid) = job.get_last_pid() {
+        if let Some(last_pid) = job.last_pid() {
             parser.set_one(
                 L!("last_pid"),
                 ParserEnvSetMode::new(EnvMode::GLOBAL),
@@ -392,7 +395,7 @@ pub fn is_thompson_shell_script(path: &CStr) -> bool {
 /// This function is executed by the child process created by a call to fork(). It should be called
 /// after \c child_setup_process. It calls execve to replace the fish process image with the command
 /// specified in \c p. It never returns. Called in a forked child! Do not allocate memory, etc.
-fn safe_launch_process(
+fn signal_safe_launch_process(
     _p: &Process,
     actual_cmd: &CStr,
     argv: &OwningNullTerminatedArray,
@@ -430,7 +433,7 @@ fn safe_launch_process(
     }
 
     set_errno(err);
-    safe_report_exec_error(errno().0, actual_cmd, argv, envv);
+    signal_safe_report_exec_error(errno().0, actual_cmd, argv, envv);
     exit_without_destructors(exit_code_from_exec_error(err.0));
 }
 
@@ -448,9 +451,9 @@ fn launch_process_nofork(vars: &EnvStack, p: &Process) -> ! {
     let actual_cmd = wcs2zstring(&p.actual_cmd);
 
     // Ensure the terminal modes are what they were before we changed them.
-    safe_restore_term_mode();
+    restore_term_mode();
     // Bounce to launch_process. This never returns.
-    safe_launch_process(p, &actual_cmd, &argv, &envp);
+    signal_safe_launch_process(p, &actual_cmd, &argv, &envp);
 }
 
 // Returns whether we can use posix spawn for a given process in a given job.
@@ -625,7 +628,7 @@ fn run_internal_process(p: &Process, outdata: Vec<u8>, errdata: Vec<u8>, ios: &I
         if !f.skip_out() {
             if let Err(err) = write_loop(&f.src_outfd, &f.outdata) {
                 if err.raw_os_error() != Some(EPIPE) {
-                    perror("write");
+                    perror_io("write", &err);
                 }
                 if status.is_success() {
                     status = ProcStatus::from_exit_code(1);
@@ -635,7 +638,7 @@ fn run_internal_process(p: &Process, outdata: Vec<u8>, errdata: Vec<u8>, ios: &I
         if !f.skip_err() {
             if let Err(err) = write_loop(&f.src_errfd, &f.errdata) {
                 if err.raw_os_error() != Some(EPIPE) {
-                    perror("write");
+                    perror_io("write", &err);
                 }
                 if status.is_success() {
                     status = ProcStatus::from_exit_code(1);
@@ -666,14 +669,14 @@ fn run_internal_process_or_short_circuit(
                 j.preview(),
                 p.status().status_value()
             );
-            if let Some(statuses) = j.get_statuses() {
+            if let Some(statuses) = j.statuses() {
                 parser.set_last_statuses(statuses);
                 parser.libdata_mut().status_count += 1;
             } else if j.flags().negate {
                 // Special handling for `not set var (substitution)`.
                 // If there is no status, but negation was requested,
                 // take the last status and negate it.
-                let mut last_statuses = parser.get_last_statuses();
+                let mut last_statuses = parser.last_statuses();
                 last_statuses.status = if last_statuses.status == 0 { 1 } else { 0 };
                 parser.set_last_statuses(last_statuses);
             }
@@ -734,7 +737,11 @@ fn fork_child_for_process(
 
     // Determine the child pid.
     let is_parent = fork_res > 0;
-    let pid: libc::pid_t = if is_parent { fork_res } else { getpid() };
+    let pid: libc::pid_t = if is_parent {
+        fork_res
+    } else {
+        getpid().as_raw()
+    };
 
     // Send the process to a new pgroup if requested.
     // Do this in BOTH the parent and child, to resolve the well-known race.
@@ -877,7 +884,7 @@ fn exec_external_command(
     // or we become the leader.
     let pgroup_policy = if p.leads_pgrp {
         PgroupPolicy::Lead
-    } else if let Some(pgid) = j.group().get_pgid() {
+    } else if let Some(pgid) = j.group().pgid() {
         PgroupPolicy::Join(pgid.as_pid_t())
     } else {
         PgroupPolicy::Inherit
@@ -894,7 +901,7 @@ fn exec_external_command(
     #[cfg(have_posix_spawn)]
     // Prefer to use posix_spawn, since it's faster on some systems like OS X.
     if can_use_posix_spawn_for_job(j, &dup2s) {
-        let file = &parser.libdata().current_filename;
+        let file = parser.current_filename.borrow();
         let count = FORK_COUNT.fetch_add(1, Ordering::Relaxed) + 1; // spawn counts as a fork+exec
 
         let pid = PosixSpawner::new(j, pgroup_policy, &dup2s).and_then(|mut spawner| {
@@ -903,7 +910,7 @@ fn exec_external_command(
         let pid = match pid {
             Ok(pid) => pid,
             Err(err) => {
-                safe_report_exec_error(err.0, &actual_cmd, &argv, &envv);
+                signal_safe_report_exec_error(err.0, &actual_cmd, &argv, &envv);
                 p.status
                     .set(ProcStatus::from_exit_code(exit_code_from_exec_error(err.0)));
                 return Err(());
@@ -935,7 +942,7 @@ fn exec_external_command(
     }
 
     fork_child_for_process(j, p, &dup2s, pgroup_policy, |p| {
-        safe_launch_process(p, &actual_cmd, &argv, &envv)
+        signal_safe_launch_process(p, &actual_cmd, &argv, &envv)
     })
 }
 
@@ -1018,7 +1025,7 @@ fn get_performer_for_block_node(p: &Process, job: &Job, io_chain: &IoChain) -> B
     let node = node.clone();
     Box::new(move |parser: &Parser, _out, _err| {
         parser
-            .eval_node(&node, &io_chain, job_group.as_ref(), BlockType::top, false)
+            .eval_node(&node, &io_chain, job_group.as_ref(), BlockType::Top, false)
             .status
     })
 }
@@ -1058,7 +1065,7 @@ fn get_performer_for_function(
             &body_node,
             &io_chain,
             job_group.as_ref(),
-            BlockType::top,
+            BlockType::Top,
             false,
         );
         function_restore_environment(parser, fb);
@@ -1501,7 +1508,7 @@ fn exec_subshell_internal(
         };
     });
 
-    let prev_statuses = parser.get_last_statuses();
+    let prev_statuses = parser.last_statuses();
     let _put_back = ScopeGuard::new((), |()| {
         if !apply_exit_status {
             parser.set_last_statuses(prev_statuses);
@@ -1519,7 +1526,7 @@ fn exec_subshell_internal(
 
     let mut io_chain = IoChain::new();
     io_chain.push(bufferfill.clone());
-    let eval_res = parser.eval_with(cmd, &io_chain, job_group, BlockType::subst, false);
+    let eval_res = parser.eval_with(cmd, &io_chain, job_group, BlockType::Subst, false);
     let buffer = IoBufferfill::finish(bufferfill);
     if buffer.discarded() {
         *break_expand = true;

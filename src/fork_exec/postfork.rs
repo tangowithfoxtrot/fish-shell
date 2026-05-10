@@ -2,15 +2,16 @@
 // Everything in this module must be async-signal safe.
 // That means no locking, no allocating, no freeing memory, etc!
 use super::flog_safe::flog_safe;
-use crate::nix::getpid;
 use crate::null_terminated_array::OwningNullTerminatedArray;
 use crate::redirection::Dup2List;
 use crate::signal::signal_reset_handlers;
-use crate::{common::exit_without_destructors, wutil::fstat};
+use crate::wutil::fstat;
+use fish_common::exit_without_destructors;
 use libc::{O_RDONLY, pid_t};
+use nix::unistd::getpid;
 use std::ffi::CStr;
 use std::num::NonZeroU32;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::MetadataExt as _;
 use std::time::Duration;
 
 /// The number of times to try to call fork() before giving up.
@@ -175,7 +176,7 @@ pub fn child_setup_process(
         unsafe {
             libc::signal(libc::SIGTTIN, libc::SIG_IGN);
             libc::signal(libc::SIGTTOU, libc::SIG_IGN);
-            let _ = libc::tcsetpgrp(libc::STDIN_FILENO, getpid());
+            let _ = libc::tcsetpgrp(libc::STDIN_FILENO, getpid().as_raw());
         }
     }
     if let Some(sigmask) = sigmask {
@@ -224,7 +225,7 @@ pub fn execute_fork() -> pid_t {
     exit_without_destructors(1)
 }
 
-pub(crate) fn safe_report_exec_error(
+pub(crate) fn signal_safe_report_exec_error(
     err: i32,
     actual_cmd: &CStr,
     argvv: &OwningNullTerminatedArray,
@@ -265,7 +266,7 @@ pub(crate) fn safe_report_exec_error(
                     flog_safe!(
                         exec,
                         "Hint: Your exported variables take up over half the limit. Try \
-                         erasing or unexporting variables."
+                        erasing or unexporting variables."
                     );
                 }
             } else {
@@ -294,7 +295,7 @@ pub(crate) fn safe_report_exec_error(
                     flog_safe!(
                         exec,
                         "fish scripts require an interpreter directive (must \
-                         start with '#!/path/to/fish')."
+                        start with '#!/path/to/fish')."
                     );
                 } else {
                     // If the shebang line exists, we would get an ENOENT or similar instead,
@@ -526,5 +527,23 @@ fn get_interpreter<'a>(command: &CStr, buffer: &'a mut [u8]) -> Option<&'a CStr>
     } else {
         return None;
     };
-    Some(CStr::from_bytes_with_nul(&buffer[offset..idx.max(offset)]).unwrap())
+    CStr::from_bytes_with_nul(&buffer[offset..idx.max(offset)]).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_interpreter;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    #[test]
+    fn test_get_interpreter_returns_none_on_embedded_nul() {
+        let script = fish_tempfile::new_file().unwrap();
+        std::fs::write(script.path(), b"#!/bin/\0sh\n").unwrap();
+
+        let command = CString::new(script.path().as_os_str().as_bytes()).unwrap();
+        let mut buffer = [0u8; 64];
+
+        assert!(get_interpreter(command.as_c_str(), &mut buffer).is_none());
+    }
 }

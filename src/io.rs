@@ -1,27 +1,26 @@
-use crate::builtins::shared::{STATUS_CMD_ERROR, STATUS_CMD_OK, STATUS_READ_TOO_MUCH};
-use crate::common::{bytes2wcstring, wcs2bytes};
-use crate::fd_monitor::{Callback, FdMonitor, FdMonitorItemId};
-use crate::fds::{
-    BorrowedFdFile, PIPE_ERROR, make_autoclose_pipes, make_fd_nonblocking, wopen_cloexec,
+use crate::{
+    builtins::shared::{STATUS_CMD_ERROR, STATUS_CMD_OK, STATUS_READ_TOO_MUCH},
+    fd_monitor::{Callback, FdMonitor, FdMonitorItemId},
+    fds::{BorrowedFdFile, PIPE_ERROR, make_autoclose_pipes, make_fd_nonblocking, wopen_cloexec},
+    flog::{flog, flogf, should_flog},
+    nix::isatty,
+    path::path_apply_working_directory,
+    prelude::*,
+    proc::JobGroupRef,
+    redirection::{RedirectionMode, RedirectionSpecList},
+    wutil::{perror_io, unescape_bytes_and_write_to_fd, wdirname, wstat},
 };
-use crate::flog::{flog, flogf, should_flog};
-use crate::nix::isatty;
-use crate::path::path_apply_working_directory;
-use crate::prelude::*;
-use crate::proc::JobGroupRef;
-use crate::redirection::{RedirectionMode, RedirectionSpecList};
-use crate::signal::SigChecker;
-use crate::terminal::Output;
-use crate::topic_monitor::Topic;
-use crate::wutil::{perror, perror_io, unescape_bytes_and_write_to_fd, wdirname, wstat};
 use errno::Errno;
-use libc::{EAGAIN, EINTR, ENOENT, ENOTDIR, EPIPE, EWOULDBLOCK, STDOUT_FILENO};
-use nix::fcntl::OFlag;
-use nix::sys::stat::Mode;
-use std::fs::File;
-use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
+use fish_util::perror;
+use fish_widestring::{bytes2wcstring, wcs2bytes};
+use libc::{EAGAIN, EINTR, ENOENT, ENOTDIR, EWOULDBLOCK, STDOUT_FILENO};
+use nix::{fcntl::OFlag, sys::stat::Mode};
+use std::{
+    fs::File,
+    io,
+    os::fd::{AsFd as _, AsRawFd as _, BorrowedFd, OwnedFd, RawFd},
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
+};
 
 /// separated_buffer_t represents a buffer of output from commands, prepared to be turned into a
 /// variable. For example, command substitutions output into one of these. Most commands just
@@ -33,9 +32,9 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SeparationType {
     /// this element should be further separated by IFS
-    inferred,
+    Inferred,
     /// this element is explicitly separated and should not be further split
-    explicitly,
+    Explicitly,
 }
 
 pub struct BufferElement {
@@ -51,7 +50,7 @@ impl BufferElement {
         }
     }
     pub fn is_explicitly_separated(&self) -> bool {
-        self.separation == SeparationType::explicitly
+        self.separation == SeparationType::Explicitly
     }
 }
 
@@ -117,7 +116,7 @@ impl SeparatedBuffer {
             return false;
         }
         // Try merging with the last element.
-        if sep == SeparationType::inferred && self.last_inferred() {
+        if sep == SeparationType::Inferred && self.last_inferred() {
             self.elements
                 .last_mut()
                 .unwrap()
@@ -431,7 +430,7 @@ impl IoBuffer {
         } else if amt > 0 {
             buffer.append(
                 &bytes[0..usize::try_from(amt).unwrap()],
-                SeparationType::inferred,
+                SeparationType::Inferred,
             );
         }
         amt
@@ -670,6 +669,17 @@ impl OutputStream {
         }
     }
 
+    /// Consume and return any internally buffered contents.
+    /// This is only implemented for a string_output_stream; others will return an empty string.
+    pub fn take(self) -> WString {
+        match self {
+            OutputStream::String(stream) => stream.take(),
+            OutputStream::Null | OutputStream::Fd(_) | OutputStream::Buffered(_) => {
+                WString::default()
+            }
+        }
+    }
+
     /// Flush any unwritten data to the underlying device, and return an error code.
     /// A 0 code indicates success. The base implementation returns 0.
     pub fn flush_and_check_error(&mut self) -> libc::c_int {
@@ -708,7 +718,7 @@ impl OutputStream {
         match self {
             OutputStream::Buffered(stream) => stream.append_with_separation(s, typ, want_newline),
             OutputStream::Fd(_) | OutputStream::Null | OutputStream::String(_) => {
-                if typ == SeparationType::explicitly && want_newline {
+                if typ == SeparationType::Explicitly && want_newline {
                     self.appendln(s)
                 } else {
                     self.append(s)
@@ -732,21 +742,11 @@ impl OutputStream {
     }
 }
 
-impl Output for OutputStream {
-    fn write_bytes(&mut self, command_part: &[u8]) {
-        // TODO Retry on interrupt.
-        self.append(&bytes2wcstring(command_part));
-    }
-}
-
 /// An output stream for builtins which outputs to an fd.
 /// Note the fd may be something like stdout; there is no ownership implied here.
 pub struct FdOutputStream {
     /// The file descriptor to write to.
     fd: RawFd,
-
-    /// Used to check if a SIGINT has been received when EINTR is encountered
-    sigcheck: SigChecker,
 
     /// Whether we have received an error.
     errored: bool,
@@ -755,11 +755,7 @@ impl FdOutputStream {
     /// Construct from a file descriptor, which must be nonegative.
     pub fn new(fd: RawFd) -> Self {
         assert!(fd >= 0, "Invalid fd");
-        FdOutputStream {
-            fd,
-            sigcheck: SigChecker::new(Topic::SigHupInt),
-            errored: false,
-        }
+        FdOutputStream { fd, errored: false }
     }
 
     fn append(&mut self, s: impl IntoCharIter) -> bool {
@@ -767,19 +763,6 @@ impl FdOutputStream {
             return false;
         }
         if unescape_bytes_and_write_to_fd(s, self.fd).is_none() {
-            // Some of our builtins emit multiple screens worth of data sent to a pager (the primary
-            // example being the `history` builtin) and receiving SIGINT should be considered normal and
-            // non-exceptional (user request to abort via Ctrl-C), meaning we shouldn't print an error.
-            if errno::errno().0 == EINTR && self.sigcheck.check() {
-                // We have two options here: we can either return false without setting errored_ to
-                // true (*this* write will be silently aborted but the onus is on the caller to check
-                // the return value and skip future calls to `append()`) or we can flag the entire
-                // output stream as errored, causing us to both return false and skip any future writes.
-                // We're currently going with the latter, especially seeing as no callers currently
-                // check the result of `append()` (since it was always a void function before).
-            } else if errno::errno().0 != EPIPE {
-                perror("write");
-            }
             self.errored = true;
         }
         !self.errored
@@ -814,6 +797,11 @@ impl StringOutputStream {
     fn contents(&self) -> &wstr {
         &self.contents
     }
+
+    /// Consume and return the wcstring containing the output.
+    fn take(self) -> WString {
+        self.contents
+    }
 }
 
 /// An output stream for builtins which writes into a separated buffer.
@@ -826,7 +814,7 @@ impl BufferedOutputStream {
         Self { buffer }
     }
     fn append(&mut self, s: impl IntoCharIter) -> bool {
-        self.buffer.append(&wcs2bytes(s), SeparationType::inferred)
+        self.buffer.append(&wcs2bytes(s), SeparationType::Inferred)
     }
     fn append_with_separation(
         &mut self,

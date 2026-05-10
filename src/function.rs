@@ -2,22 +2,28 @@
 // autoloading functions in the $fish_function_path. Actual function evaluation is taken care of by
 // the parser and to some degree the builtin handling library.
 
-use crate::ast::{self, Node};
-use crate::autoload::{Autoload, AutoloadResult};
-use crate::common::{FilenameRef, assert_sync, escape, valid_func_name};
-use crate::complete::complete_wrap_map;
-use crate::env::{EnvStack, Environment};
-use crate::event::{self, EventDescription};
-use crate::global_safety::RelaxedAtomicBool;
-use crate::parse_tree::NodeRef;
-use crate::parser::Parser;
-use crate::parser_keywords::parser_keywords_is_reserved;
-use crate::prelude::*;
-use crate::proc::Pid;
-use crate::wutil::dir_iter::DirIter;
-use std::collections::{HashMap, HashSet};
-use std::num::NonZeroU32;
-use std::sync::{Arc, LazyLock, Mutex};
+use crate::{
+    ast::{self, Node as _},
+    autoload::{Autoload, AutoloadResult},
+    common::valid_func_name,
+    complete::complete_wrap_map,
+    env::{EnvStack, Environment},
+    event::{self, EventDescription},
+    global_safety::RelaxedAtomicBool,
+    parse_tree::NodeRef,
+    parser::Parser,
+    parser_keywords::parser_keywords_is_reserved,
+    prelude::*,
+    proc::Pid,
+    wutil::dir_iter::DirIter,
+};
+use fish_common::{FilenameRef, assert_sync, escape};
+use fish_widestring::wcs2bytes;
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU32,
+    sync::{Arc, LazyLock, Mutex},
+};
 
 #[derive(Clone)]
 pub struct FunctionProperties {
@@ -240,7 +246,7 @@ pub fn exists_no_autoload(cmd: &wstr) -> bool {
         return true;
     }
 
-    let narrow = crate::common::wcs2bytes(cmd);
+    let narrow = wcs2bytes(cmd);
     if let Ok(cmdstr) = std::str::from_utf8(&narrow) {
         let cmd = "functions/".to_owned() + cmdstr + ".fish";
         crate::autoload::has_asset(&cmd)
@@ -301,7 +307,7 @@ pub(crate) fn set_desc(name: &wstr, desc: WString, parser: &Parser) {
 /// is successful.
 pub fn copy(name: &wstr, new_name: WString, parser: &Parser) -> bool {
     let filename = parser.current_filename();
-    let lineno = parser.get_lineno();
+    let lineno = parser.lineno();
 
     let mut funcset = FUNCTION_SET.lock().unwrap();
     let Some(props) = funcset.get_props(name) else {

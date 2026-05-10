@@ -17,127 +17,125 @@
 //! control-C from generating SIGINT, so failing to disable these would prevent cancellation of wildcard
 //! expansion, etc.
 
-use super::history_search::{ReaderHistorySearch, SearchMode, smartcase_flags};
-use super::iothreads::{self, Debouncers};
-use super::word_motion::{MoveWordDir, MoveWordStateMachine, MoveWordStyle};
-use crate::abbrs::abbrs_match;
-use crate::ast::{self, Kind, is_same_node};
-use crate::builtins::shared::ErrorCode;
-use crate::builtins::shared::STATUS_CMD_ERROR;
-use crate::builtins::shared::STATUS_CMD_OK;
-use crate::common::ScopeGuarding;
-use crate::common::{
-    EscapeFlags, EscapeStringStyle, ScopeGuard, bytes2wcstring, escape, escape_string,
-    exit_without_destructors, get_ellipsis_char, get_obfuscation_read_char, get_program_name,
-    restore_term_foreground_process_group_for_exit, shell_modes, write_loop,
+use super::{
+    history_search::{ReaderHistorySearch, SearchMode, smartcase_flags},
+    iothreads::{self, Debouncers},
+    word_motion::{MoveWordDir, MoveWordStateMachine, MoveWordStyle},
 };
-use crate::complete::{
-    CompleteFlags, Completion, CompletionList, CompletionRequestOptions, complete, complete_load,
-    sort_and_prioritize,
+use crate::{
+    abbrs::{self, abbrs_match},
+    ast::{self, Kind, is_same_node},
+    builtins::shared::{ErrorCode, STATUS_CMD_ERROR, STATUS_CMD_OK},
+    common::{get_program_name, shell_modes},
+    complete::{
+        CompleteFlags, Completion, CompletionList, CompletionRequestOptions, complete,
+        complete_load, sort_and_prioritize,
+    },
+    editable_line::{Edit, EditableLine, line_at_cursor, range_of_line_at_cursor},
+    env::{EnvMode, EnvStack, Environment, Statuses},
+    env_dispatch::{MIDNIGHT_COMMANDER_SID, handle_emoji_width},
+    event,
+    exec::exec_subshell,
+    expand::{ExpandFlags, ExpandResultCode, expand_one, expand_string, expand_tilde},
+    fd_readable_set::poll_fd_readable,
+    fds::{make_fd_blocking, wopen_cloexec},
+    flog::{flog, flogf},
+    function,
+    global_safety::RelaxedAtomicBool,
+    highlight::{
+        HighlightRole, HighlightSpec, autosuggest_validate_from_history, highlight_shell,
+        parse_text_face_for_highlight,
+    },
+    history::{
+        History, HistoryId, HistorySearch, MemoryHistoryId, PersistenceMode, SearchDirection,
+        SearchFlags, SearchType, history_id, in_private_mode,
+    },
+    input_common::{
+        BackgroundColorQuery, CharEvent, CharInputStyle, CursorPositionQuery,
+        CursorPositionQueryReason, ImplicitEvent, InputData, InputEventQueue,
+        InputEventQueuer as _, LONG_READ_TIMEOUT, QueryResponse, QueryResultEvent, ReadlineCmd,
+        RecurrentQuery, TerminalQuery, stop_query,
+    },
+    io::IoChain,
+    key::ViewportPosition,
+    kill::{kill_add, kill_replace, kill_yank, kill_yank_rotate},
+    nix::isatty,
+    operation_context::{OperationContext, get_bg_context},
+    pager::{PageRendering, Pager, SelectionMotion},
+    panic::AT_EXIT,
+    parse_constants::{ParseIssue, ParseTreeFlags, SourceRange},
+    parse_util::{
+        MaybeParentheses, SPACES_PER_INDENT, compute_indents, contains_wildcards,
+        detect_parse_errors, escape_wildcards, get_cmdsubst_extent, get_line_from_offset,
+        get_offset, get_offset_from_line, get_process_extent, get_process_first_token_offset,
+        get_token_extent, lineno, locate_cmdsubst_range,
+    },
+    parser::{BlockType, EvalRes, Parser, ParserEnvSetMode},
+    portable_atomic::AtomicU64,
+    prelude::*,
+    proc::{
+        HAVE_PROC_STAT, hup_jobs, is_interactive_session, job_reap, jobs_requiring_warning_on_exit,
+        print_exit_warning_for_jobs, proc_update_jiffies,
+    },
+    reader::word_motion::bigword_class,
+    screen::{CharOffset, Screen, is_dumb, screen_force_clear_to_end},
+    should_flog,
+    signal::{
+        signal_check_cancel, signal_clear_cancel, signal_reset_handlers, signal_set_handlers,
+        signal_set_handlers_once,
+    },
+    terminal::{
+        BufferedOutputter, Outputter,
+        TerminalCommand::{
+            self, ClearScreen, DecrstAlternateScreenBuffer, DecsetAlternateScreenBuffer,
+            DecsetShowCursor, Osc0WindowTitle, Osc1TabTitle, Osc133CommandFinished,
+            Osc133CommandStart, QueryBackgroundColor, QueryCursorPosition,
+            QueryKittyKeyboardProgressiveEnhancements, QueryPrimaryDeviceAttribute, QueryXtgettcap,
+            QueryXtversion,
+        },
+    },
+    termsize::{signal_safe_termsize_invalidate_tty, termsize_last, termsize_update},
+    text_face::{TextFace, parse_text_face},
+    threads::{assert_is_background_thread, assert_is_main_thread},
+    tokenizer::{
+        TOK_ACCEPT_UNFINISHED, TOK_SHOW_COMMENTS, TokenType, Tokenizer, quote_end, tok_command,
+        variable_assignment_equals_pos,
+    },
+    tty_handoff::{
+        SCROLL_CONTENT_UP_TERMINFO_CODE, TtyHandoff, XTGETTCAP_QUERY_OS_NAME,
+        deactivate_tty_protocols, get_tty_protocols_active, initialize_tty_protocols,
+    },
+    wildcard::wildcard_has,
+    wutil::{fstat, perror_nix, wstat},
 };
-use crate::editable_line::{Edit, EditableLine, line_at_cursor, range_of_line_at_cursor};
-use crate::env::EnvStack;
-use crate::env::{EnvMode, Environment, Statuses};
-use crate::env_dispatch::MIDNIGHT_COMMANDER_SID;
-use crate::env_dispatch::guess_emoji_width;
-use crate::exec::exec_subshell;
-use crate::expand::expand_one;
-use crate::expand::{ExpandFlags, ExpandResultCode, expand_string, expand_tilde};
-use crate::fd_readable_set::poll_fd_readable;
-use crate::fds::{make_fd_blocking, wopen_cloexec};
-use crate::flog::{flog, flogf};
-use crate::future_feature_flags::{self, FeatureFlag};
-use crate::global_safety::RelaxedAtomicBool;
-use crate::highlight::{
-    HighlightRole, HighlightSpec, autosuggest_validate_from_history, highlight_shell,
-    parse_text_face_for_highlight,
-};
-use crate::history::{
-    History, HistorySearch, PersistenceMode, SearchDirection, SearchFlags, SearchType,
-    history_session_id, in_private_mode,
-};
-use crate::input_common::BackgroundColorQuery;
-use crate::input_common::CursorPositionQueryReason;
-use crate::input_common::InputEventQueue;
-use crate::input_common::InputEventQueuer;
-use crate::input_common::QueryResponse;
-use crate::input_common::{
-    CharEvent, CharInputStyle, CursorPositionQuery, ImplicitEvent, InputData, LONG_READ_TIMEOUT,
-    QueryResultEvent, ReadlineCmd, RecurrentQuery, TerminalQuery, stop_query,
-};
-use crate::io::IoChain;
-use crate::key::ViewportPosition;
-use crate::kill::{kill_add, kill_replace, kill_yank, kill_yank_rotate};
-use crate::nix::{getpid, isatty};
-use crate::operation_context::{OperationContext, get_bg_context};
-use crate::pager::{PageRendering, Pager, SelectionMotion};
-use crate::panic::AT_EXIT;
-use crate::parse_constants::SourceRange;
-use crate::parse_constants::{ParseTreeFlags, ParserTestErrorBits};
-use crate::parse_util::{
-    MaybeParentheses, SPACES_PER_INDENT, compute_indents, contains_wildcards, detect_parse_errors,
-    escape_string_with_quote, escape_wildcards, get_cmdsubst_extent, get_line_from_offset,
-    get_offset, get_offset_from_line, get_process_extent, get_process_first_token_offset,
-    get_token_extent, lineno, locate_cmdsubst_range,
-};
-use crate::parser::{BlockType, EvalRes, Parser, ParserEnvSetMode};
-use crate::portable_atomic::AtomicU64;
-use crate::prelude::*;
-use crate::proc::{
-    HAVE_PROC_STAT, hup_jobs, is_interactive_session, job_reap, jobs_requiring_warning_on_exit,
-    print_exit_warning_for_jobs, proc_update_jiffies,
-};
-use crate::screen::{CharOffset, Screen, is_dumb, screen_force_clear_to_end};
-use crate::should_flog;
-use crate::signal::{
-    signal_check_cancel, signal_clear_cancel, signal_reset_handlers, signal_set_handlers,
-    signal_set_handlers_once,
-};
-use crate::terminal::TerminalCommand::{
-    self, ClearScreen, DecrstAlternateScreenBuffer, DecsetAlternateScreenBuffer, DecsetShowCursor,
-    Osc0WindowTitle, Osc1TabTitle, Osc133CommandFinished, Osc133CommandStart, QueryBackgroundColor,
-    QueryCursorPosition, QueryKittyKeyboardProgressiveEnhancements, QueryPrimaryDeviceAttribute,
-    QueryXtgettcap, QueryXtversion,
-};
-use crate::terminal::{BufferedOutputter, Output, Outputter};
-use crate::termsize::{safe_termsize_invalidate_tty, termsize_last, termsize_update};
-use crate::text_face::{TextFace, parse_text_face};
-use crate::threads::{assert_is_background_thread, assert_is_main_thread};
-use crate::tokenizer::{
-    TOK_ACCEPT_UNFINISHED, TOK_SHOW_COMMENTS, TokenType, Tokenizer, quote_end, tok_command,
-    variable_assignment_equals_pos,
-};
-use crate::tty_handoff::SCROLL_CONTENT_UP_TERMINFO_CODE;
-use crate::tty_handoff::XTGETTCAP_QUERY_OS_NAME;
-use crate::tty_handoff::{
-    TtyHandoff, get_tty_protocols_active, initialize_tty_protocols, safe_deactivate_tty_protocols,
-};
-use crate::wildcard::wildcard_has;
-use crate::wutil::{fstat, perror, write_to_fd, wstat};
-use crate::{abbrs, event, function};
 use assert_matches::assert_matches;
 use errno::{Errno, errno};
-use fish_common::{UTF8_BOM_WCHAR, help_section};
-use fish_fallback::fish_wcwidth;
-use fish_fallback::lowercase;
+use fish_common::{
+    EscapeFlags, EscapeStringStyle, ScopeGuard, ScopeGuarding, escape, escape_string,
+    escape_string_with_quote, exit_without_destructors, get_obfuscation_read_char, help_section,
+    restore_term_foreground_process_group_for_exit, write_loop,
+};
+use fish_fallback::{fish_wcwidth, lowercase};
+use fish_feature_flags::FeatureFlag;
+use fish_util::{perror, write_to_fd};
 use fish_wcstringutil::{
-    CaseSensitivity, StringFuzzyMatch, count_preceding_backslashes, join_strings,
-    string_prefixes_string, string_prefixes_string_case_insensitive,
+    CaseSensitivity, IsPrefix, StringFuzzyMatch, count_preceding_backslashes, is_prefix,
+    join_strings, string_prefixes_string, string_prefixes_string_case_insensitive,
     string_prefixes_string_maybe_case_insensitive,
 };
-use fish_wcstringutil::{IsPrefix, is_prefix};
+use fish_widestring::{ELLIPSIS_CHAR, UTF8_BOM_WCHAR, bytes2wcstring};
 use libc::{
-    _POSIX_VDISABLE, EIO, EISDIR, ENOTTY, EPERM, ESRCH, O_NONBLOCK, O_RDONLY, SIGINT,
-    STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO, VMIN, VQUIT, VSUSP, VTIME, c_char,
+    _POSIX_VDISABLE, EIO, EISDIR, ENOTTY, ESRCH, O_NONBLOCK, O_RDONLY, SIGINT, STDERR_FILENO,
+    STDIN_FILENO, STDOUT_FILENO, VMIN, VQUIT, VSUSP, VTIME, c_char,
 };
-use nix::sys::termios::{self, SetArg, Termios, tcgetattr, tcsetattr};
 use nix::{
     fcntl::OFlag,
     sys::{
         signal::{Signal, killpg},
         stat::Mode,
+        termios::{self, SetArg, Termios, tcgetattr, tcsetattr},
     },
-    unistd::getpgrp,
+    unistd::{getpgrp, getpid, setpgid},
 };
 use std::{
     borrow::Cow,
@@ -146,7 +144,7 @@ use std::{
     io::BufReader,
     num::NonZeroUsize,
     ops::{ControlFlow, Range},
-    os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
+    os::fd::{AsRawFd as _, BorrowedFd, FromRawFd as _, OwnedFd, RawFd},
     pin::Pin,
     sync::{
         Arc, LazyLock, Mutex, MutexGuard, OnceLock,
@@ -176,7 +174,6 @@ fn zeroed_termios() -> Termios {
 pub static SHELL_MODES: LazyLock<Mutex<Termios>> = LazyLock::new(|| Mutex::new(zeroed_termios()));
 
 /// The valid terminal modes on startup.
-/// Warning: this is read from the SIGTERM handler! Hence the raw global.
 static TERMINAL_MODE_ON_STARTUP: OnceLock<libc::termios> = OnceLock::new();
 
 /// Mode we use to execute programs.
@@ -190,12 +187,12 @@ static STATUS_COUNT: AtomicU64 = AtomicU64::new(0);
 /// This variable is set to a signal by the signal handler when ^C is pressed.
 static INTERRUPTED: AtomicI32 = AtomicI32::new(0);
 
-/// If set, SIGHUP has been received. This latches to true.
-/// This is set from a signal handler.
-static SIGHUP_RECEIVED: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
+/// Stores the signal (SIGHUP or SIGTERM) that should cause fish to exit, or 0 if none.
+/// Set from a signal handler.
+static EXIT_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
-// Get the terminal mode on startup. This is "safe" because it's async-signal safe.
-pub fn safe_get_terminal_mode_on_startup() -> Option<&'static libc::termios> {
+// Get the terminal mode on startup.
+pub fn get_terminal_mode_on_startup() -> Option<&'static libc::termios> {
     TERMINAL_MODE_ON_STARTUP.get()
 }
 
@@ -214,8 +211,7 @@ fn redirect_tty_after_sighup() {
     use std::fs::OpenOptions;
 
     // If we have received SIGHUP, redirect the tty to avoid a user script triggering SIGTTIN or
-    // SIGTTOU.
-    assert!(reader_received_sighup(), "SIGHUP not received");
+    // SIGTTOU. The caller checks reader_exit_signal() == SIGHUP before calling this.
     static TTY_REDIRECTED: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
     if TTY_REDIRECTED.swap(true) {
         return;
@@ -236,7 +232,7 @@ fn redirect_tty_after_sighup() {
 }
 
 fn querying_allowed(vars: &dyn Environment) -> bool {
-    future_feature_flags::test(FeatureFlag::QueryTerm)
+    fish_feature_flags::feature_test(FeatureFlag::QueryTerm)
         && !is_dumb()
         && {
             // TODO(term-workaround)
@@ -278,7 +274,7 @@ pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> TerminalInitResu
         out.write_command(QueryKittyKeyboardProgressiveEnhancements);
         out.write_command(QueryXtversion);
         out.write_command(QueryBackgroundColor);
-        query_capabilities_via_dcs(out.by_ref(), vars);
+        query_capabilities_via_dcs(&mut out, vars);
         out.write_command(QueryPrimaryDeviceAttribute);
     }
     input_queue.blocking_query().replace(TerminalQuery::Initial);
@@ -288,7 +284,7 @@ pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> TerminalInitResu
         use ImplicitEvent::{CheckExit, Eof};
         use QueryResultEvent::*;
         match input_queue.readch() {
-            Implicit(Eof) => reader_sighup(),
+            Implicit(Eof) => signal_safe_reader_set_exit_signal(libc::SIGHUP),
             Implicit(CheckExit) => {}
             CharEvent::QueryResult(Response(QueryResponse::PrimaryDeviceAttribute)) => {
                 break;
@@ -305,10 +301,10 @@ pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> TerminalInitResu
                     warning,
                     wgettext_fmt!(
                         "%s could not read response to Primary Device Attribute query after waiting for %d seconds. \
-                         This is often due to a missing feature in your terminal. \
-                         See 'help %s' or 'man fish-terminal-compatibility'. \
-                         This %s process will no longer wait for outstanding queries, \
-                         which disables some optional features.",
+                        This is often due to a missing feature in your terminal. \
+                        See 'help %s' or 'man fish-terminal-compatibility'. \
+                        This %s process will no longer wait for outstanding queries, \
+                        which disables some optional features.",
                         program,
                         LONG_READ_TIMEOUT.as_secs(),
                         help_section!("terminal-compatibility"),
@@ -370,11 +366,14 @@ pub fn current_data() -> Option<&'static mut ReaderData> {
         .map(|data| unsafe { Pin::get_unchecked_mut(Pin::as_mut(data)) })
 }
 pub use current_data as reader_current_data;
-use fish_widestring::word_char::is_blank;
+use fish_widestring::word_char::{WordCharClass, is_blank};
 
 /// Add a new reader to the reader stack.
-/// If `history_name` is empty, then save history in-memory only; do not write it to disk.
-pub fn reader_push<'a>(parser: &'a Parser, history_name: &wstr, conf: ReaderConfig) -> Reader<'a> {
+pub fn reader_push<'a>(
+    parser: &'a Parser,
+    history_id: HistoryId,
+    conf: ReaderConfig,
+) -> Reader<'a> {
     assert_is_main_thread();
     let inputfd = conf.inputfd;
     let input_data = if !parser.interactive_initialized.swap(true) {
@@ -383,7 +382,7 @@ pub fn reader_push<'a>(parser: &'a Parser, history_name: &wstr, conf: ReaderConf
             background_color,
         } = terminal_init(parser.vars(), inputfd);
         let input_data = input_queue.get_input_data_mut();
-        guess_emoji_width(parser.vars());
+        handle_emoji_width(parser.vars());
 
         // Provide value for `status current-command`
         parser.libdata_mut().status_vars.command = L!("fish").to_owned();
@@ -402,7 +401,7 @@ pub fn reader_push<'a>(parser: &'a Parser, history_name: &wstr, conf: ReaderConf
     } else {
         InputData::new(inputfd, *parser.blocking_query_timeout.borrow())
     };
-    let hist = History::with_name(history_name);
+    let hist = History::new(history_id);
     hist.resolve_pending();
     let data = ReaderData::new(input_data, hist, conf, reader_data_stack().is_empty());
     reader_data_stack().push(data);
@@ -431,7 +430,7 @@ pub fn fake_scoped_reader<'a>(parser: &'a Parser) -> impl ScopeGuarding<Target =
         inputfd,
         ..Default::default()
     };
-    let hist = History::with_name(L!(""));
+    let hist = History::new(HistoryId::Memory(MemoryHistoryId::PrivateMode));
     let input_data = InputData::new(inputfd, None);
     let data = ReaderData::new(input_data, hist, conf, reader_data_stack().is_empty());
     reader_data_stack().push(data);
@@ -546,13 +545,13 @@ enum Kill {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum JumpDirection {
+pub enum JumpDirection {
     Forward,
     Backward,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum JumpPrecision {
+pub enum JumpPrecision {
     Till,
     To,
 }
@@ -834,7 +833,7 @@ fn read_i(parser: &Parser) {
         conf.right_prompt_cmd = RIGHT_PROMPT_FUNCTION_NAME.to_owned();
     }
 
-    let mut data = reader_push(parser, &history_session_id(parser.vars()), conf);
+    let mut data = reader_push(parser, history_id(parser.vars()), conf);
     data.import_history_if_necessary();
 
     // Set up tty protocols. These should be enabled while we're reading interactively,
@@ -871,7 +870,7 @@ fn read_i(parser: &Parser) {
         parser.libdata_mut().exit_current_script = false;
 
         BufferedOutputter::new(Outputter::stdoutput()).write_command(Osc133CommandFinished {
-            exit_status: parser.get_last_status(),
+            exit_status: parser.last_status(),
         });
         event::fire_generic(parser, L!("fish_postexec").to_owned(), vec![command]);
         // Allow any pending history items to be returned in the history array.
@@ -893,9 +892,8 @@ fn read_i(parser: &Parser) {
     reader_pop();
 
     // If we got SIGHUP, ensure the tty is redirected and release tty handoff without
-    // trying to muck with protocols.
-    if reader_received_sighup() {
-        // If we are the top-level reader, then we translate SIGHUP into exit_forced.
+    // trying to muck with protocols. SIGTERM does not redirect; the terminal is still valid.
+    if reader_exit_signal() == libc::SIGHUP {
         redirect_tty_after_sighup();
     }
 
@@ -978,7 +976,7 @@ fn read_ni(parser: &Parser, fd: RawFd, io: &IoChain) -> Result<(), ErrorCode> {
         s.remove(0);
     }
 
-    match parser.eval_wstr(s, io, None, BlockType::top) {
+    match parser.eval_wstr(s, io, None, BlockType::Top) {
         Ok(_) => Ok(()),
         Err(msg) => {
             eprintf!("%s", msg);
@@ -994,11 +992,11 @@ const FLOW_CONTROL_FLAGS: termios::InputFlags = {
 
 /// Initialize the reader.
 pub fn reader_init(will_restore_foreground_pgroup: bool) {
+    assert_is_main_thread();
     let terminal_mode_on_startup = match tcgetattr(unsafe { BorrowedFd::borrow_raw(STDIN_FILENO) })
     {
         Ok(modes) => {
             // Save the initial terminal mode.
-            // Note this field is read by a signal handler, so do it atomically, with a leaked mode.
             // TODO: rationalize behavior if initial tcgetattr() fails.
             TERMINAL_MODE_ON_STARTUP.get_or_init(|| libc::termios::from(modes.clone()));
             modes
@@ -1006,10 +1004,12 @@ pub fn reader_init(will_restore_foreground_pgroup: bool) {
         Err(_) => zeroed_termios(),
     };
 
-    if !cfg!(test) {
-        assert!(AT_EXIT.get().is_none());
-    }
-    AT_EXIT.get_or_init(|| Box::new(move || reader_deinit(will_restore_foreground_pgroup)));
+    AT_EXIT
+        .set(Box::new(move || {
+            reader_deinit(will_restore_foreground_pgroup);
+        }))
+        .map_err(|_| ())
+        .unwrap();
 
     // Set the mode used for program execution, initialized to the current mode.
     let mut external_modes = terminal_mode_on_startup;
@@ -1035,8 +1035,8 @@ pub fn reader_init(will_restore_foreground_pgroup: bool) {
 }
 
 pub fn reader_deinit(restore_foreground_pgroup: bool) {
-    safe_restore_term_mode();
-    safe_deactivate_tty_protocols();
+    restore_term_mode();
+    deactivate_tty_protocols();
     if restore_foreground_pgroup {
         restore_term_foreground_process_group_for_exit();
     }
@@ -1045,25 +1045,24 @@ pub fn reader_deinit(restore_foreground_pgroup: bool) {
 /// Restore the term mode if we own the terminal and are interactive (#8705).
 /// It's important we do this before restore_foreground_process_group,
 /// otherwise we won't think we own the terminal.
-/// THIS FUNCTION IS CALLED FROM A SIGNAL HANDLER. IT MUST BE ASYNC-SIGNAL-SAFE.
-pub fn safe_restore_term_mode() {
+pub fn restore_term_mode() {
     if !is_interactive_session() || getpgrp().as_raw() != unsafe { libc::tcgetpgrp(STDIN_FILENO) } {
         return;
     }
-    if let Some(modes) = safe_get_terminal_mode_on_startup() {
+    if let Some(modes) = get_terminal_mode_on_startup() {
         unsafe { libc::tcsetattr(STDIN_FILENO, libc::TCSANOW, modes) };
     }
 }
 
 /// Change the history file for the current command reading context.
-pub fn reader_change_history(name: &wstr) {
+pub fn reader_change_history(history_id: HistoryId) {
     // We don't need to _change_ if we're not initialized yet.
     let Some(data) = current_data() else {
         return;
     };
 
     data.history.save();
-    data.history = History::with_name(name);
+    data.history = History::new(history_id);
     commandline_state_snapshot().history = Some(data.history.clone());
 }
 
@@ -1158,9 +1157,9 @@ pub fn reader_execute_readline_cmd(parser: &Parser, ch: CharEvent) {
     if matches!(
         readline_cmd_evt.cmd,
         ReadlineCmd::ClearScreenAndRepaint
+            | ReadlineCmd::ForceRepaint
             | ReadlineCmd::RepaintMode
             | ReadlineCmd::Repaint
-            | ReadlineCmd::ForceRepaint
     ) {
         data.queued_repaint = true;
     }
@@ -1173,6 +1172,15 @@ pub fn reader_execute_readline_cmd(parser: &Parser, ch: CharEvent) {
     }
     data.save_screen_state();
     let _ = data.handle_char_event(Some(ch));
+}
+
+pub fn reader_jump(direction: JumpDirection, precision: JumpPrecision, target: char) -> bool {
+    let Some(data) = current_data() else {
+        return false;
+    };
+    data.save_screen_state();
+    let elt = data.active_edit_line_tag();
+    data.jump_and_remember_last_jump(direction, precision, elt, target, false)
 }
 
 pub fn reader_showing_suggestion(parser: &Parser) -> bool {
@@ -1317,7 +1325,7 @@ const HIGHLIGHT_TIMEOUT_FOR_EXECUTION: Duration = Duration::from_millis(250);
 
 /// The readers interrupt signal handler. Cancels all currently running blocks.
 /// This is called from a signal handler!
-pub fn reader_handle_sigint() {
+pub fn signal_safe_reader_handle_sigint() {
     INTERRUPTED.store(SIGINT, Ordering::Relaxed);
 }
 
@@ -1338,14 +1346,20 @@ pub fn reader_test_and_clear_interrupted() -> i32 {
     res
 }
 
-/// Mark that we encountered SIGHUP and must (soon) exit. This is invoked from a signal handler.
-pub fn reader_sighup() {
+/// Mark that we received an exit signal (SIGHUP or SIGTERM). Invoked from a signal handler.
+pub fn signal_safe_reader_set_exit_signal(sig: i32) {
     // Beware, we may be in a signal handler.
-    SIGHUP_RECEIVED.store(true);
+    EXIT_SIGNAL.store(sig, Ordering::Relaxed);
 }
 
-fn reader_received_sighup() -> bool {
-    SIGHUP_RECEIVED.load()
+/// Return the exit signal we received, or 0 if none.
+pub fn reader_exit_signal() -> i32 {
+    EXIT_SIGNAL.load(Ordering::Relaxed)
+}
+
+/// Whether we received SIGHUP or SIGTERM and should exit.
+fn reader_received_exit_signal() -> bool {
+    reader_exit_signal() != 0
 }
 
 impl ReaderData {
@@ -1608,9 +1622,9 @@ impl ReaderData {
     }
 
     pub fn mouse_left_click(&mut self, click_position: ViewportPosition) {
-        flogf!(
+        flog!(
             reader,
-            "Received left mouse click at %u",
+            "Received left mouse click at",
             format!("{:?}", click_position),
         );
         match self.screen.offset_in_cmdline_given_cursor(click_position) {
@@ -1857,16 +1871,16 @@ impl<'a> Reader<'a> {
 
                 for color in &mut colors[range] {
                     if explicit_foreground {
-                        color.foreground = HighlightRole::search_match;
+                        color.foreground = HighlightRole::SearchMatch;
                     }
-                    color.background = HighlightRole::search_match;
+                    color.background = HighlightRole::SearchMatch;
                 }
             }
         }
 
         // Apply any selection.
         if let Some(selection) = data.selection {
-            let selection_color = HighlightSpec::with_both(HighlightRole::selection);
+            let selection_color = HighlightSpec::with_both(HighlightRole::Selection);
             let end = std::cmp::min(selection.stop, colors.len());
             for color in &mut colors[selection.start.min(end)..end] {
                 *color = selection_color;
@@ -1879,9 +1893,9 @@ impl<'a> Reader<'a> {
             pos..pos,
             vec![
                 if self.flash_autosuggestion {
-                    HighlightSpec::with_both(HighlightRole::search_match)
+                    HighlightSpec::with_both(HighlightRole::SearchMatch)
                 } else {
-                    HighlightSpec::with_fg(HighlightRole::autosuggestion)
+                    HighlightSpec::with_fg(HighlightRole::Autosuggestion)
                 };
                 autosuggested_range.len()
             ],
@@ -2193,11 +2207,9 @@ impl ReaderData {
 
         // Fake composed character sequences by continuing to delete until we delete a character of
         // width at least 1.
-        let mut width;
         loop {
             pos -= 1;
-            width = fish_wcwidth(el.text().char_at(pos));
-            if width != 0 || pos == 0 {
+            if fish_wcwidth(el.text().char_at(pos)).is_none_or(|w| w != 0) || pos == 0 {
                 break;
             }
         }
@@ -2255,8 +2267,12 @@ impl ReaderData {
         };
 
         while buff_pos != end {
-            if move_right && buff_pos >= el.len() {
-                break;
+            if buff_pos == el.len() && (move_right || to_word_end) {
+                if !move_right && to_word_end && buff_pos != 0 {
+                    buff_pos -= 1;
+                } else {
+                    break;
+                }
             }
             let char_pos = if move_right {
                 if to_word_end { buff_pos + 1 } else { buff_pos }
@@ -2311,11 +2327,11 @@ impl ReaderData {
 
     fn delete_a_word(&mut self, elt: EditableLineTag, style: MoveWordStyle, newv: bool) {
         let el = self.edit_line(elt);
-        if el.is_empty() {
+        let pos = el.position();
+        if pos == el.len() {
             return;
         }
         let text_slice = el.text().as_char_slice();
-        let pos = el.position();
         let on_blank = is_blank(text_slice[pos]);
 
         if on_blank {
@@ -2387,10 +2403,10 @@ impl ReaderData {
     fn delete_inner_word(&mut self, elt: EditableLineTag, style: MoveWordStyle, newv: bool) {
         let el = self.edit_line(elt);
         let len = el.len();
-        if len == 0 {
+        let pos = el.position();
+        if pos == len {
             return;
         }
-        let pos = el.position();
         let text_slice = el.text().as_char_slice();
         if is_blank(text_slice[pos]) {
             // Cursor is on whitespace: delete whitespace only
@@ -2640,15 +2656,14 @@ impl<'a> Reader<'a> {
             // The order of the two conditions below is important. Try to restore the mode
             // in all cases, but only complain if interactive.
             if let Some(old_modes) = old_modes {
-                if tcsetattr(
+                if let Err(err) = tcsetattr(
                     unsafe { BorrowedFd::borrow_raw(self.conf.inputfd) },
                     SetArg::TCSANOW,
                     &old_modes,
-                )
-                .is_err()
-                    && is_interactive_session()
-                {
-                    perror("tcsetattr");
+                ) {
+                    if is_interactive_session() {
+                        perror_nix("tcsetattr", err);
+                    }
                 }
             }
             Outputter::stdoutput().borrow_mut().reset_text_face();
@@ -2662,7 +2677,7 @@ impl<'a> Reader<'a> {
     }
 
     fn eval_bind_cmd(&mut self, cmd: &wstr) {
-        let last_statuses = self.parser.vars().get_last_statuses();
+        let last_statuses = self.parser.vars().last_statuses();
         // Disable TTY protocols while we run a bind command, because it may call out.
         let mut scoped_tty = TtyHandoff::new(reader_save_screen_state);
         scoped_tty.disable_tty_protocols();
@@ -2681,7 +2696,7 @@ impl<'a> Reader<'a> {
         // ECHO mode, causing a race between new input and restoring the mode (#7770). So we leave the
         // tty alone, run the commands in shell mode, and then restore shell modes.
         set_shell_modes(STDIN_FILENO, "bind scripts");
-        safe_termsize_invalidate_tty();
+        signal_safe_termsize_invalidate_tty();
     }
 
     /// Read normal characters, inserting them into the command line.
@@ -2835,7 +2850,9 @@ impl<'a> Reader<'a> {
                     self.command_line_transient_edit = None;
                 }
 
-                self.rls_mut().last_cmd = Some(readline_cmd);
+                if !command_only_affects_rendering(readline_cmd) {
+                    self.rls_mut().last_cmd = Some(readline_cmd);
+                }
             }
             CharEvent::Command(command) => {
                 self.run_input_command_scripts(&command);
@@ -2864,7 +2881,7 @@ impl<'a> Reader<'a> {
             CharEvent::Implicit(implicit_event) => {
                 use ImplicitEvent::*;
                 match implicit_event {
-                    Eof => reader_sighup(),
+                    Eof => signal_safe_reader_set_exit_signal(libc::SIGHUP),
                     CheckExit => (),
                     FocusIn => {
                         event::fire_generic(self.parser, L!("fish_focus_in").to_owned(), vec![]);
@@ -2964,19 +2981,14 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn send_xtgettcap_query(out: &mut impl Output, cap: &'static str) {
+fn send_xtgettcap_query(out: &mut Outputter, cap: &'static str) {
     if should_flog!(reader) {
-        let mut tmp = Vec::<u8>::new();
-        tmp.write_command(QueryXtgettcap(cap));
-        flog!(
-            reader,
-            format!("Sending XTGETTCAP request for {}: {:?}", cap, tmp)
-        );
+        flog!(reader, format!("Sending XTGETTCAP request for {}:", cap));
     }
     out.write_command(QueryXtgettcap(cap));
 }
 
-fn query_capabilities_via_dcs(out: &mut impl Output, vars: &dyn Environment) {
+fn query_capabilities_via_dcs(out: &mut Outputter, vars: &dyn Environment) {
     // TODO(term-workaround)
     if vars.get_unless_empty(L!("STY")).is_some()
         || vars.get_unless_empty(L!("TERM")).is_some_and(|term| {
@@ -3094,7 +3106,8 @@ impl<'a> Reader<'a> {
                     let mut outp = Outputter::stdoutput().borrow_mut();
                     if let Some(fish_color_cancel) = self.vars().get(L!("fish_color_cancel")) {
                         outp.set_text_face(
-                            parse_text_face_for_highlight(&fish_color_cancel).unwrap_or_default(),
+                            parse_text_face_for_highlight(&fish_color_cancel)
+                                .unwrap_or(TextFace::terminal_default()),
                         );
                     }
                     outp.write_wstr(L!("^C"));
@@ -3618,9 +3631,19 @@ impl<'a> Reader<'a> {
                     rl::ForwardBigwordEmacs | rl::KillBigwordEmacs => MoveWordStyle::Whitespace,
                     _ => unreachable!(),
                 };
-                let is_word_end = el.position() + 1 < el.len()
-                    && !is_blank(el.at(el.position()))
-                    && is_blank(el.at(el.position() + 1));
+                let is_at_word_end = el.position() + 1 < el.len() && {
+                    // TODO: this is a clone of word motion flavor implementations.
+                    let class = match style {
+                        MoveWordStyle::Punctuation => WordCharClass::from_char,
+                        MoveWordStyle::Whitespace => bigword_class,
+                        MoveWordStyle::PathComponents => unreachable!(),
+                    };
+                    let pos = el.position();
+                    let cur_class = class(el.at(pos));
+                    let next_class = class(el.at(pos + 1));
+                    !matches!(cur_class, WordCharClass::Blank | WordCharClass::Newline)
+                        && next_class != cur_class
+                };
 
                 // if at word end, forward/kill char, otherwise forward/kill word end
                 if self.is_at_autosuggestion() {
@@ -3628,7 +3651,7 @@ impl<'a> Reader<'a> {
                         style,
                         to_word_end: true,
                     });
-                } else if is_word_end {
+                } else if is_at_word_end {
                     if is_kill {
                         self.delete_char(/*backward*/ false);
                     } else {
@@ -4346,7 +4369,7 @@ impl<'a> Reader<'a> {
             rl::ScrollbackPush => {
                 self.screen.push_to_scrollback();
             }
-            rl::SelfInsert | rl::SelfInsertNotFirst | rl::FuncAnd | rl::FuncOr => {
+            rl::SelfInsert | rl::SelfInsertNotFirst | rl::GetKey | rl::FuncAnd | rl::FuncOr => {
                 // This can be reached via `commandline -f and` etc
                 // panic!("should have been handled by inputter_t::readch");
             }
@@ -4510,10 +4533,10 @@ impl<'a> Reader<'a> {
         // Expand the command line in preparation for execution.
         // to_exec is the command to execute; the command line itself has the command for history.
         let test_res = self.expand_for_execute();
-        if let Err(err) = test_res {
-            if err.contains(ParserTestErrorBits::ERROR) {
+        if let Err(p) = test_res {
+            if p.error {
                 return false;
-            } else if err.contains(ParserTestErrorBits::INCOMPLETE) {
+            } else if p.incomplete {
                 self.insert_char(elt, '\n');
                 return true;
             }
@@ -4533,7 +4556,7 @@ impl<'a> Reader<'a> {
     // Expand abbreviations before execution.
     // Replace the command line with any abbreviations as needed.
     // Return the test result, which may be incomplete to insert a newline, or an error.
-    fn expand_for_execute(&mut self) -> Result<(), ParserTestErrorBits> {
+    fn expand_for_execute(&mut self) -> Result<(), ParseIssue> {
         // Expand abbreviations at the cursor.
         // The first expansion is "user visible" and enters into history.
         let el = &self.command_line;
@@ -4544,7 +4567,7 @@ impl<'a> Reader<'a> {
         // syntactically invalid but become valid after expanding abbreviations.
         if self.conf.syntax_check_ok {
             test_res = reader_shell_test(self.parser, el.text());
-            if test_res.is_err_and(|err| err.contains(ParserTestErrorBits::ERROR)) {
+            if test_res.is_err_and(|p| p.error) {
                 return test_res;
             }
         }
@@ -4619,8 +4642,8 @@ impl<'a> Reader<'a> {
             flash_range.end = data.colors.len();
         }
         for color in &mut data.colors[flash_range] {
-            color.foreground = HighlightRole::search_match;
-            color.background = HighlightRole::search_match;
+            color.foreground = HighlightRole::SearchMatch;
+            color.background = HighlightRole::SearchMatch;
         }
         self.rendered_layout = data;
         self.paint_layout(L!("flash"), false);
@@ -4781,13 +4804,13 @@ fn term_donate(quiet: bool /* = false */) {
         ) {
             Ok(_) => (),
             Err(nix::Error::EINTR) => continue,
-            Err(_) => {
+            Err(err) => {
                 if !quiet {
                     flog!(
                         warning,
                         wgettext!("Could not set terminal mode for new job")
                     );
-                    perror("tcsetattr");
+                    perror_nix("tcsetattr", err);
                 }
                 break;
             }
@@ -4813,25 +4836,24 @@ pub fn term_copy_modes() {
 }
 
 pub fn set_shell_modes(fd: RawFd, whence: &str) -> bool {
-    let ok = loop {
+    loop {
         match tcsetattr(
             unsafe { BorrowedFd::borrow_raw(fd) },
             SetArg::TCSANOW,
             &shell_modes(),
         ) {
-            Ok(_) => break true,
+            Ok(_) => return true,
             Err(nix::Error::EINTR) => continue,
-            Err(_) => break false,
+            Err(err) => {
+                perror_nix("tcsetattr", err);
+                flog!(
+                    warning,
+                    wgettext_fmt!("Failed to set terminal mode (%s)", whence)
+                );
+                return false;
+            }
         }
-    };
-    if !ok {
-        perror("tcsetattr");
-        flog!(
-            warning,
-            wgettext_fmt!("Failed to set terminal mode (%s)", whence)
-        );
     }
-    ok
 }
 
 pub fn set_shell_modes_temporarily(inputfd: RawFd) -> Option<Termios> {
@@ -4855,7 +4877,7 @@ fn term_steal(copy_modes: bool) {
         term_copy_modes();
     }
     set_shell_modes(STDIN_FILENO, "shell");
-    safe_termsize_invalidate_tty();
+    signal_safe_termsize_invalidate_tty();
 }
 
 // Ensure that fish owns the terminal, possibly waiting. If we cannot acquire the terminal, then
@@ -4874,7 +4896,7 @@ fn acquire_tty_or_exit(shell_pgid: libc::pid_t) {
     // In some strange cases the tty may be come preassigned to fish's pid, but not its pgroup.
     // In that case we simply attempt to claim our own pgroup.
     // See #7388.
-    if owner == getpid() {
+    if owner == getpid().as_raw() {
         unsafe { libc::setpgid(owner, owner) };
         return;
     }
@@ -4934,15 +4956,15 @@ fn acquire_tty_or_exit(shell_pgid: libc::pid_t) {
                     warning,
                     sprintf!(
                         "I appear to be an orphaned process, so I am quitting politely. My pid is %d.",
-                        pid
+                        pid.as_raw()
                     )
                 );
                 exit_without_destructors(1);
             }
 
             // Try stopping us.
-            if killpg(nix::unistd::Pid::from_raw(shell_pgid), Signal::SIGTTIN).is_err() {
-                perror("killpg(shell_pgid, SIGTTIN)");
+            if let Err(err) = killpg(nix::unistd::Pid::from_raw(shell_pgid), Signal::SIGTTIN) {
+                perror_nix("killpg(shell_pgid, SIGTTIN)", err);
                 exit_without_destructors(1);
             }
         }
@@ -4953,36 +4975,36 @@ fn acquire_tty_or_exit(shell_pgid: libc::pid_t) {
 fn reader_interactive_init() {
     assert_is_main_thread();
 
-    let mut shell_pgid = getpgrp().as_raw();
+    let mut shell_pgid = getpgrp();
     let shell_pid = getpid();
 
     // Ensure interactive signal handling is enabled.
     signal_set_handlers_once(true);
 
     // Wait until we own the terminal.
-    acquire_tty_or_exit(shell_pgid);
+    acquire_tty_or_exit(shell_pgid.as_raw());
 
     // If fish has no valid pgroup (possible with firejail, see #5295) or is interactive,
     // ensure it owns the terminal. Also see #5909, #7060.
-    if shell_pgid == 0 || (is_interactive_session() && shell_pgid != shell_pid) {
+    if shell_pgid.as_raw() == 0 || (is_interactive_session() && shell_pgid != shell_pid) {
         shell_pgid = shell_pid;
-        if unsafe { libc::setpgid(shell_pgid, shell_pgid) } < 0 {
+        if let Err(e) = setpgid(shell_pgid, shell_pgid) {
             // If we're session leader setpgid returns EPERM. The other cases where we'd get EPERM
             // don't apply as we passed our own pid.
             //
             // This should be harmless, so we ignore it.
-            if errno().0 != EPERM {
+            if e != nix::errno::Errno::EPERM {
                 flog!(
                     error,
                     wgettext!("Failed to assign shell to its own process group")
                 );
-                perror("setpgid");
+                perror_nix("setpgid", e);
                 exit_without_destructors(1);
             }
         }
 
         // Take control of the terminal
-        if unsafe { libc::tcsetpgrp(STDIN_FILENO, shell_pgid) } == -1 {
+        if unsafe { libc::tcsetpgrp(STDIN_FILENO, shell_pgid.as_raw()) } == -1 {
             flog!(error, wgettext!("Failed to take control of the terminal"));
             perror("tcsetpgrp");
             exit_without_destructors(1);
@@ -4992,7 +5014,7 @@ fn reader_interactive_init() {
         set_shell_modes(STDIN_FILENO, "startup");
     }
 
-    safe_termsize_invalidate_tty();
+    signal_safe_termsize_invalidate_tty();
 }
 
 /// Return whether fish is currently unwinding the stack in preparation to exit.
@@ -5000,10 +5022,7 @@ pub fn fish_is_unwinding_for_exit() -> bool {
     let exit_state = EXIT_STATE.load(Ordering::Relaxed);
     let exit_state: ExitState = unsafe { std::mem::transmute(exit_state) };
     match exit_state {
-        ExitState::None => {
-            // Cancel if we got SIGHUP.
-            reader_received_sighup()
-        }
+        ExitState::None => reader_received_exit_signal(),
         ExitState::RunningHandlers => {
             // We intend to exit but we want to allow these handlers to run.
             false
@@ -5097,18 +5116,18 @@ pub fn reader_write_title(
     }
 }
 
-impl<'a> Reader<'a> {
-    fn exec_prompt_cmd(&self, prompt_cmd: &wstr, final_prompt: bool) -> Vec<WString> {
-        let mut output = vec![];
-        let prompt_cmd = if final_prompt && function::exists(prompt_cmd, self.parser) {
-            Cow::Owned(prompt_cmd.to_owned() + L!(" --final-rendering"))
-        } else {
-            Cow::Borrowed(prompt_cmd)
-        };
-        let _ = exec_subshell(&prompt_cmd, self.parser, Some(&mut output), false);
-        output
-    }
+fn exec_prompt_cmd(parser: &Parser, prompt_cmd: &wstr, final_prompt: bool) -> Vec<WString> {
+    let mut output = vec![];
+    let prompt_cmd = if final_prompt && function::exists(prompt_cmd, parser) {
+        Cow::Owned(prompt_cmd.to_owned() + L!(" --final-rendering"))
+    } else {
+        Cow::Borrowed(prompt_cmd)
+    };
+    let _ = exec_subshell(&prompt_cmd, parser, Some(&mut output), false);
+    output
+}
 
+impl<'a> Reader<'a> {
     /// Execute prompt commands based on the provided arguments. The output is inserted into prompt_buff.
     fn exec_prompt(&mut self, full_prompt: bool, final_prompt: bool) {
         // Suppress fish_trace while in the prompt.
@@ -5128,8 +5147,11 @@ impl<'a> Reader<'a> {
         self.mode_prompt_buff.clear();
         if function::exists(MODE_PROMPT_FUNCTION_NAME, self.parser) {
             // We do not support multiline mode indicators, so just concatenate all of them.
-            self.mode_prompt_buff =
-                WString::from_iter(self.exec_prompt_cmd(MODE_PROMPT_FUNCTION_NAME, final_prompt));
+            self.mode_prompt_buff = WString::from_iter(exec_prompt_cmd(
+                self.parser,
+                MODE_PROMPT_FUNCTION_NAME,
+                final_prompt,
+            ));
         }
 
         if full_prompt {
@@ -5148,8 +5170,21 @@ impl<'a> Reader<'a> {
                     DEFAULT_PROMPT
                 };
 
-                self.left_prompt_buff =
-                    join_strings(&self.exec_prompt_cmd(prompt_cmd, final_prompt), '\n');
+                self.left_prompt_buff = join_strings(
+                    &exec_prompt_cmd(self.parser, prompt_cmd, final_prompt),
+                    '\n',
+                );
+
+                // Support the SHELL_PROMPT_PREFIX and SHELL_PROMPT_SUFFIX environment
+                // variables as standardized by systemd v257. Prepend the prefix and
+                // append the suffix to the left prompt so that all prompts
+                // automatically pick them up.
+                if let Some(prefix) = self.vars().get_unless_empty(L!("SHELL_PROMPT_PREFIX")) {
+                    self.left_prompt_buff.insert_utfstr(0, &prefix.as_string());
+                }
+                if let Some(suffix) = self.vars().get_unless_empty(L!("SHELL_PROMPT_SUFFIX")) {
+                    self.left_prompt_buff.push_utfstr(&suffix.as_string());
+                }
             }
 
             // Don't execute the right prompt if it is undefined fish_right_prompt
@@ -5158,9 +5193,11 @@ impl<'a> Reader<'a> {
                     || function::exists(&self.conf.right_prompt_cmd, self.parser))
             {
                 // Right prompt does not support multiple lines, so just concatenate all of them.
-                self.right_prompt_buff = WString::from_iter(
-                    self.exec_prompt_cmd(&self.conf.right_prompt_cmd, final_prompt),
-                );
+                self.right_prompt_buff = WString::from_iter(exec_prompt_cmd(
+                    self.parser,
+                    &self.conf.right_prompt_cmd,
+                    final_prompt,
+                ));
             }
         }
 
@@ -5674,6 +5711,7 @@ impl<'a> Reader<'a> {
         };
         self.data
             .replace_substring(EditableLineTag::Commandline, range, replacement);
+        self.update_buff_pos(self.active_edit_line_tag(), None);
     }
 }
 
@@ -6220,6 +6258,7 @@ fn command_ends_paging(c: ReadlineCmd, focused_on_search_field: bool) -> bool {
         | rl::BackwardKillBigword
         | rl::BackwardKillToken
         | rl::SelfInsert
+        | rl::GetKey
         | rl::SelfInsertNotFirst
         | rl::TransposeChars
         | rl::TransposeWords
@@ -6257,8 +6296,19 @@ fn command_ends_history_search(c: ReadlineCmd) -> bool {
             | rl::HistoryPagerDelete
             | rl::BeginningOfHistory
             | rl::EndOfHistory
+            | rl::ScrollbackPush
+            | rl::ClearScreenAndRepaint
             | rl::Repaint
             | rl::ForceRepaint
+    )
+}
+
+fn command_only_affects_rendering(c: ReadlineCmd) -> bool {
+    #[allow(non_camel_case_types)]
+    type rl = ReadlineCmd;
+    matches!(
+        c,
+        rl::ClearScreenAndRepaint | rl::ForceRepaint | rl::RepaintMode | rl::Repaint
     )
 }
 
@@ -6331,7 +6381,7 @@ fn reader_run_command(parser: &Parser, cmd: &wstr) -> EvalRes {
     reader_write_title(cmd, parser, true);
     Outputter::stdoutput()
         .borrow_mut()
-        .set_text_face(TextFace::default());
+        .set_text_face(TextFace::terminal_default());
     term_donate(false);
 
     let time_before = Instant::now();
@@ -6370,11 +6420,11 @@ fn reader_run_command(parser: &Parser, cmd: &wstr) -> EvalRes {
     eval_res
 }
 
-fn reader_shell_test(parser: &Parser, bstr: &wstr) -> Result<(), ParserTestErrorBits> {
+fn reader_shell_test(parser: &Parser, bstr: &wstr) -> Result<(), ParseIssue> {
     let mut errors = vec![];
     let res = detect_parse_errors(bstr, Some(&mut errors), /*accept_incomplete=*/ true);
 
-    if res.is_err_and(|err| err.contains(ParserTestErrorBits::ERROR)) {
+    if res.is_err_and(|p| p.error) {
         let mut error_desc = parser.get_backtrace(bstr, &errors);
 
         // Ensure we end with a newline. Also add an initial newline, because it's likely the user
@@ -6489,8 +6539,7 @@ impl<'a> Reader<'a> {
 /// Check if we should exit the reader loop.
 /// Return true if we should exit.
 pub fn check_exit_loop_maybe_warning(data: Option<&mut Reader>) -> bool {
-    // sighup always forces exit.
-    if reader_received_sighup() {
+    if reader_received_exit_signal() {
         return true;
     }
 
@@ -6919,13 +6968,15 @@ impl<'a> Reader<'a> {
 
         // Construct a copy of the string from the beginning of the command substitution
         // up to the end of the token we're completing.
-        let cmdsub = &el.text()[cmdsub_range.start..token_range.end];
 
-        let (mut comp, _needs_load) = complete(
-            cmdsub,
-            CompletionRequestOptions::normal(),
-            &self.parser.context(),
-        );
+        let (mut comp, _needs_load) = {
+            let cmdsub = &el.text()[cmdsub_range.start..token_range.end];
+            complete(
+                cmdsub,
+                CompletionRequestOptions::normal(),
+                &self.parser.context(),
+            )
+        };
 
         let el = &self.command_line;
         // User-supplied completions may have changed the commandline - prevent buffer
@@ -7001,9 +7052,11 @@ impl<'a> Reader<'a> {
 
         comp.retain(|c| !c.replaces_token() || reader_can_replace(&tok, c.flags));
 
-        for c in &mut comp {
-            if !will_replace_token && c.replaces_token() {
-                c.flags |= CompleteFlags::SUPPRESS_PAGER_PREFIX;
+        if !will_replace_token {
+            for c in &mut comp {
+                if c.replaces_token() {
+                    c.flags |= CompleteFlags::SUPPRESS_PAGER_PREFIX;
+                }
             }
         }
 
@@ -7101,7 +7154,7 @@ impl<'a> Reader<'a> {
                 prefix = full;
             } else {
                 // Collapse parent directories and append end of string
-                prefix.push(get_ellipsis_char());
+                prefix.push(ELLIPSIS_CHAR);
 
                 let truncated = &full[full.len() - PREFIX_MAX_LEN..];
                 let (i, last_component) = truncated.split('/').enumerate().last().unwrap();
@@ -7249,10 +7302,10 @@ mod tests {
                 let mut cursor_pos = in_cursor_pos;
 
                 let result = completion_apply_to_command_line(
-                    &OperationContext::test_only_foreground(
+                    &OperationContext::foreground(
                         &parser,
-                        parser.vars(),
                         Box::new(no_cancel),
+                        crate::operation_context::EXPANSION_LIMIT_DEFAULT,
                     ),
                     completion,
                     $flags,

@@ -56,7 +56,7 @@ pub fn eval(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr]) -> Bui
         &new_cmd,
         &ios,
         streams.job_group.as_ref(),
-        BlockType::top,
+        BlockType::Top,
         false,
     );
     let status = if res.was_empty {

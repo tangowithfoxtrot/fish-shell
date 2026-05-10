@@ -1,9 +1,9 @@
 use super::{localizable_consts, localizable_string, wgettext, wgettext_fmt};
-use crate::env::{EnvStack, Environment};
+use crate::env::{EnvStack, Environment as _};
 use fish_widestring::{L, WString, wstr};
-use itertools::Itertools;
+use itertools::Itertools as _;
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum LanguagePrecedenceOrigin {
@@ -87,7 +87,7 @@ fn append_space_separated_list<S: AsRef<str>>(
 ) {
     for lang in list {
         string.push(' ');
-        string.push_utfstr(&crate::common::escape(
+        string.push_utfstr(&fish_common::escape(
             // lang is already PUA-encoded at this point. The reason we convert the PUA-encoded
             // WString into a String is to enable comparison with the language names we have
             // available. We could use WString for lang, but that would require converting our
@@ -138,7 +138,7 @@ struct LocalizationState {
 }
 
 impl LocalizationState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             precedence_origin: LanguagePrecedenceOrigin::Default,
         }
@@ -322,8 +322,7 @@ impl LocalizationState {
 ///
 /// This struct should be updated when the relevant variables change or `status language` is used
 /// to modify the localization state.
-static LOCALIZATION_STATE: LazyLock<Mutex<LocalizationState>> =
-    LazyLock::new(|| Mutex::new(LocalizationState::new()));
+static LOCALIZATION_STATE: Mutex<LocalizationState> = Mutex::new(LocalizationState::new());
 
 /// Call this when one of `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG` changes.
 /// Updates internal state such that the correct localizations will be used in subsequent

@@ -1,42 +1,48 @@
-use super::ElectricVar;
-use super::environment_impl::{
-    EnvMutex, EnvMutexGuard, EnvScopedImpl, EnvStackImpl, ModResult, UVAR_SCOPE_IS_GLOBAL,
-    colon_split, uvars,
+use super::{
+    ElectricVar,
+    environment_impl::{
+        EnvMutex, EnvMutexGuard, EnvScopedImpl, EnvStackImpl, ModResult, UVAR_SCOPE_IS_GLOBAL,
+        colon_split, uvars,
+    },
 };
-use crate::abbrs::{Abbreviation, Position, abbrs_get_set};
-use crate::builtins::shared::{BuiltinResult, SUCCESS};
-use crate::common::{
-    UnescapeStringStyle, cstr2wcstring, osstr2wcstring, str2wcstring, unescape_string,
+use crate::{
+    abbrs::{Abbreviation, Position, abbrs_get_set},
+    builtins::shared::{BuiltinResult, SUCCESS},
+    env::{
+        EnvMode, EnvSetMode, EnvVar, Statuses,
+        config_paths::{ConfigPaths, PREFIX},
+    },
+    env_dispatch::{VarChangeMilieu, env_dispatch_init, env_dispatch_var_change},
+    event::Event,
+    flog::flog,
+    global_safety::RelaxedAtomicBool,
+    input::{FISH_BIND_MODE_VAR, init_input},
+    localization::wgettext,
+    null_terminated_array::OwningNullTerminatedArray,
+    path::{
+        path_emit_config_directory_messages, path_get_cache, path_get_config, path_get_data,
+        path_make_canonical, paths_are_same_file,
+    },
+    prelude::*,
+    proc::is_interactive_session,
+    termsize,
+    universal_notifier::default_notifier,
+    wutil::{fish_wcstol, wgetcwd},
 };
-use crate::env::config_paths::ConfigPaths;
-use crate::env::{EnvMode, EnvSetMode, EnvVar, Statuses};
-use crate::env_dispatch::{VarChangeMilieu, env_dispatch_init, env_dispatch_var_change};
-use crate::event::Event;
-use crate::flog::flog;
-use crate::global_safety::RelaxedAtomicBool;
-use crate::input::{FISH_BIND_MODE_VAR, init_input};
-use crate::localization::wgettext;
-use crate::nix::getpid;
-use crate::null_terminated_array::OwningNullTerminatedArray;
-use crate::path::{
-    path_emit_config_directory_messages, path_get_cache, path_get_config, path_get_data,
-    path_make_canonical, paths_are_same_file,
-};
-use crate::prelude::*;
-use crate::proc::is_interactive_session;
-use crate::termsize;
-use crate::universal_notifier::default_notifier;
-use crate::wutil::{fish_wcstol, wgetcwd};
+use fish_common::{UnescapeStringStyle, unescape_string};
 use fish_wcstringutil::join_strings;
+use fish_widestring::{cstr2wcstring, osstr2wcstring, str2wcstring};
 use libc::c_int;
 use nix::{
-    NixPath,
-    unistd::{Uid, User, gethostname},
+    NixPath as _,
+    unistd::{Uid, User, gethostname, getpid},
 };
-use std::collections::HashMap;
-use std::ffi::CStr;
-use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::{
+    collections::HashMap,
+    ffi::CStr,
+    path::PathBuf,
+    sync::{Arc, LazyLock, OnceLock},
+};
 
 /// Set when a universal variable has been modified but not yet been written to disk via sync().
 static UVARS_LOCALLY_MODIFIED: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
@@ -201,12 +207,12 @@ impl EnvStack {
 
     /// Helpers to get and set the proc statuses.
     /// These correspond to $status and $pipestatus.
-    pub fn get_last_statuses(&self) -> Statuses {
-        self.lock().base.get_last_statuses().clone()
+    pub fn last_statuses(&self) -> Statuses {
+        self.lock().base.last_statuses().clone()
     }
 
-    pub fn get_last_status(&self) -> c_int {
-        self.lock().base.get_last_statuses().status
+    pub fn last_status(&self) -> c_int {
+        self.lock().base.last_statuses().status
     }
 
     pub fn set_last_statuses(&self, statuses: Statuses) {
@@ -399,14 +405,14 @@ impl EnvStack {
     /// A variable stack that only represents globals.
     /// Do not push or pop from this.
     pub fn globals() -> &'static EnvStack {
-        use std::sync::OnceLock;
-        static GLOBALS: OnceLock<EnvStack> = OnceLock::new();
-        GLOBALS.get_or_init(|| EnvStack {
+        use std::sync::LazyLock;
+        static GLOBALS: LazyLock<EnvStack> = LazyLock::new(|| EnvStack {
             inner: EnvStackImpl::new(),
             can_push_pop: false,
             // Do not dispatch variable changes - this is used at startup when we are importing env vars.
             dispatches_var_changes: false,
-        })
+        });
+        &GLOBALS
     }
 
     pub fn set_argv(&self, argv: Vec<WString>, is_repainting: bool) {
@@ -517,7 +523,15 @@ fn setup_user(global_exported_mode: EnvSetMode, vars: &EnvStack) {
 
 pub(crate) static FALLBACK_PATH: LazyLock<&[WString]> = LazyLock::new(|| {
     // _CS_PATH: colon-separated paths to find POSIX utilities. Same as USER_CS_PATH.
-    let cs_path = libc::_CS_PATH;
+    // Fix until rust-lang/libc#4956 is merged
+    cfg_if::cfg_if!(
+        if #[cfg(target_os = "illumos")] {
+            // See https://github.com/illumos/illumos-gate/blob/af641d205ecf080be0d900f89c4f3d2adb84f33f/usr/src/uts/common/sys/unistd.h#L50
+            let cs_path: c_int = 65;
+        } else {
+            let cs_path = libc::_CS_PATH;
+        }
+    );
 
     let buf_size = unsafe { libc::confstr(cs_path, std::ptr::null_mut(), 0) };
     let paths: Vec<WString> = if buf_size > 0 {
@@ -529,7 +543,7 @@ pub(crate) static FALLBACK_PATH: LazyLock<&[WString]> = LazyLock::new(|| {
         colon_split(&[cstr2wcstring(cstr)])
     } else {
         vec![
-            str2wcstring(env!("PREFIX")) + L!("/bin"),
+            str2wcstring(PREFIX) + L!("/bin"),
             L!("/usr/bin").to_owned(),
             L!("/bin").to_owned(),
         ]
@@ -654,7 +668,7 @@ pub fn env_init(paths: Option<&ConfigPaths>, do_uvars: bool, default_paths: bool
     vars.set_one(L!("FISH_VERSION"), global_mode, version);
 
     // Set the $fish_pid variable.
-    vars.set_one(L!("fish_pid"), global_mode, getpid().to_wstring());
+    vars.set_one(L!("fish_pid"), global_mode, getpid().as_raw().to_wstring());
 
     // Set the $hostname variable
     let hostname: WString = gethostname().map_or("fish".into(), osstr2wcstring);
@@ -790,7 +804,7 @@ pub fn env_init(paths: Option<&ConfigPaths>, do_uvars: bool, default_paths: bool
 
 #[cfg(test)]
 mod tests {
-    use super::{EnvMode, EnvStack, Environment};
+    use super::{EnvMode, EnvStack, Environment as _};
     use crate::env::EnvSetMode;
     use crate::prelude::*;
     use crate::tests::prelude::*;
@@ -798,7 +812,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_env_snapshot() {
-        let _cleanup = test_init();
+        test_init();
         std::fs::create_dir_all("test/fish_env_snapshot_test/").unwrap();
         let parser = TestParser::new();
         let vars = parser.vars();

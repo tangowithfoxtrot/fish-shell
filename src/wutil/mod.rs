@@ -7,19 +7,21 @@ pub mod printf;
 pub mod wcstod;
 pub mod wcstoi;
 
-use crate::common::{
-    bytes2wcstring, fish_reserved_codepoint, osstr2wcstring, wcs2bytes, wcs2osstring, wcs2zstring,
+use crate::{fds::BorrowedFdFile, flog, signal::SigChecker};
+use errno::{Errno, set_errno};
+use fish_util::{perror, write_to_fd};
+use fish_wcstringutil::join_strings;
+use fish_widestring::{
+    IntoCharIter, L, WExt as _, WString, bytes2wcstring, fish_reserved_codepoint, osstr2wcstring,
+    str2bytes_callback, wcs2osstring, wcs2zstring, wstr,
 };
-use crate::fds::BorrowedFdFile;
-use crate::flog;
-use errno::errno;
-use fish_wcstringutil::{join_strings, str2bytes_callback};
-use fish_widestring::{IntoCharIter, L, WExt, WString, wstr};
 use nix::unistd::AccessFlags;
-use std::ffi::{CStr, OsStr};
-use std::fs::{self, canonicalize};
-use std::io::{self, Write};
-use std::os::unix::prelude::*;
+use std::{
+    ffi::OsStr,
+    fs::{self, canonicalize},
+    io,
+    os::unix::prelude::*,
+};
 
 pub use crate::wutil::printf::{eprintf, fprintf, printf, sprintf};
 
@@ -65,26 +67,8 @@ pub fn wunlink(file_name: &wstr) -> io::Result<()> {
     fs::remove_file(tmp)
 }
 
-pub fn wperror(s: &wstr) {
-    let bytes = wcs2bytes(s);
-    // We can't guarantee the string is 100% Unicode (why?), so we don't use std::str::from_utf8()
-    let s = OsStr::from_bytes(&bytes).to_string_lossy();
-    perror(&s);
-}
-
-/// Port of the wide-string wperror from `src/wutil.cpp` but for rust `&str`.
-pub fn perror(s: &str) {
-    let e = errno().0;
-    let mut stderr = std::io::stderr().lock();
-    if !s.is_empty() {
-        let _ = write!(stderr, "{s}: ");
-    }
-    let slice = unsafe {
-        let msg = libc::strerror(e);
-        CStr::from_ptr(msg).to_bytes()
-    };
-    let _ = stderr.write_all(slice);
-    let _ = stderr.write_all(b"\n");
+pub fn perror_nix(s: &str, e: nix::errno::Errno) {
+    eprintf!("%s: %s\n", s, e.desc());
 }
 
 pub fn perror_io(s: &str, e: &io::Error) {
@@ -118,6 +102,7 @@ pub fn wreadlink(file_name: &wstr) -> Option<WString> {
 /// `wrealpath()` returns `None`
 pub fn wrealpath(pathname: &wstr) -> Option<WString> {
     if pathname.is_empty() {
+        set_errno(Errno(0));
         return None;
     }
 
@@ -344,21 +329,8 @@ pub fn wbasename(mut path: &wstr) -> &wstr {
     path
 }
 
-/// Wide character version of rename.
-pub fn wrename(old_name: &wstr, new_name: &wstr) -> io::Result<()> {
-    let old_narrow = wcs2osstring(old_name);
-    let new_narrow = wcs2osstring(new_name);
-    fs::rename(old_narrow, new_narrow)
-}
-
-pub fn write_to_fd(input: &[u8], fd: RawFd) -> nix::Result<usize> {
-    nix::unistd::write(unsafe { BorrowedFd::borrow_raw(fd) }, input)
-}
-
 /// Write a wide string to a file descriptor. This avoids doing any additional allocation.
-/// This does NOT retry on EINTR or EAGAIN, it simply returns.
-/// Return -1 on error in which case errno will have been set. In this event, the number of bytes
-/// actually written cannot be obtained.
+/// Returns nothing when interrupted by ctrl-c or HUP.
 pub fn unescape_bytes_and_write_to_fd(input: impl IntoCharIter, fd: RawFd) -> Option<usize> {
     // Accumulate data in a local buffer.
     let mut accum = [0u8; 512];
@@ -369,10 +341,37 @@ pub fn unescape_bytes_and_write_to_fd(input: impl IntoCharIter, fd: RawFd) -> Op
     // Return true on success, false on error.
     let mut total_written = 0;
 
-    fn do_write(fd: RawFd, total_written: &mut usize, mut buf: &[u8]) -> bool {
+    fn do_write(
+        sigcheck: &mut SigChecker,
+        fd: RawFd,
+        total_written: &mut usize,
+        mut buf: &[u8],
+    ) -> bool {
         while !buf.is_empty() {
-            let Ok(amt) = write_to_fd(buf, fd) else {
-                return false;
+            let amt = match write_to_fd(buf, fd) {
+                Ok(amt) => amt,
+                Err(err) => {
+                    // Some of our builtins emit multiple screens worth of data sent to a pager (the primary
+                    // example being the `history` builtin) and receiving SIGINT should be considered normal and
+                    // non-exceptional (user request to abort via Ctrl-C), meaning we shouldn't print an error.
+                    //
+                    // We have two options here: we can either return false without setting errored_ to
+                    // true (*this* write will be silently aborted but the onus is on the caller to check
+                    // the return value and skip future calls to `append()`) or we can flag the entire
+                    // output stream as errored, causing us to both return false and skip any future writes.
+                    // We're currently going with the latter, especially seeing as no callers currently
+                    // check the result of `append()` (since it was always a void function before).
+                    match err {
+                        nix::errno::Errno::EINTR => {
+                            if !sigcheck.check() {
+                                continue;
+                            }
+                        }
+                        nix::errno::Errno::EPIPE => (),
+                        _ => perror("write"),
+                    }
+                    return false;
+                }
             };
             *total_written += amt;
             assert!(amt <= buf.len(), "Wrote more than requested");
@@ -382,18 +381,22 @@ pub fn unescape_bytes_and_write_to_fd(input: impl IntoCharIter, fd: RawFd) -> Op
     }
 
     // Helper to flush the accumulation buffer.
-    let flush_accum = |total_written: &mut usize, accum: &[u8], accumlen: &mut usize| {
-        if !do_write(fd, total_written, &accum[..*accumlen]) {
+    let flush_accum = |sigcheck: &mut SigChecker,
+                       total_written: &mut usize,
+                       accum: &[u8],
+                       accumlen: &mut usize| {
+        if !do_write(sigcheck, fd, total_written, &accum[..*accumlen]) {
             return false;
         }
         *accumlen = 0;
         true
     };
 
+    let mut sigcheck = SigChecker::new_sighupintterm();
     let mut success = str2bytes_callback(input, |buff: &[u8]| {
         if buff.len() + accumlen > accum_capacity {
             // We have to flush.
-            if !flush_accum(&mut total_written, &accum, &mut accumlen) {
+            if !flush_accum(&mut sigcheck, &mut total_written, &accum, &mut accumlen) {
                 return false;
             }
         }
@@ -404,12 +407,12 @@ pub fn unescape_bytes_and_write_to_fd(input: impl IntoCharIter, fd: RawFd) -> Op
             true
         } else {
             // Too much data to even fit, just write it immediately.
-            do_write(fd, &mut total_written, buff)
+            do_write(&mut sigcheck, fd, &mut total_written, buff)
         }
     });
     // Flush any remaining.
     if success {
-        success = flush_accum(&mut total_written, &accum, &mut accumlen);
+        success = flush_accum(&mut sigcheck, &mut total_written, &accum, &mut accumlen);
     }
     if success { Some(total_written) } else { None }
 }
@@ -430,10 +433,6 @@ pub(crate) fn fish_is_pua(c: char) -> bool {
 /// some code points. See issue #3050.
 pub fn fish_iswalnum(c: char) -> bool {
     !fish_reserved_codepoint(c) && !fish_is_pua(c) && c.is_alphanumeric()
-}
-
-pub fn fish_wcswidth(s: &wstr) -> isize {
-    fish_fallback::fish_wcswidth(s)
 }
 
 /// Given that `cursor` is a pointer into `base`, return the offset in characters.
@@ -460,14 +459,13 @@ mod tests {
     use super::{
         normalize_path, unescape_bytes_and_write_to_fd, wbasename, wdirname, wstr_offset_in,
     };
-    use crate::common::bytes2wcstring;
-    use crate::prelude::*;
-    use crate::tests::prelude::*;
-    use rand::Rng;
+    use crate::{prelude::*, tests::prelude::*};
+    use fish_widestring::bytes2wcstring;
+    use rand::Rng as _;
     use std::{
         fs::OpenOptions,
-        io::{Read, Seek},
-        os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+        io::{Read as _, Seek as _},
+        os::{fd::AsRawFd as _, unix::fs::OpenOptionsExt as _},
     };
 
     mod test_path_normalize_for_cd {
@@ -643,7 +641,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_wwrite_to_fd() {
-        let _cleanup = test_init();
+        test_init();
         let temp_file = fish_tempfile::new_file().unwrap();
         let mut rng = rand::rng();
         let sizes = [1, 2, 3, 5, 13, 23, 64, 128, 255, 4096, 4096 * 2];

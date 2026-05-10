@@ -1,4 +1,5 @@
 #RUN: fish=%fish %fish %s
+
 function complete_test_alpha1
     echo $argv
 end
@@ -345,8 +346,8 @@ begin
             rm -rf $parened_path
             and mkdir $parened_path
             and mkdir $parened_subpath
-            and ln -s /bin/ls $parened_path/'__test6_(paren)_command'
-            and ln -s /bin/ls $parened_subpath/'__test6_subdir_(paren)_command'
+            and ln -s (command -v ls) $parened_path/'__test6_(paren)_command'
+            and ln -s (command -v ls) $parened_subpath/'__test6_subdir_(paren)_command'
         end
         echo "error: could not create command expansion temp environment" >&2
     end
@@ -420,8 +421,12 @@ rm -r $dir
 set -l dir (mktemp -d)
 cd $dir
 
-: >command-not-in-path
-chmod +x command-not-in-path
+if cygwin_noacl ./
+    echo "#!/bin/sh" >command-not-in-path
+else
+    : >command-not-in-path
+    chmod +x command-not-in-path
+end
 complete -p $PWD/command-not-in-path -xa relative-path
 complete -C './command-not-in-path '
 # CHECK: relative-path
@@ -434,8 +439,12 @@ HOME=$PWD complete -C '~/command-not-in-path '
 
 # Non-canonical command path
 mkdir -p subdir
-: >subdir/command-in-subdir
-chmod +x subdir/command-in-subdir
+if cygwin_noacl ./
+    echo "#!/bin/sh" >subdir/command-in-subdir
+else
+    : >subdir/command-in-subdir
+    chmod +x subdir/command-in-subdir
+end
 complete -p "$PWD/subdir/command-in-subdir" -xa custom-completions
 complete -C './subdir/../subdir/command-in-subdir '
 # CHECK: custom-completions
@@ -482,6 +491,8 @@ complete -C"cmd_with_fancy_completion </dev/null >/dev/null 2>>/dev/null >?/dev/
 
 complete -c thing -x -F
 # CHECKERR: complete: invalid option combination, '--exclusive' and '--force-files'
+complete -c thing -F -f
+# CHECKERR: complete: invalid option combination, '--no-files' and '--force-files'
 # Multiple conditions
 complete -f -c shot
 complete -fc shot -n 'test (count (commandline -xpc) -eq 1' -n 'test (commandline -xpc)[-1] = shot' -a through
@@ -564,7 +575,7 @@ complete -C'complete --command=mktemp' | string replace -rf '=mktemp\t.*' '=mkte
 ## Test token expansion in commandline -x
 
 complete complete_make -f -a '(argparse C/directory= -- (commandline -xpc)[2..];
-                               echo Completing targets in directory $_flag_C)'
+    echo Completing targets in directory $_flag_C)'
 var=path/to complete -C'complete_make -C "$var/build-directory" '
 # CHECK: Completing targets in directory path/to/build-directory
 var1=path complete -C'var2=to complete_make -C "$var1/$var2/other-build-directory" '
@@ -691,3 +702,34 @@ complete command-line-aware-completions -xa "(commandline --cursor; commandline 
 complete -C"command-line-aware-completions "
 # CHECK: 31
 # CHECK: command-line-aware-completions
+
+begin
+    if cygwin_noacl ./
+        echo "#!/bin/sh" >"$TMPDIR/-command-starting-with-dash"
+    else
+        : >"$TMPDIR/-command-starting-with-dash"
+        chmod +x "$TMPDIR/-command-starting-with-dash"
+    end
+
+    set -l PATH "$TMPDIR" $PATH
+    complete -C-command-starting-with
+    # CHECK: -command-starting-with-dash{{\t}}command
+end
+
+complete --command="foo\\"
+# CHECKERR: complete: Invalid token 'foo\'
+
+complete -c foo -a "foo\\"
+# CHECKERR: complete: foo\: contains a syntax error
+# CHECKERR: complete: Expected a string, but found an incomplete token
+# CHECKERR: foo\
+# CHECKERR:    ^
+
+complete -C
+# CHECKERR: complete: Can not get commandline in non-interactive mode
+
+if string match -rq -- '^[a-z]+$' $USER
+    set -l first_letter_wrong_case (string sub -l 1 -- $USER | string upper)
+    string match -rq -- "$USER\t.*" (complete -C "echo ~$first_letter_wrong_case")
+    or echo "`complete -C'echo ~$first_letter_wrong_case'` did not yield $USER"
+end

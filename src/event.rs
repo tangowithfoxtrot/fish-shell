@@ -4,18 +4,22 @@
 //! defined when these functions produce output or perform memory allocations, since such functions
 //! may not be safely called by signal handlers.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
-
-use crate::common::{ScopeGuard, escape, str2wcstring};
-use crate::flog::flog;
-use crate::io::{IoChain, IoStreams};
-use crate::job_group::MaybeJobId;
-use crate::parser::{Block, Parser};
-use crate::prelude::*;
-use crate::proc::Pid;
-use crate::reader::reader_update_termsize;
-use crate::signal::{Signal, signal_check_cancel, signal_handle};
+use crate::{
+    flog::flog,
+    io::{IoChain, IoStreams},
+    job_group::MaybeJobId,
+    parser::{Block, Parser},
+    prelude::*,
+    proc::{InternalJobId, Pid},
+    reader::reader_update_termsize,
+    signal::{Signal, signal_check_cancel, signal_handle},
+};
+use fish_common::{ScopeGuard, escape};
+use fish_widestring::str2wcstring;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU32, Ordering},
+};
 
 pub enum EventType {
     Any,
@@ -47,12 +51,12 @@ pub enum EventDescription {
         pid: Option<Pid>,
         /// `internal_job_id` of the job to match.
         /// If this is 0, we match either all jobs (`pid == ANY_PID`) or no jobs (otherwise).
-        internal_job_id: u64,
+        internal_job_id: InternalJobId,
     },
     /// An event triggered by a job exit, triggering the 'caller'-style events only.
     CallerExit {
         /// Internal job ID.
-        caller_id: u64,
+        caller_id: InternalJobId,
     },
     /// A generic event.
     Generic {
@@ -235,7 +239,7 @@ impl Event {
         }
     }
 
-    pub fn job_exit(pgid: Pid, jid: u64) -> Self {
+    pub fn job_exit(pgid: Pid, jid: InternalJobId) -> Self {
         Self {
             desc: EventDescription::JobExit {
                 pid: Some(pgid),
@@ -249,7 +253,7 @@ impl Event {
         }
     }
 
-    pub fn caller_exit(internal_job_id: u64, job_id: MaybeJobId) -> Self {
+    pub fn caller_exit(internal_job_id: InternalJobId, job_id: MaybeJobId) -> Self {
         Self {
             desc: EventDescription::CallerExit {
                 caller_id: internal_job_id,
@@ -380,7 +384,7 @@ pub fn get_desc(parser: &Parser, evt: &Event) -> WString {
             format!("signal handler for {} ({})", signal.name(), signal.desc(),)
         }
         EventDescription::Variable { name } => format!("handler for variable '{name}'"),
-        EventDescription::ProcessExit { pid: None } => "exit handler for any process".to_string(),
+        EventDescription::ProcessExit { pid: None } => "exit handler for any process".to_owned(),
         EventDescription::ProcessExit { pid: Some(pid) } => {
             format!("exit handler for process {pid}")
         }
@@ -392,11 +396,11 @@ pub fn get_desc(parser: &Parser, evt: &Event) -> WString {
                     format!("exit handler for job with pid {pid}")
                 }
             } else {
-                "exit handler for any job".to_string()
+                "exit handler for any job".to_owned()
             }
         }
         EventDescription::CallerExit { .. } => {
-            "exit handler for command substitution caller".to_string()
+            "exit handler for command substitution caller".to_owned()
         }
         EventDescription::Generic { param } => format!("handler for generic event '{param}'"),
         EventDescription::Any => unreachable!(),
@@ -494,7 +498,7 @@ fn fire_internal(parser: &Parser, event: &Event) {
         // Event handlers are not part of the main flow of code, so they are marked as
         // non-interactive.
         let _non_interactive = parser.push_scope(|s| s.is_interactive = false);
-        let saved_statuses = parser.get_last_statuses();
+        let saved_statuses = parser.last_statuses();
         let _cleanup = ScopeGuard::new((), |()| {
             parser.set_last_statuses(saved_statuses);
         });

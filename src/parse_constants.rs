@@ -1,7 +1,6 @@
 //! Constants used in the programmatic representation of fish code.
 
 use crate::prelude::*;
-use bitflags::bitflags;
 use fish_fallback::{fish_wcswidth, fish_wcwidth};
 
 pub type SourceOffset = u32;
@@ -27,12 +26,24 @@ pub struct ParseTreeFlags {
     pub show_extra_semis: bool,
 }
 
-bitflags! {
-    #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-    pub struct ParserTestErrorBits: u8 {
-        const ERROR = 1;
-        const INCOMPLETE = 2;
-    }
+/// Represents parse issues found during validation.
+/// If this is returned as the error of a Result, then either `error` or `incomplete` (or both) is set.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct ParseIssue {
+    pub error: bool,      // An error was found.
+    pub incomplete: bool, // Incomplete input, such as unclosed block or pipe.
+}
+
+impl ParseIssue {
+    pub const ERROR: Result<(), Self> = Err(Self {
+        error: true,
+        incomplete: false,
+    });
+
+    pub const INCOMPLETE: Result<(), Self> = Err(Self {
+        error: false,
+        incomplete: true,
+    });
 }
 
 /// A range of source code.
@@ -295,11 +306,19 @@ impl ParseError {
         is_interactive: bool,
         skip_caret: bool,
     ) -> WString {
-        let mut result = prefix.to_owned();
         if skip_caret && self.text.is_empty() {
             return L!("").to_owned();
         }
-        result += wstr::from_char_slice(self.text.as_char_slice());
+
+        let mut result = if prefix.is_empty() {
+            self.text.clone()
+        } else {
+            wgettext_fmt!("%s: %s", prefix, &self.text)
+        };
+
+        if skip_caret {
+            return result;
+        }
 
         let mut start = self.source_start;
         let mut len = self.source_length;
@@ -311,10 +330,6 @@ impl ParseError {
 
         if start + len > src.len() {
             len = src.len() - self.source_start;
-        }
-
-        if skip_caret {
-            return result;
         }
 
         // Locate the beginning of this line of source.
@@ -370,26 +385,23 @@ impl ParseError {
                 // It's possible that the start points at a newline itself. In that case,
                 // pretend it's a space. We only expect this to be at the end of the string.
                 caret_space_line += " ";
-            } else {
-                let width = fish_wcwidth(wc);
-                if width > 0 {
-                    caret_space_line += " ".repeat(width as usize).as_str();
-                }
+            } else if let Some(width) = fish_wcwidth(wc) {
+                caret_space_line += " ".repeat(width).as_str();
             }
         }
         result += "\n";
-        result += wstr::from_char_slice(caret_space_line.as_char_slice());
+        result.push_utfstr(&caret_space_line);
         result += "^";
         if len > 1 {
             // Add a squiggle under the error location.
             // We do it like this
             //               ^~~^
             // With a "^" under the start and end, and squiggles in-between.
-            let width = fish_wcswidth(&src[start..start + len]);
+            let width = fish_wcswidth(&src[start..start + len]).unwrap_or_default();
             if width >= 2 {
                 // Subtract one for each of the carets - this is important in case
                 // the starting char has a width of > 1.
-                result += "~".repeat(width as usize - 2).as_str();
+                result += "~".repeat(width - 2).as_str();
                 result += "^";
             }
         }

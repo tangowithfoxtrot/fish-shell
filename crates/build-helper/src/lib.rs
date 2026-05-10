@@ -1,4 +1,4 @@
-use std::{borrow::Cow, env, os::unix::ffi::OsStrExt, path::Path};
+use std::{borrow::Cow, env, os::unix::ffi::OsStrExt as _, path::Path};
 
 pub fn env_var(name: &str) -> Option<String> {
     let err = match env::var(name) {
@@ -36,6 +36,14 @@ pub fn fish_build_dir() -> Cow<'static, Path> {
 
 pub fn fish_doc_dir() -> Cow<'static, Path> {
     cargo_target_dir().join("fish-docs").into()
+}
+
+fn l10n_dir() -> Cow<'static, Path> {
+    workspace_root().join("localization").into()
+}
+
+pub fn po_dir() -> Cow<'static, Path> {
+    l10n_dir().join("po").into()
 }
 
 // TODO Move this to rsconf
@@ -90,14 +98,14 @@ pub fn target_os_is_cygwin() -> bool {
 
 #[macro_export]
 macro_rules! as_os_strs {
-    [ $( $x:expr, )* ] => {
+    [ $( $x:expr ),* $(,)? ] => {
         {
             use std::ffi::OsStr;
             fn as_os_str<S: AsRef<OsStr> + ?Sized>(s: &S) -> &OsStr {
                 s.as_ref()
             }
-            &[
-                $( as_os_str($x), )*
+            [
+                $( as_os_str($x) ),*
             ]
         }
     }

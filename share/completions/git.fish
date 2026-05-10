@@ -779,8 +779,15 @@ function __fish_git_stash_not_using_subcommand
     or return 2
     set cmd $cmd[(contains -i -- "stash" $cmd)..-1]
     set -q cmd[2]
+    or return 0
+    contains -- $cmd[2] list show pop apply clear drop create save branch push
     and return 1
     return 0
+end
+
+function __fish_git_stash_is_push
+    __fish_git_stash_not_using_subcommand
+    or __fish_git_stash_using_command push
 end
 
 function __fish_git_complete_worktrees
@@ -1462,11 +1469,13 @@ complete -f -c git -n '__fish_git_using_command commit' -l fixup -d 'Fixup commi
 complete -f -c git -n '__fish_git_using_command commit' -l squash -d 'Squash commit to be used with rebase --autosquash'
 complete -c git -n '__fish_git_using_command commit' -l reset-author -d 'When amending, reset author of commit to the committer'
 complete -x -c git -n '__fish_git_using_command commit' -l author -d 'Override the commit author'
-complete -x -c git -n '__fish_git_using_command commit' -l cleanup -a "strip\t'Leading/trailing whitespace/empty lines, #commentary'
- whitespace\t'Like strip but keep #commentary'
- verbatim\t'Do not change the message'
- scissors\t'Like whitespace but also remove after scissor lines'
- default\t'Like strip if the message is to be edited, whitespace otherwise'" -d 'How to clean up the commit message'
+complete -x -c git -n '__fish_git_using_command commit' -l cleanup -a "
+    strip\t'Leading/trailing whitespace/empty lines, #commentary'
+    whitespace\t'Like strip but keep #commentary'
+    verbatim\t'Do not change the message'
+    scissors\t'Like whitespace but also remove after scissor lines'
+    default\t'Like strip if the message is to be edited, whitespace otherwise'
+" -d 'How to clean up the commit message'
 complete -x -c git -n '__fish_git_using_command commit' -l date -d 'Override the author date'
 complete -x -c git -n '__fish_git_using_command commit' -s m -l message -d 'Use the given message as the commit message'
 complete -f -c git -n '__fish_git_using_command commit' -l no-edit -d 'Use the selected commit message without launching an editor'
@@ -1685,6 +1694,23 @@ complete -x -c git -n '__fish_git_using_command init' -l object-format -a 'sha1 
 complete -x -c git -n '__fish_git_using_command init' -s b -l initial-branch -d 'Use specified name for initial branch'
 complete -x -c git -n '__fish_git_using_command init' -l shared -a 'false true umask group all world everybody' -d 'Specify that the repository is shared'
 
+### interpret-trailers
+complete -c git -n __fish_git_needs_command -a interpret-trailers -d 'Add or parse structured information in commit messages'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l in-place -d 'Edit the files in place'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l trim-empty -d 'Remove trailers with whitespace values'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l trailer -r -d 'Key-value pair to apply as a trailer'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l where -ra 'after before end start' -d 'Where new trailers will be added'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l no-where -d 'Clear the effect of previous use of --where'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l if-exists -ra 'addIfDifferent addIfDifferentNeighbor add replace doNothing' -d 'What to do when there is already a trailer with the same key'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l no-if-exists -d 'Clear the effect of previous use of --if-exists'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l if-missing -ra 'doNothing add' -d 'What to do when there is no other trailer with the same key'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l no-if-missing -d 'Clear the effect of previous use of --if-missing'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l only-trailers -d 'Output only trailers'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l only-input -d 'Output only trailers from the input'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l unfold -d 'Unfold multiline trailer values'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l parse -d 'Alias for --only-trailers --only-input --unfold'
+complete -f -c git -n '__fish_git_using_command interpret-trailers' -l no-divider -d 'Do not treat --- as the end of the commit message'
+
 ### shortlog
 complete -c git -n __fish_git_needs_command -a shortlog -d 'Show commit shortlog'
 complete -c git -n '__fish_git_using_command shortlog' -a '(__fish_git ls-files)'
@@ -1786,26 +1812,26 @@ complete -c git -n '__fish_git_using_command log' -l no-standard-notes
 complete -c git -n '__fish_git_using_command log' -l show-signature
 complete -c git -n '__fish_git_using_command log' -l relative-date
 complete -x -c git -n '__fish_git_using_command log shortlog' -l date -a '
-  relative
-  local
-  iso
-  iso-local
-  iso8601
-  iso8601-local
-  iso-strict
-  iso-strict-local
-  iso8601-strict
-  iso8601-strict-local
-  rfc-local
-  rfc2822-local
-  short
-  short-local
-  raw
-  human
-  unix
-  format:
-  default
-  default-local
+    relative
+    local
+    iso
+    iso-local
+    iso8601
+    iso8601-local
+    iso-strict
+    iso-strict-local
+    iso8601-strict
+    iso8601-strict-local
+    rfc-local
+    rfc2822-local
+    short
+    short-local
+    raw
+    human
+    unix
+    format:
+    default
+    default-local
 '
 complete -c git -n '__fish_git_using_command log' -l parents
 complete -c git -n '__fish_git_using_command log' -l children
@@ -1841,10 +1867,10 @@ complete -c git -n '__fish_git_using_command log' -l name-status
 complete -f -c git -n '__fish_git_using_command log' -l color -a 'always never auto'
 complete -c git -n '__fish_git_using_command log' -l no-color
 complete -f -c git -n '__fish_git_using_command log' -l word-diff -a '
-  color
-  plain
-  porcelain
-  none
+    color
+    plain
+    porcelain
+    none
 '
 complete -f -c git -n '__fish_git_using_command log' -l color-words
 complete -c git -n '__fish_git_using_command log' -l no-renames
@@ -2135,6 +2161,7 @@ complete -x -c git -n '__fish_git_using_command push' -l exec -d 'Same as --rece
 ### rebase
 complete -f -c git -n __fish_git_needs_command -a rebase -d 'Reapply commit sequence on a new base'
 __fish_git_add_revision_completion -n '__fish_git_using_command rebase'
+complete -f -c git -n '__fish_git_using_command rebase' -n 'string match -rq -- "^-i|^--interactive" (commandline -xpc)' -ka '(__fish_git_recent_commits)'
 complete -f -c git -n '__fish_git_using_command rebase' -n __fish_git_is_rebasing -l continue -d 'Restart the rebasing process'
 complete -f -c git -n '__fish_git_using_command rebase' -n __fish_git_is_rebasing -l abort -d 'Abort the rebase operation'
 complete -f -c git -n '__fish_git_using_command rebase' -n __fish_git_is_rebasing -l edit-todo -d 'Edit the todo list'
@@ -2425,16 +2452,16 @@ complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_not_u
 complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_not_using_subcommand -a branch -d 'Create a new branch from a stash'
 complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_not_using_subcommand -a push -d 'Create a new stash with given files'
 
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command apply branch drop pop show' -ka '(__fish_git_complete_stashes)'
+complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_is_push -a '(__fish_git_files modified deleted modified-staged-deleted)'
+complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_is_push -s a -l all -d 'Stash ignored and untracked files'
+complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_is_push -s k -l keep-index -d 'Keep changes in index intact'
+complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_is_push -s p -l patch -d 'Interactively select hunks'
+complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_is_push -s m -l message -d 'Add a description'
+complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_is_push -l no-keep-index -d 'Don\'t keep changes in index intact'
+complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_is_push -s S -l staged -d 'Stash only staged changes'
+complete -f -c git -n '__fish_git_using_command stash' -n __fish_git_stash_is_push -s u -l include-untracked -d 'Stash untracked files'
 
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command push' -a '(__fish_git_files modified deleted modified-staged-deleted)'
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command push' -s a -l all -d 'Stash ignored and untracked files'
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command push' -s k -l keep-index -d 'Keep changes in index intact'
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command push' -s p -l patch -d 'Interactively select hunks'
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command push' -s m -l message -d 'Add a description'
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command push' -l no-keep-index -d 'Don\'t keep changes in index intact'
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command push' -s S -l staged -d 'Stash only staged changes'
-complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command push' -s u -l include-untracked -d 'Stash untracked files'
+complete -f -c git -n '__fish_git_using_command stash' -n '__fish_git_stash_using_command apply branch drop pop show' -ka '(__fish_git_complete_stashes)'
 
 ### config
 complete -f -c git -n __fish_git_needs_command -a config -d 'Set and read git configuration variables'
@@ -2943,10 +2970,23 @@ complete -f -c git -n '__fish_git_using_command update-ref' -l create-reflog -d 
 complete -f -c git -n '__fish_git_using_command update-ref' -l stdin -d 'Read instructions from stdin'
 complete -f -c git -n '__fish_git_using_command update-ref' -s z -d 'NUL-terminated format for stdin'
 
+### verify-commit
+complete -f -c git -n __fish_git_needs_command -a verify-commit -d 'Check the GPG signature of commits'
+complete -f -c git -n '__fish_git_using_command verify-commit' -ka '(__fish_git_commits)'
+complete -f -c git -n '__fish_git_using_command verify-commit' -s v -l verbose -d 'Print commit contents'
+complete -f -c git -n '__fish_git_using_command verify-commit' -l raw -d 'Print raw gpg status output'
+
 ### verify-pack
 complete -f -c git -n __fish_git_needs_command -a verify-pack -d 'Validate packed Git archive files'
 complete -f -c git -n '__fish_git_using_command verify-pack' -s v -l verbose -d 'Show objects contained in pack'
 complete -f -c git -n '__fish_git_using_command verify-pack' -s s -l stat-only -d 'Only show histogram of delta chain length'
+
+### verify-tag
+complete -f -c git -n __fish_git_needs_command -a verify-tag -d 'Check the GPG signature of tags'
+complete -f -c git -n '__fish_git_using_command verify-tag' -ka '(__fish_git_tags)'
+complete -f -c git -n '__fish_git_using_command verify-tag' -s v -l verbose -d 'Print tag contents'
+complete -f -c git -n '__fish_git_using_command verify-tag' -l raw -d 'Print raw gpg status output'
+complete -x -c git -n '__fish_git_using_command verify-tag' -l format -d 'Format to use for the output'
 
 ### write-tree
 complete -f -c git -n __fish_git_needs_command -a write-tree -d 'Create a tree object from the current index'

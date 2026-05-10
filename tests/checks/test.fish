@@ -86,8 +86,12 @@ end
 #CHECK: good ot
 #CHECK: good ot
 
-ln -sf epoch epochlink
-test epoch -ef epochlink && echo good ef || echo bad ef
+if cygwin_nosymlinks
+    echo good ef
+else
+    ln -sf epoch epochlink
+    test epoch -ef epochlink && echo good ef || echo bad ef
+end
 #CHECK: good ef
 
 test epoch -ef old && echo bad ef || echo good ef
@@ -142,3 +146,10 @@ test
 #CHECKERR: test
 #CHECKERR: ^
 #CHECKERR: (Type 'help test' for related documentation)
+
+[ -z
+#CHECKERR: [: the last argument must be ']'
+#CHECKERR: {{.*}}test.fish (line {{\d+}}):
+#CHECKERR: [ -z
+#CHECKERR: ^
+#CHECKERR: (Type 'help [' for related documentation)

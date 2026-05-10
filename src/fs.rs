@@ -1,22 +1,20 @@
 use crate::{
-    common::{osstr2wcstring, wcs2bytes, wcs2osstring},
     fds::wopen_cloexec,
     flog, flogf,
     path::{DirRemoteness, path_remoteness},
     prelude::*,
-    wutil::{
-        FileId, INVALID_FILE_ID, file_id_for_file, file_id_for_path, wdirname, wrename, wunlink,
-    },
+    wutil::{FileId, INVALID_FILE_ID, file_id_for_file, file_id_for_path, wdirname, wunlink},
 };
 use fish_tempfile::random_filename;
+use fish_widestring::{osstr2wcstring, wcs2bytes, wcs2osstring};
 use libc::{LOCK_EX, LOCK_SH, c_int};
 use nix::{fcntl::OFlag, sys::stat::Mode};
 use std::{
     ffi::OsString,
     fs::{File, OpenOptions},
     os::{
-        fd::AsRawFd,
-        unix::{ffi::OsStringExt, fs::MetadataExt},
+        fd::AsRawFd as _,
+        unix::{ffi::OsStringExt as _, fs::MetadataExt as _},
     },
     path::PathBuf,
 };
@@ -128,9 +126,10 @@ impl LockedFile {
         {
             // Cygwin's `flock` is currently not thread safe (#11933)
             #[cfg(cygwin)]
-            static FLOCK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-            #[cfg(cygwin)]
-            let _lock = FLOCK_LOCK.lock().unwrap();
+            let _lock = {
+                static FLOCK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+                FLOCK_LOCK.lock().unwrap()
+            };
 
             // Try locking the directory. Retry if locking was interrupted.
             while unsafe { libc::flock(dir_fd.as_raw_fd(), locking_mode.flock_op()) } == -1 {
@@ -340,7 +339,7 @@ where
 
     /// Renames a file from `old_name` to `new_name`.
     fn rename(old_name: &wstr, new_name: &wstr) -> std::io::Result<()> {
-        if let Err(e) = wrename(old_name, new_name) {
+        if let Err(e) = std::fs::rename(wcs2osstring(old_name), wcs2osstring(new_name)) {
             flog!(
                 error,
                 wgettext_fmt!("Error when renaming file: %s", e.to_string())

@@ -54,52 +54,20 @@ msgid "%s"
 msgstr "%s"
 
 #, c-format
-msgid "%s %s: %s: invalid subcommand"
-msgstr "%s %s：%s：無效的子命令"
+msgid "%s %s: %s"
+msgstr "%s %s：%s"
 
 #, c-format
-msgid "%s %s: Abbreviation %s already exists for commands %s, cannot rename %s"
-msgstr "%s %s：名為 %s 且適用於命令 %s 的縮寫已存在，無法重新命名 %s"
+msgid "%s %s: options cannot be used together"
+msgstr "%s %s：選項不能同時使用"
 
 #, c-format
-msgid "%s %s: Abbreviation %s already exists, cannot rename %s"
-msgstr "%s %s：縮寫 %s 已存在，無法重新命名 %s"
+msgid "%s (line %d)"
+msgstr "%s（第 %d 行）"
 
 #, c-format
-msgid "%s %s: Abbreviation '%s' cannot have spaces in the word"
-msgstr "%s %s：縮寫「%s」中不能包含空格"
-
-#, c-format
-msgid "%s %s: Name cannot be empty"
-msgstr "%s %s：名稱不能空白"
-
-#, c-format
-msgid "%s %s: No abbreviation named %s with the specified command restrictions"
-msgstr "%s %s：沒有縮寫名為 %s 且符合指定命令限制"
-
-#, c-format
-msgid "%s %s: Requires at least two arguments"
-msgstr "%s %s：需要至少兩個引數"
-
-#, c-format
-msgid "%s %s: Requires exactly two arguments"
-msgstr "%s %s：需要正好兩個引數"
-
-#, c-format
-msgid "%s %s: Unexpected argument -- '%s'"
-msgstr "%s %s：非預期的引數「%s」"
-
-#, c-format
-msgid "%s %s: unrecognized feature '%s'"
-msgstr "%s %s：不認識的功能「%s」"
-
-#, c-format
-msgid "%s (line %d):"
-msgstr "%s（第 %d 行）："
-
-#, c-format
-msgid "%s (line %u):"
-msgstr "%s（第 %u 行）："
+msgid "%s (line %u)"
+msgstr "%s（第 %u 行）"
 
 #, c-format
 msgid "%s and %s are mutually exclusive"
@@ -114,6 +82,10 @@ msgid "%s could not read response to Primary Device Attribute query after waitin
 msgstr "%s 在過了 %d 秒後仍無法讀取到查詢主要裝置特性的回應。這通常是由於你的終端機缺少功能，參見「help %s」或「man fish-terminal-compatibility」。此 %s 行程不再會等待未決的查詢，一些非必要的功能將因此停用。"
 
 #, c-format
+msgid "%s failed: %s"
+msgstr "%s 失敗：%s"
+
+#, c-format
 msgid "%s is %s"
 msgstr "%s 是 %s"
 
@@ -124,6 +96,18 @@ msgstr "%s 是內建命令"
 #, c-format
 msgid "%s is a function"
 msgstr "%s 是函式"
+
+#, c-format
+msgid "%s must be a positive integer"
+msgstr "%s 必須是正整數"
+
+#, c-format
+msgid "%s option requires %s"
+msgstr "%s 選項需要 %s"
+
+#, c-format
+msgid "%s requires a non-empty string"
+msgstr "%s 需要一個非空字串"
 
 #, c-format
 msgid "%s variable"
@@ -138,388 +122,8 @@ msgid "%s: %s"
 msgstr "%s：%s"
 
 #, c-format
-msgid "%s: %s %s: options cannot be used together"
-msgstr "%s：%s %s：選項不能同時使用"
-
-#, c-format
-msgid "%s: %s failed: %s"
-msgstr "%s：%s 失敗：%s"
-
-#, c-format
-msgid "%s: %s must be a positive integer"
-msgstr "%s：%s 必須是正整數"
-
-#, c-format
-msgid "%s: %s option requires %s"
-msgstr "%s：%s 選項需要 %s"
-
-#, c-format
-msgid "%s: %s requires a non-empty string"
-msgstr "%s：%s 需要一個非空字串"
-
-#, c-format
 msgid "%s: %s: cannot overwrite read-only variable"
 msgstr "%s：%s：不能覆寫唯讀變數"
-
-#, c-format
-msgid "%s: %s: cannot use reserved keyword as function name"
-msgstr "%s：%s：不能使用保留字作為函式名稱"
-
-#, c-format
-msgid "%s: %s: contains a syntax error"
-msgstr "%s：%s：含有語法錯誤"
-
-#, c-format
-msgid "%s: %s: expected %d arguments; got %d"
-msgstr "%s：%s：預期有 %d 個引數，卻收到了 %d 個"
-
-#, c-format
-msgid "%s: %s: invalid base value"
-msgstr "%s：%s：無效的進位制"
-
-#, c-format
-msgid "%s: %s: invalid function name"
-msgstr "%s：%s：無效的函式名稱"
-
-#, c-format
-msgid "%s: %s: invalid integer"
-msgstr "%s：%s：無效的整數"
-
-#, c-format
-msgid "%s: %s: invalid mode"
-msgstr "%s：%s：無效的模式"
-
-#, c-format
-msgid "%s: %s: invalid mode name. See `help %s`"
-msgstr "%s：%s：無效的模式名稱。參見「help %s」"
-
-#, c-format
-msgid "%s: %s: invalid scale"
-msgstr "%s：%s：無效的小數位數"
-
-#, c-format
-msgid "%s: %s: invalid subcommand"
-msgstr "%s：%s：無效的子命令"
-
-#, c-format
-msgid "%s: %s: invalid variable name. See `help %s`"
-msgstr "%s：%s：無效的變數名稱。參見「help %s」"
-
-#, c-format
-msgid "%s: %s: option does not take an argument"
-msgstr "%s：%s：選項不需要引數"
-
-#, c-format
-msgid "%s: %s: option requires an argument"
-msgstr "%s：%s：選項需要一個引數"
-
-#, c-format
-msgid "%s: %s: subcommand takes no options"
-msgstr "%s：%s：子命令沒有選項"
-
-#, c-format
-msgid "%s: %s: unexpected positional argument"
-msgstr "%s：%s：非預期的位置引數"
-
-#, c-format
-msgid "%s: %s: unknown option"
-msgstr "%s：%s：未知的選項"
-
-#, c-format
-msgid "%s: '%s' is a broken symbolic link to '%s'"
-msgstr "%s：「%s」是「%s」損壞的象徵式連結"
-
-#, c-format
-msgid "%s: '%s' is not a directory"
-msgstr "%s：「%s」不是目錄"
-
-#, c-format
-msgid "%s: '%s' is not a job"
-msgstr "%s：「%s」不是作業"
-
-#, c-format
-msgid "%s: '%s' is not a valid job ID"
-msgstr "%s：「%s」不是有效的作業 ID"
-
-#, c-format
-msgid "%s: '%s' is not a valid process ID"
-msgstr "%s：「%s」不是有效的行程 ID"
-
-#, c-format
-msgid "%s: --command cannot be combined with --position=command"
-msgstr "%s：--command 和 --position=command 不能同時使用"
-
-#, c-format
-msgid "%s: --set-cursor argument cannot be empty"
-msgstr "%s：--set-cursor 的引數不能空白"
-
-#, c-format
-msgid "%s: Ambiguous job"
-msgstr "%s：無法確定所指的作業"
-
-#, c-format
-msgid "%s: An option spec must have at least a short or a long flag"
-msgstr "%s：選項規格必須至少有一個短旗標或長旗標"
-
-#, c-format
-msgid "%s: Argument '%s' is out of range"
-msgstr "%s：引數「%s」超出範圍"
-
-#, c-format
-msgid "%s: Can not specify scope when removing block"
-msgstr "%s：移除事件阻塞時不能指定作用域"
-
-#, c-format
-msgid "%s: Can't put job %d, '%s' to foreground because it is not under job control"
-msgstr "%s：不能將作業 %d「%s」置於前景，其並不受作業控制管理"
-
-#, c-format
-msgid "%s: Can't put job %s, '%s' to background because it is not under job control"
-msgstr "%s：不能將作業 %s「%s」置於背景，其並不受作業控制管理"
-
-#, c-format
-msgid "%s: Cannot combine options %s"
-msgstr "%s：%s 不能同時使用"
-
-#, c-format
-msgid "%s: Cannot specify multiple positions"
-msgstr "%s：不能指定多個位置"
-
-#, c-format
-msgid "%s: Cannot specify multiple regex patterns"
-msgstr "%s：不能指定多個正則表示式模式"
-
-#, c-format
-msgid "%s: Cannot specify multiple set-cursor options"
-msgstr "%s：不能指定多次 set-cursor 選項"
-
-#, c-format
-msgid "%s: Cannot use --append or --prepend when assigning to a slice"
-msgstr "%s：指派給切片時不能使用 --append 或 --prepend"
-
-#, c-format
-msgid "%s: Command not valid at an interactive prompt"
-msgstr "%s：命令在互動式提示中無效"
-
-#, c-format
-msgid "%s: Could not find '%s'"
-msgstr "%s：找不到「%s」"
-
-#, c-format
-msgid "%s: Could not find a job with process ID '%d'"
-msgstr "%s：找不到行程 ID 為 %d 的作業"
-
-#, c-format
-msgid "%s: Could not find child processes with the name '%s'"
-msgstr "%s：找不到名稱為「%s」的子行程"
-
-#, c-format
-msgid "%s: Could not find home directory"
-msgstr "%s：找不到家目錄"
-
-#, c-format
-msgid "%s: Could not find job '%d'"
-msgstr "%s：找不到作業 %d"
-
-#, c-format
-msgid "%s: Did you mean `set %s %s`?"
-msgstr "%s：你是指「set %s %s」嗎？"
-
-#, c-format
-msgid "%s: Empty directory '%s' does not exist"
-msgstr "%s：空目錄「%s」不存在"
-
-#, c-format
-msgid "%s: Error encountered while sourcing file '%s':"
-msgstr "%s：載入檔案「%s」時遇到錯誤："
-
-#, c-format
-msgid "%s: Error while reading file '%s'"
-msgstr "%s：讀取檔案「%s」時遇到錯誤"
-
-#, c-format
-msgid "%s: Expected %s for %s"
-msgstr "%s：預期 %s 作 %s 的引數"
-
-#, c-format
-msgid "%s: Expected at least one argument"
-msgstr "%s：預期至少有一個引數"
-
-#, c-format
-msgid "%s: Expected exactly one function name"
-msgstr "%s：預期正好有一個函式名稱"
-
-#, c-format
-msgid "%s: Expected exactly two names (current function name, and new function name)"
-msgstr "%s：預期正好有兩個名稱（目前的函式名稱和新的函式名稱）"
-
-#, c-format
-msgid "%s: Function '%s' already exists. Cannot create copy of '%s'"
-msgstr "%s：函式「%s」已存在。無法建立「%s」的複本"
-
-#, c-format
-msgid "%s: Function '%s' does not exist"
-msgstr "%s：函式「%s」不存在"
-
-#, c-format
-msgid "%s: Illegal function name '%s'"
-msgstr "%s：非法的函式名稱「%s」"
-
-#, c-format
-msgid "%s: Implicit int flag '%c' already defined"
-msgstr "%s：定義過隱式整數旗標「%c」了"
-
-#, c-format
-msgid "%s: Implicit int short flag '%c' does not allow modifiers like '%c'"
-msgstr "%s：隱式整數短旗標「%c」不允許加上「%c」等修飾"
-
-#, c-format
-msgid "%s: Invalid --max-args value '%s'"
-msgstr "%s：無效的 --max-args 值「%s」"
-
-#, c-format
-msgid "%s: Invalid --min-args value '%s'"
-msgstr "%s：無效的 --min-args 值「%s」"
-
-#, c-format
-msgid "%s: Invalid --unknown-arguments value '%s'"
-msgstr "%s：無效的 --unknown-arguments 值「%s」"
-
-#, c-format
-msgid "%s: Invalid count value '%s'"
-msgstr "%s：無效的次數「%s」"
-
-#, c-format
-msgid "%s: Invalid end value '%s'"
-msgstr "%s：無效的終點索引值「%s」"
-
-#, c-format
-msgid "%s: Invalid escape style '%s'"
-msgstr "%s：無效的轉義樣式「%s」"
-
-#, c-format
-msgid "%s: Invalid fields value '%s'"
-msgstr "%s：無效的欄位值「%s」"
-
-#, c-format
-msgid "%s: Invalid function name: %s"
-msgstr "%s：無效的函式名稱：%s"
-
-#, c-format
-msgid "%s: Invalid index starting at '%s'"
-msgstr "%s：無效的索引值，在「%s」處"
-
-#, c-format
-msgid "%s: Invalid job control mode '%s'"
-msgstr "%s：無效的作業控制模式「%s」"
-
-#, c-format
-msgid "%s: Invalid length value '%s'"
-msgstr "%s：無效的長度「%s」"
-
-#, c-format
-msgid "%s: Invalid level value '%s'"
-msgstr "%s：無效的層級「%s」"
-
-#, c-format
-msgid "%s: Invalid limit '%s'"
-msgstr "%s：無效的限制值「%s」"
-
-#, c-format
-msgid "%s: Invalid max matches value '%s'"
-msgstr "%s：無效的最大匹配數「%s」"
-
-#, c-format
-msgid "%s: Invalid max value '%s'"
-msgstr "%s：無效的最大值「%s」"
-
-#, c-format
-msgid "%s: Invalid option spec '%s' at char '%c'"
-msgstr "%s：無效的選項規格「%s」，在「%c」處"
-
-#, c-format
-msgid "%s: Invalid padding character of width zero '%s'"
-msgstr "%s：沒有寬度的填充字元「%s」無效"
-
-#, c-format
-msgid "%s: Invalid permission '%s'"
-msgstr "%s：無效的權限「%s」"
-
-#, c-format
-msgid "%s: Invalid position '%s'"
-msgstr "%s：無效的位置「%s」"
-
-#, c-format
-msgid "%s: Invalid range value for field '%s'"
-msgstr "%s：欄位有無效的範圍值「%s」"
-
-#, c-format
-msgid "%s: Invalid sort key '%s'"
-msgstr "%s：無效的排序鍵「%s」"
-
-#, c-format
-msgid "%s: Invalid start value '%s'"
-msgstr "%s：無效的起點索引值「%s」"
-
-#, c-format
-msgid "%s: Invalid state"
-msgstr "%s：無效的狀態"
-
-#, c-format
-msgid "%s: Invalid style value '%s'"
-msgstr "%s：無效的樣式「%s」"
-
-#, c-format
-msgid "%s: Invalid token '%s'"
-msgstr "%s：無效的詞元「%s」"
-
-#, c-format
-msgid "%s: Invalid type '%s'"
-msgstr "%s：無效的類型「%s」"
-
-#, c-format
-msgid "%s: Invalid value for '--color' option: '%s'. Expected 'always', 'never', or 'auto'"
-msgstr "%s：「--color」選項的值「%s」無效。應為「always」、「never」、或「auto」"
-
-#, c-format
-msgid "%s: Invalid width value '%s'"
-msgstr "%s：無效的寬度「%s」"
-
-#, c-format
-msgid "%s: Key not specified"
-msgstr "%s：未指定鍵"
-
-#, c-format
-msgid "%s: Long flag '%s' already defined"
-msgstr "%s：定義過長旗標「%s」了"
-
-#, c-format
-msgid "%s: Missing -- separator"
-msgstr "%s：缺少 -- 分隔"
-
-#, c-format
-msgid "%s: New limit cannot be an empty string"
-msgstr "%s：新的限制不能是空字串"
-
-#, c-format
-msgid "%s: No binding found for key '%s'"
-msgstr "%s：找不到按鍵「%s」的綁定"
-
-#, c-format
-msgid "%s: No binding found for key sequence '%s'"
-msgstr "%s：找不到按鍵序列「%s」的綁定"
-
-#, c-format
-msgid "%s: No blocks defined"
-msgstr "%s：沒有定義事件阻塞"
-
-#, c-format
-msgid "%s: No suitable job: %d"
-msgstr "%s：沒有合式的作業：%d"
-
-#, c-format
-msgid "%s: No suitable job: %s"
-msgstr "%s：沒有合式的作業：%s"
 
 #, c-format
 msgid "%s: Not inside of loop"
@@ -530,152 +134,24 @@ msgid "%s: Number out of range"
 msgstr "%s：數字超出範圍"
 
 #, c-format
-msgid "%s: Number was empty"
-msgstr "%s：數字空白"
-
-#, c-format
-msgid "%s: Options %s and %s cannot be used together"
-msgstr "%s：選項 %s 和 %s 不能同時使用"
-
-#, c-format
-msgid "%s: Padding should be a character '%s'"
-msgstr "%s：填充應為一個字元，卻收到了「%s」"
-
-#, c-format
-msgid "%s: Permission denied: '%s'"
-msgstr "%s：權限不足：「%s」"
-
-#, c-format
-msgid "%s: Regular expression compile error: %s"
-msgstr "%s：正則表示式編譯錯誤：%s"
-
-#, c-format
-msgid "%s: Regular expression substitute error: %s"
-msgstr "%s：正則表示式替換錯誤：%s"
-
-#, c-format
-msgid "%s: Resource limit not available on this operating system"
-msgstr "%s：資源用量限制無法在此作業系統上使用"
-
-#, c-format
-msgid "%s: Short flag '%c' already defined"
-msgstr "%s：定義過短旗標「%c」了"
-
-#, c-format
-msgid "%s: Short flag '%c' invalid, must be alphanum or '#'"
-msgstr "%s：短旗標「%c」無效，必須是字母、數字、或「#」"
-
-#, c-format
-msgid "%s: The directory '%s' does not exist"
-msgstr "%s：目錄「%s」不存在"
-
-#, c-format
-msgid "%s: The variable '%s' does not exist"
-msgstr "%s：變數「%s」不存在"
-
-#, c-format
 msgid "%s: There are no jobs"
 msgstr "%s：沒有作業"
 
 #, c-format
-msgid "%s: There are no suitable jobs"
-msgstr "%s：沒有合式的作業"
+msgid "%s: cannot overwrite read-only variable"
+msgstr "%s：不能覆寫唯讀變數"
 
 #, c-format
-msgid "%s: Too many levels of symbolic links: '%s'"
-msgstr "%s：太多層象徵式連結：「%s」"
+msgid "%s: cannot use reserved keyword as function name"
+msgstr "%s：不能使用保留字作為函式名稱"
 
 #, c-format
-msgid "%s: Too many long-only options"
-msgstr "%s：太多僅有長旗標的選項"
-
-#, c-format
-msgid "%s: Tried to change the read-only variable '%s'"
-msgstr "%s：試圖變更唯讀變數「%s」"
-
-#, c-format
-msgid "%s: Tried to modify the special variable '%s' to an invalid value"
-msgstr "%s：試圖將特殊變數「%s」修改為無效的值"
-
-#, c-format
-msgid "%s: Tried to modify the special variable '%s' with the wrong scope"
-msgstr "%s：試圖以錯的作用域修改特殊變數「%s」"
-
-#, c-format
-msgid "%s: Unknown color '%s'"
-msgstr "%s：未知的顏色「%s」"
-
-#, c-format
-msgid "%s: Unknown error trying to locate directory '%s'"
-msgstr "%s：定位目錄「%s」時發生未知錯誤"
-
-#, c-format
-msgid "%s: Unknown input function '%s'"
-msgstr "%s：未知的輸入函式「%s」"
-
-#, c-format
-msgid "%s: Unknown signal '%s'"
-msgstr "%s：未知的訊號「%s」"
-
-#, c-format
-msgid "%s: Warning: Option '%s' was removed and is now ignored"
-msgstr "%s：警告：選項「%s」已移除，忽略之"
-
-#, c-format
-msgid "%s: `set --show` does not allow slices with the var names"
-msgstr "%s：「set --show」不允許使用切片"
-
-#, c-format
-msgid "%s: array index out of bounds"
-msgstr "%s：陣列索引越界"
-
-#, c-format
-msgid "%s: called with no arguments. This will be an error in future."
-msgstr "%s：不帶引數呼叫。這在之後會是錯誤。"
-
-#, c-format
-msgid "%s: called with one argument. This will return false in future."
-msgstr "%s：帶一個引數呼叫。這在之後會回傳 false。"
-
-#, c-format
-msgid "%s: calling job for event handler not found"
-msgstr "%s：找不到事件處理器要呼叫的作業"
-
-#, c-format
-msgid "%s: can't merge history in private mode"
-msgstr "%s：私密模式中不能合併歷史紀錄"
-
-#, c-format
-msgid "%s: cannot both export and unexport"
-msgstr "%s：不能同時匯出和取消匯出"
-
-#, c-format
-msgid "%s: cannot both path and unpath"
-msgstr "%s：不能同時標為路徑和取消標為路徑"
-
-#, c-format
-msgid "%s: column %s exceeds line length"
-msgstr "%s：第 %s 欄超過了行的長度"
-
-#, c-format
-msgid "%s: exclusive flag '%s' is not valid"
-msgstr "%s：互斥旗標「%s」無效"
-
-#, c-format
-msgid "%s: exclusive flag string '%s' is not valid"
-msgstr "%s：互斥旗標字串「%s」無效"
+msgid "%s: contains a syntax error"
+msgstr "%s：含有語法錯誤"
 
 #, c-format
 msgid "%s: expected %d arguments; got %d"
 msgstr "%s：預期有 %d 個引數，卻收到了 %d 個"
-
-#, c-format
-msgid "%s: expected <= %d arguments; got %d"
-msgstr "%s：預期有 <= %d 個引數，卻收到了 %d 個"
-
-#, c-format
-msgid "%s: expected >= %d arguments; got %d"
-msgstr "%s：預期有 >= %d 個引數，卻收到了 %d 個"
 
 #, c-format
 msgid "%s: expected a numeric value"
@@ -686,93 +162,88 @@ msgid "%s: function name required"
 msgstr "%s：需要函式名稱"
 
 #, c-format
-msgid "%s: given %d indexes but %d values"
-msgstr "%s：指定了 %d 個索引卻有 %d 個值"
+msgid "%s: invalid base value"
+msgstr "%s：無效的進位制"
 
 #, c-format
 msgid "%s: invalid conversion specification"
 msgstr "%s：轉換規格無效"
 
 #, c-format
-msgid "%s: invalid option combination"
-msgstr "%s：無效的選項組合"
+msgid "%s: invalid function name"
+msgstr "%s：無效的函式名稱"
 
 #, c-format
-msgid "%s: invalid option combination, %s"
-msgstr "%s：無效的選項組合，%s"
+msgid "%s: invalid integer"
+msgstr "%s：無效的整數"
 
 #, c-format
-msgid "%s: invalid underline style: %s"
-msgstr "%s：無效的底線樣式：%s"
+msgid "%s: invalid mode"
+msgstr "%s：無效的模式"
 
 #, c-format
-msgid "%s: job %d ('%s') was stopped and has been signalled to continue."
-msgstr "%s：作業 %d（%s）停止過並收到了訊號要求繼續。"
+msgid "%s: invalid mode name. See `help %s`"
+msgstr "%s：無效的模式名稱。參見「help %s」"
 
 #, c-format
-msgid "%s: line/column index starts at 1"
-msgstr "%s：行/欄索引從 1 開始"
+msgid "%s: invalid option argument: %s"
+msgstr ""
 
 #, c-format
-msgid "%s: missing argument"
-msgstr "%s：缺少引數"
+msgid "%s: invalid scale"
+msgstr "%s：無效的小數位數"
 
 #, c-format
-msgid "%s: missing filename argument or input redirection"
-msgstr "%s：缺少檔案名稱引數或輸入重新導向"
+msgid "%s: invalid subcommand"
+msgstr "%s：無效的子命令"
 
 #, c-format
-msgid "%s: missing subcommand"
-msgstr "%s：缺少子命令"
+msgid "%s: invalid variable name. See `help %s`"
+msgstr "%s：無效的變數名稱。參見「help %s」"
 
 #, c-format
-msgid "%s: nothing to choose from"
-msgstr "%s：沒得選擇"
+msgid "%s: option cannot be used with a non-option argument"
+msgstr ""
 
 #, c-format
-msgid "%s: scope can be only one of: universal function global local"
-msgstr "%s：作用域只能是以下之一：universal、function、global、local"
+msgid "%s: option does not take an argument"
+msgstr "%s：選項不需要引數"
 
 #, c-format
-msgid "%s: setting cursor while evaluating 'complete --arguments' is not yet supported"
-msgstr "%s：尚不支援於執行「complete --arguments」時設定游標"
+msgid "%s: option requires an argument"
+msgstr "%s：選項需要一個引數"
 
 #, c-format
-msgid "%s: stdin is closed"
-msgstr "%s：stdin 已關閉"
+msgid "%s: unexpected positional argument"
+msgstr "%s：非預期的位置引數"
 
 #, c-format
-msgid "%s: successfully set universal '%s'; but a global by that name shadows it"
-msgstr "%s：成功設定了通域變數「%s」，但有同名的全域變數遮蔽了它"
-
-#, c-format
-msgid "%s: the -k/--key syntax is no longer supported. See `bind --help` and `bind --key-names`"
-msgstr "%s：-k/--key 語法不再支援。參見「bind --help」和「bind --key-names」"
-
-#, c-format
-msgid "%s: there is no line %s"
-msgstr "%s：沒有第 %s 行"
-
-#, c-format
-msgid "%s: too many arguments"
-msgstr "%s：太多引數"
-
-#, c-format
-msgid "%s: usage of -i for --silent is deprecated. Please use -s or --silent instead."
-msgstr "%s：以 -i 表示 --silent 的作法已棄用。請改用 -s 或 --silent。"
+msgid "%s: unknown option"
+msgstr "%s：未知的選項"
 
 #, c-format
 msgid "%s: value not completely converted (can't convert '%s')"
 msgstr "%s：值未完全轉換（無法轉換「%s」）"
 
 #, c-format
-msgid "%s: variable '%s' is read-only"
-msgstr "%s：變數「%s」是唯讀的"
+msgid "'%s' is a broken symbolic link to '%s'"
+msgstr "「%s」是「%s」損壞的象徵式連結"
 
-#  第一個 %s 是刪節號。此字串出現在按下 <Tab> 的清單太長的情況。
 #, c-format
-msgid "%sand %u more rows"
-msgstr "%s還有 %u 列"
+msgid "'%s' is not a directory"
+msgstr "「%s」不是目錄"
+
+#, c-format
+msgid "'%s' is not a job"
+msgstr "「%s」不是作業"
+
+#, c-format
+msgid "'%s' is not a valid job ID"
+msgstr "「%s」不是有效的作業 ID"
+
+#, c-format
+msgid "'%s' is not a valid process ID"
+msgstr "「%s」不是有效的行程 ID"
 
 msgid "'break' while not inside of loop"
 msgstr "「break」不在迴圈裡面"
@@ -825,6 +296,9 @@ msgstr "，透過「source」複製"
 msgid "--allow-empty is only valid with --fields"
 msgstr "--allow-empty 只在與 --fields 使用時有效"
 
+msgid "--command cannot be combined with --position=command"
+msgstr "--command 和 --position=command 不能同時使用"
+
 msgid "--end and --length are mutually exclusive"
 msgstr "--end 和 --length 不能同時使用"
 
@@ -840,11 +314,26 @@ msgstr "--invert 和 --groups-only 不能同時使用"
 msgid "--query and --names are mutually exclusive"
 msgstr "--query 和 --names 不能同時使用"
 
+msgid "--set-cursor argument cannot be empty"
+msgstr "--set-cursor 的引數不能空白"
+
 msgid "--tokens options are mutually exclusive"
 msgstr "--tokens 選項不能同時使用"
 
 msgid "A second attempt to exit will terminate them."
 msgstr "第二次嘗試退出將終止它們。"
+
+#, c-format
+msgid "Abbreviation %s already exists for commands %s, cannot rename %s"
+msgstr "名為 %s 且適用於命令 %s 的縮寫已存在，無法重新命名 %s"
+
+#, c-format
+msgid "Abbreviation %s already exists, cannot rename %s"
+msgstr "縮寫 %s 已存在，無法重新命名 %s"
+
+#, c-format
+msgid "Abbreviation '%s' cannot have spaces in the word"
+msgstr "縮寫「%s」中不能包含空格"
 
 msgid "Abbreviation expansion"
 msgstr "縮寫展開"
@@ -869,8 +358,18 @@ msgstr "位址邊界錯誤"
 msgid "Always"
 msgstr "總是"
 
+msgid "Ambiguous job"
+msgstr "無法確定所指的作業"
+
 msgid "An error occurred while setting up pipe"
 msgstr "設置管道時發生錯誤"
+
+msgid "An option spec must have at least a short or a long flag"
+msgstr "選項規格必須至少有一個短旗標或長旗標"
+
+#, c-format
+msgid "Argument '%s' is out of range"
+msgstr "引數「%s」超出範圍"
 
 #, c-format
 msgid "Argument is not a number: '%s'"
@@ -903,12 +402,45 @@ msgstr "CPU 時間超過限制"
 msgid "Calls to fork()"
 msgstr "fork() 呼叫"
 
+msgid "Can not get commandline in non-interactive mode"
+msgstr ""
+
+msgid "Can not set commandline in non-interactive mode"
+msgstr ""
+
+msgid "Can not specify scope when removing block"
+msgstr "移除事件阻塞時不能指定作用域"
+
 msgid "Can not use the no-execute mode when running an interactive session"
 msgstr "互動時不能使用不執行模式"
 
 #, c-format
+msgid "Can't put job %d, '%s' to foreground because it is not under job control"
+msgstr "不能將作業 %d「%s」置於前景，其並不受作業控制管理"
+
+#, c-format
+msgid "Can't put job %s, '%s' to background because it is not under job control"
+msgstr "不能將作業 %s「%s」置於背景，其並不受作業控制管理"
+
+#, c-format
 msgid "Cannot add control modifier to control character '%s'"
 msgstr "不能將 control 修飾鍵加到控制字元「%s」上"
+
+#, c-format
+msgid "Cannot combine options %s"
+msgstr "%s 不能同時使用"
+
+msgid "Cannot specify multiple positions"
+msgstr "不能指定多個位置"
+
+msgid "Cannot specify multiple regex patterns"
+msgstr "不能指定多個正則表示式模式"
+
+msgid "Cannot specify multiple set-cursor options"
+msgstr "不能指定多次 set-cursor 選項"
+
+msgid "Cannot use --append or --prepend when assigning to a slice"
+msgstr "指派給切片時不能使用 --append 或 --prepend"
 
 msgid "Cannot use stdin (fd 0) as pipe output"
 msgstr "不能將 stdin（fd 0）用作管道輸出"
@@ -940,6 +472,9 @@ msgstr "命令歷史紀錄的事件"
 msgid "Command not executable"
 msgstr "命令不可執行"
 
+msgid "Command not valid at an interactive prompt"
+msgstr "命令在互動式提示中無效"
+
 msgid "Commandname was invalid"
 msgstr "命令名稱無效"
 
@@ -951,6 +486,25 @@ msgstr "繼續先前停止的行程"
 
 msgid "Could not determine current working directory. Is your locale set correctly?"
 msgstr "無法確定目前工作目錄。你正確設定好地區了嗎？"
+
+#, c-format
+msgid "Could not find '%s'"
+msgstr "找不到「%s」"
+
+#, c-format
+msgid "Could not find a job with process ID '%d'"
+msgstr "找不到行程 ID 為 %d 的作業"
+
+#, c-format
+msgid "Could not find child processes with the name '%s'"
+msgstr "找不到名稱為「%s」的子行程"
+
+msgid "Could not find home directory"
+msgstr "找不到家目錄"
+
+#, c-format
+msgid "Could not find job '%d'"
+msgstr "找不到作業 %d"
 
 msgid "Could not set terminal mode for new job"
 msgstr "無法設定新作業的終端機模式"
@@ -984,6 +538,10 @@ msgstr "互動地定義"
 msgid "Defined via `source`"
 msgstr "透過「source」定義"
 
+#, c-format
+msgid "Did you mean `set %s %s`?"
+msgstr "你是指「set %s %s」嗎？"
+
 msgid "Division by zero"
 msgstr "除以零"
 
@@ -993,8 +551,16 @@ msgstr "編輯特定命令的補全"
 msgid "Emit an event"
 msgstr "發出事件"
 
+#, c-format
+msgid "Empty directory '%s' does not exist"
+msgstr "空目錄「%s」不存在"
+
 msgid "End a block of commands"
 msgstr "結束一個程式碼區塊"
+
+#, c-format
+msgid "Error encountered while sourcing file '%s':"
+msgstr "載入檔案「%s」時遇到錯誤："
 
 #, c-format
 msgid "Error reading script file '%s':"
@@ -1007,6 +573,14 @@ msgstr "重新命名檔案時發生錯誤：%s"
 #, c-format
 msgid "Error while reading file %s"
 msgstr "讀取檔案 %s 時發生錯誤"
+
+#, c-format
+msgid "Error while reading file '%s'"
+msgstr "讀取檔案「%s」時遇到錯誤"
+
+#, c-format
+msgid "Error: %s"
+msgstr ""
 
 msgid "Errors reported by exec (on by default)"
 msgstr "exec 回報的錯誤（預設開啟）"
@@ -1039,6 +613,10 @@ msgid "Expansion produced too many results"
 msgstr "展開出了太多結果"
 
 #, c-format
+msgid "Expected %s for %s"
+msgstr "預期 %s 作 %s 的引數"
+
+#, c-format
 msgid "Expected %s, but found %s"
 msgstr "預期 %s，卻找到 %s"
 
@@ -1055,6 +633,15 @@ msgstr "預期是字串，卻找到重新導向"
 
 msgid "Expected a variable name after this $."
 msgstr "預期 $ 之後是變數名稱。"
+
+msgid "Expected at least one argument"
+msgstr "預期至少有一個引數"
+
+msgid "Expected exactly one function name"
+msgstr "預期正好有一個函式名稱"
+
+msgid "Expected exactly two names (current function name, and new function name)"
+msgstr "預期正好有兩個名稱（目前的函式名稱和新的函式名稱）"
 
 msgid "Expected file path to read/write for -w:"
 msgstr "-w 預期有檔案路徑以供讀寫："
@@ -1096,6 +683,14 @@ msgstr "強制退出"
 
 msgid "Forced stop"
 msgstr "強制停止"
+
+#, c-format
+msgid "Function '%s' already exists. Cannot create copy of '%s'"
+msgstr "函式「%s」已存在。無法建立「%s」的複本"
+
+#, c-format
+msgid "Function '%s' does not exist"
+msgstr "函式「%s」不存在"
 
 msgid "Generate random number"
 msgstr "產生隨機數"
@@ -1142,8 +737,20 @@ msgstr "非同步檔案描述子的 I/O 是可行的"
 msgid "Illegal file descriptor in redirection '%s'"
 msgstr "重新導向「%s」中有非法的檔案描述子"
 
+#, c-format
+msgid "Illegal function name '%s'"
+msgstr "非法的函式名稱「%s」"
+
 msgid "Illegal instruction"
 msgstr "非法的指令"
+
+#, c-format
+msgid "Implicit int flag '%c' already defined"
+msgstr "定義過隱式整數旗標「%c」了"
+
+#, c-format
+msgid "Implicit int short flag '%c' does not allow modifiers like '%c'"
+msgstr "隱式整數短旗標「%c」不允許加上「%c」等修飾"
 
 #, c-format
 msgid "Incomplete escape sequence '%s'"
@@ -1162,8 +769,52 @@ msgstr "內部（非分叉的）行程事件"
 msgid "Internal details of the topic monitor"
 msgstr "主題監聽的內部資訊"
 
+#, c-format
+msgid "Invalid --max-args value '%s'"
+msgstr "無效的 --max-args 值「%s」"
+
+#, c-format
+msgid "Invalid --min-args value '%s'"
+msgstr "無效的 --min-args 值「%s」"
+
+#, c-format
+msgid "Invalid --unknown-arguments value '%s'"
+msgstr "無效的 --unknown-arguments 值「%s」"
+
+#, c-format
+msgid "Invalid arg: %s"
+msgstr ""
+
 msgid "Invalid arguments"
 msgstr "引數無效"
+
+#, c-format
+msgid "Invalid count value '%s'"
+msgstr "無效的次數「%s」"
+
+#, c-format
+msgid "Invalid end value '%s'"
+msgstr "無效的終點索引值「%s」"
+
+#, c-format
+msgid "Invalid escape sequence in pattern \"%s\""
+msgstr ""
+
+#, c-format
+msgid "Invalid escape style '%s'"
+msgstr "無效的轉義樣式「%s」"
+
+#, c-format
+msgid "Invalid fields value '%s'"
+msgstr "無效的欄位值「%s」"
+
+#, c-format
+msgid "Invalid function name: %s"
+msgstr "無效的函式名稱：%s"
+
+#, c-format
+msgid "Invalid index starting at '%s'"
+msgstr "無效的索引值，在「%s」處"
 
 msgid "Invalid index value"
 msgstr "索引值無效"
@@ -1172,8 +823,52 @@ msgid "Invalid input/output redirection"
 msgstr "無效的輸入／輸出重新導向"
 
 #, c-format
+msgid "Invalid job control mode '%s'"
+msgstr "無效的作業控制模式「%s」"
+
+#, c-format
+msgid "Invalid length value '%s'"
+msgstr "無效的長度「%s」"
+
+#, c-format
+msgid "Invalid level value '%s'"
+msgstr "無效的層級「%s」"
+
+#, c-format
+msgid "Invalid limit '%s'"
+msgstr "無效的限制值「%s」"
+
+#, c-format
+msgid "Invalid max matches value '%s'"
+msgstr "無效的最大匹配數「%s」"
+
+#, c-format
+msgid "Invalid max value '%s'"
+msgstr "無效的最大值「%s」"
+
+#, c-format
 msgid "Invalid number: %s"
 msgstr "無效的數字：%s"
+
+#, c-format
+msgid "Invalid option spec '%s' at char '%c'"
+msgstr "無效的選項規格「%s」，在「%c」處"
+
+#, c-format
+msgid "Invalid padding character of width zero '%s'"
+msgstr "沒有寬度的填充字元「%s」無效"
+
+#, c-format
+msgid "Invalid permission '%s'"
+msgstr "無效的權限「%s」"
+
+#, c-format
+msgid "Invalid position '%s'"
+msgstr "無效的位置「%s」"
+
+#, c-format
+msgid "Invalid range value for field '%s'"
+msgstr "欄位有無效的範圍值「%s」"
 
 #, c-format
 msgid "Invalid redirection target: %s"
@@ -1184,8 +879,32 @@ msgid "Invalid redirection: %s"
 msgstr "無效的重新導向：%s"
 
 #, c-format
+msgid "Invalid sort key '%s'"
+msgstr "無效的排序鍵「%s」"
+
+#, c-format
+msgid "Invalid start value '%s'"
+msgstr "無效的起點索引值「%s」"
+
+#, c-format
+msgid "Invalid style value '%s'"
+msgstr "無效的樣式「%s」"
+
+#, c-format
 msgid "Invalid token '%s'"
 msgstr "無效的詞元「%s」"
+
+#, c-format
+msgid "Invalid type '%s'"
+msgstr "無效的類型「%s」"
+
+#, c-format
+msgid "Invalid value for '--color' option: '%s'. Expected 'always', 'never', or 'auto'"
+msgstr "「--color」選項的值「%s」無效。應為「always」、「never」、或「auto」"
+
+#, c-format
+msgid "Invalid width value '%s'"
+msgstr "無效的寬度「%s」"
 
 #, c-format
 msgid "Items %u to %u of %u"
@@ -1207,6 +926,9 @@ msgstr "作業變更狀態"
 msgid "Jobs getting started or continued"
 msgstr "作業開始或繼續"
 
+msgid "Key not specified"
+msgstr "未指定鍵"
+
 msgid "Language specifiers appear repeatedly:"
 msgstr "語言指定子重複："
 
@@ -1215,6 +937,10 @@ msgstr "列出或移除函式"
 
 msgid "Logical operations are not supported, use `test` instead"
 msgstr "不支援邏輯運算，請改用「test」"
+
+#, c-format
+msgid "Long flag '%s' already defined"
+msgstr "定義過長旗標「%s」了"
 
 msgid "Manage abbreviations"
 msgstr "管理縮寫"
@@ -1234,6 +960,9 @@ msgstr "不對稱的大括弧"
 msgid "Mismatched parenthesis"
 msgstr "不對稱的小括弧"
 
+msgid "Missing -- separator"
+msgstr "缺少 -- 分隔"
+
 msgid "Missing closing parenthesis"
 msgstr "缺少右小括弧"
 
@@ -1251,6 +980,9 @@ msgstr "缺少運算子"
 msgid "Modification of read-only variable \"%s\" is not allowed"
 msgstr "不允許修改唯讀變數「%s」"
 
+msgid "Name cannot be empty"
+msgstr "名稱不能空白"
+
 msgid "Negate exit status of job"
 msgstr "反轉作業的結束狀態"
 
@@ -1260,12 +992,35 @@ msgstr "永不"
 msgid "No TTY for interactive shell (tcgetpgrp failed)"
 msgstr "沒有互動式 shell 所需的 TTY（tcgetpgrp 失敗了）"
 
+#, c-format
+msgid "No abbreviation named %s with the specified command restrictions"
+msgstr "沒有縮寫名為 %s 且符合指定命令限制"
+
+#, c-format
+msgid "No binding found for key '%s'"
+msgstr "找不到按鍵「%s」的綁定"
+
+#, c-format
+msgid "No binding found for key sequence '%s'"
+msgstr "找不到按鍵序列「%s」的綁定"
+
+msgid "No blocks defined"
+msgstr "沒有定義事件阻塞"
+
 msgid "No catalogs available for language specifiers:"
 msgstr "語言指定子查無對應條目："
 
 #, c-format
 msgid "No matches for wildcard '%s'. See `help %s`."
 msgstr "wildcard「%s」無匹配項目。參見「help %s」。"
+
+#, c-format
+msgid "No suitable job: %d"
+msgstr "沒有合式的作業：%d"
+
+#, c-format
+msgid "No suitable job: %s"
+msgstr "沒有合式的作業：%s"
 
 msgid "Not a function"
 msgstr "不是函式"
@@ -1296,6 +1051,14 @@ msgstr "僅限互動式作業"
 msgid "Opening \"%s\" failed: %s"
 msgstr "開啟「%s」失敗：%s"
 
+#, c-format
+msgid "Options %s and %s cannot be used together"
+msgstr "選項 %s 和 %s 不能同時使用"
+
+#, c-format
+msgid "Padding should be a character '%s'"
+msgstr "填充應為一個字元，卻收到了「%s」"
+
 msgid "Parse options in fish script"
 msgstr "解析 fish 命令稿的選項"
 
@@ -1307,6 +1070,14 @@ msgstr "執行一個命令數次"
 
 msgid "Perform a set of commands multiple times"
 msgstr "執行一組命令數次"
+
+#, c-format
+msgid "Permission denied when changing resource of type '%s'"
+msgstr ""
+
+#, c-format
+msgid "Permission denied: '%s'"
+msgstr "權限不足：「%s」"
 
 #, c-format
 msgid "Please set $%s to a directory where you have write access."
@@ -1376,6 +1147,14 @@ msgstr "收割內部（非分叉的）行程"
 msgid "Refcell dynamic borrowing"
 msgstr "Refcell 動態借用"
 
+#, c-format
+msgid "Regular expression compile error: %s"
+msgstr "正則表示式編譯錯誤：%s"
+
+#, c-format
+msgid "Regular expression substitute error: %s"
+msgstr "正則表示式替換錯誤：%s"
+
 msgid "Remove job from job list"
 msgstr "從作業列表中移除作業"
 
@@ -1385,6 +1164,15 @@ msgstr "繪製命令行"
 #, c-format
 msgid "Requested redirection to '%s', which is not a valid file descriptor"
 msgstr "請求重新導向至「%s」，但其不是有效的檔案描述子"
+
+msgid "Requires at least two arguments"
+msgstr "需要至少兩個引數"
+
+msgid "Requires exactly two arguments"
+msgstr "需要正好兩個引數"
+
+msgid "Resource limit not available on this operating system"
+msgstr "資源用量限制無法在此作業系統上使用"
 
 #, c-format
 msgid "Result too large: %s"
@@ -1443,6 +1231,14 @@ msgstr "設定或取得命令行"
 msgid "Set the terminal color"
 msgstr "設定終端機顏色"
 
+#, c-format
+msgid "Short flag '%c' already defined"
+msgstr "定義過短旗標「%c」了"
+
+#, c-format
+msgid "Short flag '%c' invalid, must be alphanum or '#'"
+msgstr "短旗標「%c」無效，必須是字母、數字、或「#」"
+
 msgid "Show absolute path sans symlinks"
 msgstr "顯示不包含象徵式連結的絕對路徑"
 
@@ -1456,12 +1252,12 @@ msgid "Standard input"
 msgstr "標準輸入流"
 
 #, c-format
-msgid "Standard input (line %d):"
-msgstr "標準輸入流（第 %d 行）："
+msgid "Standard input (line %d)"
+msgstr "標準輸入流（第 %d 行）"
 
 #, c-format
-msgid "Startup (line %d):"
-msgstr "啟動命令稿（第 %d 行）："
+msgid "Startup (line %d)"
+msgstr "啟動命令稿（第 %d 行）"
 
 msgid "State"
 msgstr "狀態"
@@ -1520,6 +1316,10 @@ msgid "The completion system"
 msgstr "補全系統"
 
 #, c-format
+msgid "The directory '%s' does not exist"
+msgstr "目錄「%s」不存在"
+
+#, c-format
 msgid "The error was '%s'."
 msgstr "該錯誤是「%s」。"
 
@@ -1536,6 +1336,9 @@ msgstr "函式「%s」立刻呼叫了它自己，這會造成無限迴圈。"
 msgid "The interactive reader/input system"
 msgstr "互動式讀取器／輸入系統"
 
+msgid "There are no suitable jobs"
+msgstr "沒有合式的作業"
+
 msgid "There are still jobs active:"
 msgstr "仍有活動中的作業："
 
@@ -1548,6 +1351,9 @@ msgstr "這不是登入 shell"
 msgid "Timer expired"
 msgstr "計時器到時間了"
 
+msgid "To enable vi-mode, run `fish_vi_key_bindings`."
+msgstr ""
+
 msgid "Too few arguments"
 msgstr "引數太少"
 
@@ -1557,6 +1363,13 @@ msgstr "使用中的檔案描述子太多"
 msgid "Too many arguments"
 msgstr "引數太多"
 
+#, c-format
+msgid "Too many levels of symbolic links: '%s'"
+msgstr "太多層象徵式連結：「%s」"
+
+msgid "Too many long-only options"
+msgstr "太多僅有長旗標的選項"
+
 msgid "Too much data emitted by command substitution so it was discarded"
 msgstr "命令替換發出的資料太多，丟棄之"
 
@@ -1565,6 +1378,18 @@ msgstr "追蹤或斷點陷阱"
 
 msgid "Translate a string"
 msgstr "翻譯字串"
+
+#, c-format
+msgid "Tried to change the read-only variable '%s'"
+msgstr "試圖變更唯讀變數「%s」"
+
+#, c-format
+msgid "Tried to modify the special variable '%s' to an invalid value"
+msgstr "試圖將特殊變數「%s」修改為無效的值"
+
+#, c-format
+msgid "Tried to modify the special variable '%s' with the wrong scope"
+msgstr "試圖以錯的作用域修改特殊變數「%s」"
 
 msgid "Trying to print invalid output"
 msgstr "嘗試印出無效的輸出"
@@ -1607,6 +1432,10 @@ msgstr "非預期的不對稱「}」"
 msgid "Unexpected '}' found, expecting ')'"
 msgstr "找到了非預期的「}」，預期「)」"
 
+#, c-format
+msgid "Unexpected argument -- '%s'"
+msgstr "非預期的引數「%s」"
+
 msgid "Unexpected end of string, expecting ')'"
 msgstr "非預期的字串結尾，預期「)」"
 
@@ -1632,6 +1461,10 @@ msgstr "未知"
 msgid "Unknown builtin '%s'"
 msgstr "未知內建命令「%s」"
 
+#, c-format
+msgid "Unknown color '%s'"
+msgstr "未知的顏色「%s」"
+
 msgid "Unknown command"
 msgstr "未知命令"
 
@@ -1650,6 +1483,10 @@ msgstr "未知命令。「%s」的一部分不是目錄。請檢查你的 $PATH�
 msgid "Unknown command:"
 msgstr "未知命令："
 
+#, c-format
+msgid "Unknown error trying to locate directory '%s'"
+msgstr "定位目錄「%s」時發生未知錯誤"
+
 msgid "Unknown error while evaluating command substitution"
 msgstr "執行命令替換時發生未知錯誤"
 
@@ -1659,6 +1496,14 @@ msgstr "未知函式"
 #, c-format
 msgid "Unknown function '%s'"
 msgstr "未知函式「%s」"
+
+#, c-format
+msgid "Unknown input function '%s'"
+msgstr "未知的輸入函式「%s」"
+
+#, c-format
+msgid "Unknown signal '%s'"
+msgstr "未知的訊號「%s」"
 
 msgid "Unmatched wildcard"
 msgstr "未匹配的 wildcard"
@@ -1700,6 +1545,10 @@ msgstr "虛擬計時器到時間了"
 msgid "Warning about using test's zero- or one-argument modes (`test -d $foo`), which will be changed in future."
 msgstr "test 使用零個或一個引數之模式（test -d $foo）的警告，這些模式在之後會變更。"
 
+#, c-format
+msgid "Warning: Option '%s' was removed and is now ignored"
+msgstr "警告：選項「%s」已移除，忽略之"
+
 msgid "Warnings (on by default)"
 msgstr "警告（預設開啟）"
 
@@ -1712,11 +1561,14 @@ msgstr "視窗大小變更"
 msgid "Writing/reading the universal variable store"
 msgstr "通域變數存檔寫入／讀取"
 
-msgid "[: the last argument must be ']'"
-msgstr "[：最後一個引數必須是「]」"
+msgid "`set --show` does not allow slices with the var names"
+msgstr "「set --show」不允許使用切片"
 
 msgid "a path variable"
 msgstr "路徑變數"
+
+msgid "array index out of bounds"
+msgstr "陣列索引越界"
 
 msgid "array indices start at 1, not 0."
 msgstr "陣列索引值從 1 開始而非 0。"
@@ -1724,23 +1576,20 @@ msgstr "陣列索引值從 1 開始而非 0。"
 msgid "autoloading"
 msgstr "自動載入"
 
-#, c-format
-msgid "builtin %s: %s failed: %s"
-msgstr "內建命令 %s：%s 失敗：%s"
-
-#, c-format
-msgid "builtin %s: %s: %s"
-msgstr "內建命令 %s：%s：%s"
-
-#, c-format
-msgid "builtin %s: Invalid arg: %s"
-msgstr "內建命令 %s：無效的引數：%s"
-
 msgid "builtin history delete --exact requires --case-sensitive"
 msgstr "內建命令 history delete --exact 需要 --case-sensitive"
 
 msgid "builtin history delete only supports --exact"
 msgstr "內建命令 history delete 只支援 --exact"
+
+msgid "called with no arguments. This will be an error in future."
+msgstr "不帶引數呼叫。這在之後會是錯誤。"
+
+msgid "called with one argument. This will return false in future."
+msgstr "帶一個引數呼叫。這在之後會回傳 false。"
+
+msgid "calling job for event handler not found"
+msgstr "找不到事件處理器要呼叫的作業"
 
 msgid "can not save history"
 msgstr "無法儲存歷史紀錄"
@@ -1748,9 +1597,22 @@ msgstr "無法儲存歷史紀錄"
 msgid "can not save universal variables or functions"
 msgstr "無法儲存通域變數或函式"
 
+msgid "can't merge history in private mode"
+msgstr "私密模式中不能合併歷史紀錄"
+
+msgid "cannot both export and unexport"
+msgstr "不能同時匯出和取消匯出"
+
+msgid "cannot both path and unpath"
+msgstr "不能同時標為路徑和取消標為路徑"
+
 #, c-format
 msgid "cannot parse key '%s'"
 msgstr "無法解析按鍵「%s」"
+
+#, c-format
+msgid "column %s exceeds line length"
+msgstr "第 %s 欄超過了行的長度"
 
 msgid "command"
 msgstr "命令"
@@ -1776,6 +1638,29 @@ msgstr "目錄"
 msgid "error"
 msgstr "錯誤"
 
+#, c-format
+msgid "exclusive flag '%s' is not valid"
+msgstr "互斥旗標「%s」無效"
+
+#, c-format
+msgid "exclusive flag string '%s' is not valid"
+msgstr "互斥旗標字串「%s」無效"
+
+#, c-format
+msgid "expected %d arguments; got %d"
+msgstr "預期有 %d 個引數，卻收到了 %d 個"
+
+#, c-format
+msgid "expected <= %d arguments; got %d"
+msgstr "預期有 <= %d 個引數，卻收到了 %d 個"
+
+#, c-format
+msgid "expected >= %d arguments; got %d"
+msgstr "預期有 >= %d 個引數，卻收到了 %d 個"
+
+msgid "expected event name"
+msgstr ""
+
 msgid "explore what characters keyboard keys send"
 msgstr "探索鍵盤按鍵發送的是什麼字元"
 
@@ -1786,18 +1671,16 @@ msgid "file"
 msgstr "檔案"
 
 #, c-format
-msgid ""
-"fish: %s: missing man page\n"
-"Documentation may not be installed.\n"
-"`help %s` will show an online version"
+msgid "fish does not have shell options. See `help %s`."
 msgstr ""
-"fish：%s：缺少手冊頁\n"
-"可能未安裝文件。\n"
-"「help %s」將顯示線上版本"
 
 #, c-format
 msgid "from sourcing file %s"
 msgstr "在載入的檔案 %s"
+
+#, c-format
+msgid "given %d indexes but %d values"
+msgstr "指定了 %d 個索引卻有 %d 個值"
 
 msgid "in command substitution"
 msgstr "在命令替換"
@@ -1814,12 +1697,52 @@ msgstr "在函式「%s」"
 msgid "invalid field width: %s"
 msgstr "無效的欄位寬度：%s"
 
+msgid "invalid option combination"
+msgstr "無效的選項組合"
+
+#, c-format
+msgid "invalid option combination, %s"
+msgstr "無效的選項組合，%s"
+
 #, c-format
 msgid "invalid precision: %s"
 msgstr "無效的精度：%s"
 
+msgid "invalid subcommand"
+msgstr "無效的子命令"
+
+#, c-format
+msgid "invalid underline style: %s"
+msgstr "無效的底線樣式：%s"
+
+#, c-format
+msgid "job %d ('%s') was stopped and has been signalled to continue."
+msgstr "作業 %d（%s）停止過並收到了訊號要求繼續。"
+
+msgid "line/column index starts at 1"
+msgstr "行/欄索引從 1 開始"
+
+msgid "missing argument"
+msgstr "缺少引數"
+
+msgid "missing filename argument or input redirection"
+msgstr "缺少檔案名稱引數或輸入重新導向"
+
 msgid "missing hexadecimal number in escape"
 msgstr "轉義序列缺少十六進位數字"
+
+#, c-format
+msgid ""
+"missing man page\n"
+"Documentation may not be installed.\n"
+"`help %s` will show an online version"
+msgstr ""
+
+msgid "missing subcommand"
+msgstr "缺少子命令"
+
+msgid "nothing to choose from"
+msgstr "沒得選擇"
 
 #, c-format
 msgid "only f1 through f%d are supported, not 'f%s'"
@@ -1836,11 +1759,27 @@ msgstr "第 %u 至 %u 列，共 %u 列"
 msgid "running"
 msgstr "執行中"
 
+msgid "scope can be only one of: universal function global local"
+msgstr "作用域只能是以下之一：universal、function、global、local"
+
 msgid "search:"
 msgstr "搜尋："
 
+msgid "setting cursor while evaluating 'complete --arguments' is not yet supported"
+msgstr "尚不支援於執行「complete --arguments」時設定游標"
+
+msgid "stdin is closed"
+msgstr "stdin 已關閉"
+
 msgid "stopped"
 msgstr "已停止"
+
+msgid "subcommand takes no options"
+msgstr "子命令沒有選項"
+
+#, c-format
+msgid "successfully set universal '%s'; but a global by that name shadows it"
+msgstr "成功設定了通域變數「%s」，但有同名的全域變數遮蔽了它"
 
 #, c-format
 msgid "switch: Expected at most one argument, got %u"
@@ -1849,9 +1788,18 @@ msgstr "switch：預期至多有一個引數，卻收到 %u 個"
 msgid "symlink"
 msgstr "象徵式連結"
 
+msgid "the -k/--key syntax is no longer supported. See `bind --help` and `bind --key-names`"
+msgstr "-k/--key 語法不再支援。參見「bind --help」和「bind --key-names」"
+
+msgid "the last argument must be ']'"
+msgstr ""
+
 #, c-format
-msgid "ulimit: Permission denied when changing resource of type '%s'"
-msgstr "ulimit：變更「%s」此類資源時存取遭拒"
+msgid "there is no line %s"
+msgstr "沒有第 %s 行"
+
+msgid "too many arguments"
+msgstr "太多引數"
 
 msgid "unexported"
 msgstr "未匯出"
@@ -1864,14 +1812,24 @@ msgid "unlimited"
 msgstr "無限制"
 
 #, c-format
+msgid "unrecognized feature '%s'"
+msgstr "不認識的功能「%s」"
+
+#, c-format
+msgid "variable '%s' is read-only"
+msgstr "變數「%s」是唯讀的"
+
+#, c-format
 msgid "with arguments '%s'"
 msgstr "，引數為「%s」"
 
 msgid "with definition"
 msgstr "，定義為"
 
-msgid "|& is not valid. In fish, use &| to pipe both stdout and stderr."
-msgstr "|& 無效。在 fish 中請使用 &| 來同時管道傳輸 stdout 和 stderr。"
+#  第一個 %s 是刪節號。此字串出現在按下 <Tab> 的清單太長的情況。
+#, fuzzy, c-format
+msgid "…and %u more rows"
+msgstr "…還有 %u 列"
 
 msgid "fish-section-tier1-from-script-explicitly-added"
 msgstr ""
@@ -1919,10 +1877,7 @@ msgid "%s: The number of positions to skip must be a non-negative integer\\n"
 msgstr "%s：要略過的位置數量必須是非負整數\\n"
 
 msgid "%s: Too many arguments"
-msgstr "%s：引數太少"
-
-msgid "%s: Too many arguments\\n"
-msgstr "%s：引數太多\\n"
+msgstr "%s：引數太多"
 
 msgid "%s: Unknown function '%s'\\n"
 msgstr "%s：未知函式「%s」\\n"
@@ -3741,9 +3696,6 @@ msgstr "vi 風格的按鍵綁定"
 msgid "wait for app to exit"
 msgstr "等待應用程式結束"
 
-msgid "fish-section-tier3-from-script-explicitly-added"
-msgstr ""
-
 msgid "fish-section-tier3-from-script-implicitly-added"
 msgstr ""
 
@@ -5361,10 +5313,16 @@ msgstr ""
 msgid "Add OFFSET to file positions in hexdump"
 msgstr ""
 
+msgid "Add Requires dependencies to a target unit"
+msgstr ""
+
 msgid "Add Signed-off-by line at the end of the merge commit message"
 msgstr ""
 
 msgid "Add Signed-off-by line to the commit message"
+msgstr ""
+
+msgid "Add Wants dependencies to a target unit"
 msgstr ""
 
 msgid "Add Winelib to import"
@@ -5940,6 +5898,9 @@ msgstr ""
 msgid "Add or inspect object notes"
 msgstr ""
 
+msgid "Add or parse structured information in commit messages"
+msgstr ""
+
 msgid "Add or reduce noise in an image [geometry]"
 msgstr ""
 
@@ -6099,6 +6060,9 @@ msgstr ""
 msgid "Add the specified package to the local cache"
 msgstr ""
 
+msgid "Add the specified user/group mapping to an X-mount.idmap map"
+msgstr ""
+
 msgid "Add the standard Git exclusions"
 msgstr ""
 
@@ -6157,9 +6121,6 @@ msgid "Additional Gtk module"
 msgstr ""
 
 msgid "Additional `Cargo.toml` to sync and vendor"
-msgstr ""
-
-msgid "Additional directories to search for fonts"
 msgstr ""
 
 msgid "Additional flag for strings inside the argument number ARG of keyword WORD"
@@ -6345,9 +6306,6 @@ msgstr ""
 msgid "Aggregate sources for all modules in an aggregator project"
 msgstr ""
 
-msgid "Aggregate the consumed space of one or more directories or files"
-msgstr ""
-
 msgid "Aggressive scan options"
 msgstr ""
 
@@ -6391,6 +6349,9 @@ msgid "Alias for --coverage"
 msgstr ""
 
 msgid "Alias for --env"
+msgstr ""
+
+msgid "Alias for --only-trailers --only-input --unfold"
 msgstr ""
 
 msgid "Alias for -a"
@@ -6898,6 +6859,9 @@ msgid "Allow the rerere mechanism to update the index automatically"
 msgstr ""
 
 msgid "Allow the resize to shrink the volume"
+msgstr ""
+
+msgid "Allow to make a target directory (mountpoint) if it does not exist yet"
 msgstr ""
 
 msgid "Allow to perform \"insecure\" SSL connections"
@@ -8103,6 +8067,9 @@ msgstr ""
 msgid "Ask the server to reimport files for UTIs claimed by the listed plugin"
 msgstr ""
 
+msgid "Ask the service manager to exit"
+msgstr ""
+
 msgid "Ask the user for confirmation before killing a process"
 msgstr ""
 
@@ -9102,6 +9069,9 @@ msgstr ""
 msgid "Bind mount a file or directory from the host in the container"
 msgstr ""
 
+msgid "Bind mount a path into the mount namespace of a unit"
+msgstr ""
+
 msgid "Bind mounts src into CHROOTDIR/dest"
 msgstr ""
 
@@ -9828,6 +9798,9 @@ msgstr ""
 msgid "Cancel jobs owned by username"
 msgstr ""
 
+msgid "Cancel one or more jobs"
+msgstr ""
+
 msgid "Cancel pairing with device"
 msgstr ""
 
@@ -10506,6 +10479,9 @@ msgstr ""
 msgid "Check if all files owned by PACKAGE are present"
 msgstr ""
 
+msgid "Check if already mounted"
+msgstr ""
+
 msgid "Check if any of the given files would be ignored"
 msgstr ""
 
@@ -10780,6 +10756,12 @@ msgid "Check that toolchains requirements are met by currently configured toolch
 msgstr ""
 
 msgid "Check that working files are unmodified."
+msgstr ""
+
+msgid "Check the GPG signature of commits"
+msgstr ""
+
+msgid "Check the GPG signature of tags"
 msgstr ""
 
 msgid "Check the branch related to the current directory"
@@ -11275,6 +11257,15 @@ msgid "Clear the UUID tree"
 msgstr ""
 
 msgid "Clear the build directory after a package is built"
+msgstr ""
+
+msgid "Clear the effect of previous use of --if-exists"
+msgstr ""
+
+msgid "Clear the effect of previous use of --if-missing"
+msgstr ""
+
+msgid "Clear the effect of previous use of --where"
 msgstr ""
 
 msgid "Clear the fact cache"
@@ -11949,9 +11940,6 @@ msgstr ""
 msgid "Compile all the methods in an assembly"
 msgstr ""
 
-msgid "Compile an input file"
-msgstr ""
-
 msgid "Compile and run an executable product"
 msgstr ""
 
@@ -12247,6 +12235,9 @@ msgid "Config file"
 msgstr ""
 
 msgid "Config file (default: $HOME/.s3cfg)"
+msgstr ""
+
+msgid "Config file name"
 msgstr ""
 
 msgid "Config file name or directory with 'tox.ini' file"
@@ -12810,6 +12801,9 @@ msgstr ""
 msgid "Control whether to include glibc NSS data"
 msgstr ""
 
+msgid "Control whether to register a session with service manager or without"
+msgstr ""
+
 msgid "Controller information"
 msgstr ""
 
@@ -13005,6 +12999,9 @@ msgstr ""
 msgid "Copies between two remote hosts are transferred through the local host"
 msgstr ""
 
+msgid "Copr hub hostname"
+msgstr ""
+
 msgid "Copy Cc: list from first message to the others"
 msgstr ""
 
@@ -13174,9 +13171,6 @@ msgid "Count executions of source lines"
 msgstr ""
 
 msgid "Count hard links multiple times"
-msgstr ""
-
-msgid "Count hard-linked files each time they are seen"
 msgstr ""
 
 msgid "Count hidden files, too"
@@ -16107,6 +16101,9 @@ msgstr ""
 msgid "Disable \\write18{SHELL COMMAND}"
 msgstr ""
 
+msgid "Disable a Copr repository"
+msgstr ""
+
 msgid "Disable a NuGet source"
 msgstr ""
 
@@ -16302,6 +16299,9 @@ msgstr ""
 msgid "Disable chat search background indexer"
 msgstr ""
 
+msgid "Disable check for unique upload"
+msgstr ""
+
 msgid "Disable color"
 msgstr ""
 
@@ -16318,6 +16318,9 @@ msgid "Disable colored output"
 msgstr ""
 
 msgid "Disable colorization in output"
+msgstr ""
+
+msgid "Disable colorized output"
 msgstr ""
 
 msgid "Disable colors"
@@ -16626,6 +16629,9 @@ msgstr ""
 msgid "Disable peer exchange (PEX)"
 msgstr ""
 
+msgid "Disable per-runner parallelism"
+msgstr ""
+
 msgid "Disable portmapping"
 msgstr ""
 
@@ -16690,6 +16696,9 @@ msgid "Disable reverse-wraparound"
 msgstr ""
 
 msgid "Disable rewriting of the DISPLAY var"
+msgstr ""
+
+msgid "Disable rules from the command line"
 msgstr ""
 
 msgid "Disable script 'build.cj'"
@@ -16852,6 +16861,9 @@ msgid "Disable the docs info"
 msgstr ""
 
 msgid "Disable the docs title"
+msgstr ""
+
+msgid "Disable the enable one or more units"
 msgstr ""
 
 msgid "Disable the eval extension"
@@ -17430,9 +17442,6 @@ msgstr ""
 msgid "Display answers as exclamation points and missing packets as dots"
 msgstr ""
 
-msgid "Display apparent size instead of disk usage"
-msgstr ""
-
 msgid "Display architecture specific information"
 msgstr ""
 
@@ -17580,6 +17589,9 @@ msgstr ""
 msgid "Display debugging information"
 msgstr ""
 
+msgid "Display debugging messages"
+msgstr ""
+
 msgid "Display deduplication histogram"
 msgstr ""
 
@@ -17713,9 +17725,6 @@ msgid "Display help about darcs and darcs commands"
 msgstr ""
 
 msgid "Display help and debug options"
-msgstr ""
-
-msgid "Display help and exit\t"
 msgstr ""
 
 msgid "Display help for Git Sizer"
@@ -18064,6 +18073,9 @@ msgid "Display histogram of bucket list lengths"
 msgstr ""
 
 msgid "Display hook variables"
+msgstr ""
+
+msgid "Display hosts listed in configuration"
 msgstr ""
 
 msgid "Display image centered on a backdrop"
@@ -19215,6 +19227,9 @@ msgstr ""
 msgid "Do not call gensync (and the !commands in /etc/eix-sync.conf)"
 msgstr ""
 
+msgid "Do not canonicalize any paths or tags during the mount process"
+msgstr ""
+
 msgid "Do not cc the From: address"
 msgstr ""
 
@@ -19306,9 +19321,6 @@ msgid "Do not compress inode table"
 msgstr ""
 
 msgid "Do not compress the uid/gid table"
-msgstr ""
-
-msgid "Do not compute total column for multiple inputs"
 msgstr ""
 
 msgid "Do not configure any interfaces"
@@ -20481,9 +20493,6 @@ msgstr ""
 msgid "Do not sort file arguments"
 msgstr ""
 
-msgid "Do not sort paths by their size in bytes"
-msgstr ""
-
 msgid "Do not sort the result"
 msgstr ""
 
@@ -20571,6 +20580,9 @@ msgstr ""
 msgid "Do not trap on integer division by zero"
 msgstr ""
 
+msgid "Do not treat --- as the end of the commit message"
+msgstr ""
+
 msgid "Do not treat and/bitand/bitor/compl/not/or/xor as keywords"
 msgstr ""
 
@@ -20635,6 +20647,9 @@ msgid "Do not upgrade packages"
 msgstr ""
 
 msgid "Do not upload binaries"
+msgstr ""
+
+msgid "Do not upload the files"
 msgstr ""
 
 msgid "Do not use \"abshi2\" pattern"
@@ -20860,6 +20875,9 @@ msgid "Do not write #: filename:line lines"
 msgstr ""
 
 msgid "Do not write FETCH_HEAD file"
+msgstr ""
+
+msgid "Do not write a log file for uploads"
 msgstr ""
 
 msgid "Do not write a ~/.fehbg file"
@@ -21229,6 +21247,9 @@ msgid "Don't check if commit belongs on the same branch"
 msgstr ""
 
 msgid "Don't check if travis client is up to date"
+msgstr ""
+
+msgid "Don't check the signatures or upload the files"
 msgstr ""
 
 msgid "Don't clear the playlist"
@@ -22554,6 +22575,9 @@ msgstr ""
 msgid "Don’t assume ID based shared libraries are being used"
 msgstr ""
 
+msgid "Don’t call the /sbin/mount.filesystem helper even if it exists"
+msgstr ""
+
 msgid "Don’t cross filesystem boundaries"
 msgstr ""
 
@@ -23076,6 +23100,9 @@ msgstr ""
 msgid "Dump the relocated contents of of specified section"
 msgstr ""
 
+msgid "Dump the systemd manager environment block"
+msgstr ""
+
 msgid "Dump tree structures from a given device"
 msgstr ""
 
@@ -23226,6 +23253,9 @@ msgstr ""
 msgid "Edit a property with an external editor"
 msgstr ""
 
+msgid "Edit a unit file or drop-in snippet"
+msgstr ""
+
 msgid "Edit an entry"
 msgstr ""
 
@@ -23305,6 +23335,9 @@ msgid "Edit the configuration file"
 msgstr ""
 
 msgid "Edit the file containing a tag"
+msgstr ""
+
+msgid "Edit the files in place"
 msgstr ""
 
 msgid "Edit the flag on an object"
@@ -24165,6 +24198,9 @@ msgstr ""
 msgid "Enable one or more units"
 msgstr ""
 
+msgid "Enable only this rule, disabling all other defaults. Can be specified multiple times"
+msgstr ""
+
 msgid "Enable optimization of \"&&\" and \"││\" in conditional execution (default)"
 msgstr ""
 
@@ -24232,6 +24268,9 @@ msgid "Enable peer exchange (PEX)"
 msgstr ""
 
 msgid "Enable playground in web interface"
+msgstr ""
+
+msgid "Enable plugins from the command line"
 msgstr ""
 
 msgid "Enable portmapping via NAT-PMP or UPnP"
@@ -24319,6 +24358,9 @@ msgid "Enable row security"
 msgstr ""
 
 msgid "Enable row security (dump only content user has access to)"
+msgstr ""
+
+msgid "Enable rules from the command line"
 msgstr ""
 
 msgid "Enable search index"
@@ -24426,6 +24468,9 @@ msgstr ""
 msgid "Enable the JIT compiler"
 msgstr ""
 
+msgid "Enable the Lintian verification check"
+msgstr ""
+
 msgid "Enable the bitrate management engine"
 msgstr ""
 
@@ -24457,6 +24502,9 @@ msgid "Enable the live reloading in the development server (this is the default)
 msgstr ""
 
 msgid "Enable the live reloading in the development server, but only re-build files that have changed"
+msgstr ""
+
+msgid "Enable the local install check"
 msgstr ""
 
 msgid "Enable the necessary sparse-checkout config settings"
@@ -24600,10 +24648,16 @@ msgstr ""
 msgid "Enable/Disable colored error messages"
 msgstr ""
 
+msgid "Enable/disable a unit depending on preset configuration"
+msgstr ""
+
 msgid "Enable/disable advertising with given type"
 msgstr ""
 
 msgid "Enable/disable agent with given capability"
+msgstr ""
+
+msgid "Enable/disable all units depending on preset configuration"
 msgstr ""
 
 msgid "Enable/disable bucket access logging"
@@ -24940,6 +24994,15 @@ msgid "Ensure transactions are ordered by date"
 msgstr ""
 
 msgid "Ensure value is of given type"
+msgstr ""
+
+msgid "Enter and isolate emergency mode"
+msgstr ""
+
+msgid "Enter and isolate rescue mode"
+msgstr ""
+
+msgid "Enter and isolate the default mode"
 msgstr ""
 
 msgid "Enter commit message as a string"
@@ -26067,9 +26130,6 @@ msgstr ""
 msgid "Extract into directory"
 msgstr ""
 
-msgid "Extract just one field"
-msgstr ""
-
 msgid "Extract most recent versions of files"
 msgstr ""
 
@@ -26664,6 +26724,9 @@ msgstr ""
 msgid "Filter for rewriting the tree and its contents"
 msgstr ""
 
+msgid "Filter issues by file names or globs"
+msgstr ""
+
 msgid "Filter mode. Do not start interactive finder"
 msgstr ""
 
@@ -26983,6 +27046,9 @@ msgid "Fix in preparation for the next edition"
 msgstr ""
 
 msgid "Fix invalid file names in a bucket"
+msgstr ""
+
+msgid "Fix issues automatically"
 msgstr ""
 
 msgid "Fix only the specified bench target"
@@ -27337,9 +27403,6 @@ msgid "Force a build"
 msgstr ""
 
 msgid "Force a complete refresh"
-msgstr ""
-
-msgid "Force a downgrade to an older version"
 msgstr ""
 
 msgid "Force a fixed checksum block-size"
@@ -28134,9 +28197,6 @@ msgstr ""
 msgid "Format of the list command output"
 msgstr ""
 
-msgid "Format of the output file"
-msgstr ""
-
 msgid "Format of the output: text or json"
 msgstr ""
 
@@ -28173,10 +28233,7 @@ msgstr ""
 msgid "Format the print file with a shaded header: date, time, job name, and page no."
 msgstr ""
 
-msgid "Format to emit diagnostics in"
-msgstr ""
-
-msgid "Format to serialize in"
+msgid "Format to use for the output"
 msgstr ""
 
 msgid "Format to use when exporting"
@@ -29931,6 +29988,9 @@ msgstr ""
 msgid "Give patch name and comment in file"
 msgstr ""
 
+msgid "Give privileges to selected or current user"
+msgstr ""
+
 msgid "Give some file-transfer stats"
 msgstr ""
 
@@ -30495,6 +30555,9 @@ msgstr ""
 msgid "Home URL prefix for PEPs"
 msgstr ""
 
+msgid "Home area to log into"
+msgstr ""
+
 msgid "Home directory"
 msgstr ""
 
@@ -30846,9 +30909,6 @@ msgstr ""
 msgid "If project list is specified, also build projects that depend on projects on the list"
 msgstr ""
 
-msgid "If set, we will not cross filesystems or traverse mount points"
-msgstr ""
-
 msgid "If source path is a directory, publish all its content recursively"
 msgstr ""
 
@@ -31161,6 +31221,9 @@ msgstr ""
 msgid "Ignore module interface version"
 msgstr ""
 
+msgid "Ignore module sources"
+msgstr ""
+
 msgid "Ignore newer bugs than upgrade packages"
 msgstr ""
 
@@ -31417,6 +31480,9 @@ msgid "Import a saved switch state"
 msgstr ""
 
 msgid "Import cuesheet and store in CUESHEET block"
+msgstr ""
+
+msgid "Import environment variables into the service manager"
 msgstr ""
 
 msgid "Import every tag from a remote with git fetch <name>"
@@ -32229,9 +32295,6 @@ msgstr ""
 msgid "Initialize a new or existing Terraform configuration"
 msgstr ""
 
-msgid "Initialize a new project"
-msgstr ""
-
 msgid "Initialize a new repository for the given version control system"
 msgstr ""
 
@@ -32455,6 +32518,9 @@ msgid "Install Node.js from a prebuilt package (default)"
 msgstr ""
 
 msgid "Install Node.js from source"
+msgstr ""
+
+msgid "Install a Copr repository"
 msgstr ""
 
 msgid "Install a Python version"
@@ -32719,6 +32785,9 @@ msgid "Install packages with untrusted signature or no signature"
 msgstr ""
 
 msgid "Install pkg(8) from remote repository"
+msgstr ""
+
+msgid "Install plugins"
 msgstr ""
 
 msgid "Install plugins resolved from the Maven repository system into an Eclipse instance"
@@ -33066,6 +33135,9 @@ msgstr ""
 msgid "Invoke a method on a remote object"
 msgstr ""
 
+msgid "Invoke command via target user's login shell"
+msgstr ""
+
 msgid "Invoke fstrim on domain's mounted filesystems"
 msgstr ""
 
@@ -33193,6 +33265,9 @@ msgid "Just check, don't make any changes"
 msgstr ""
 
 msgid "Just exit with status 0 when there is a match and with non-zero status when there isn't"
+msgstr ""
+
+msgid "Just like --pty, but leave TTY access to agents until unit is started up"
 msgstr ""
 
 msgid "Just report what it would remove"
@@ -33339,6 +33414,9 @@ msgstr ""
 msgid "Key to be used as a namespace identifier"
 msgstr ""
 
+msgid "Key-value pair to apply as a trailer"
+msgstr ""
+
 msgid "Keyboard layout mapping table for special hash-modes"
 msgstr ""
 
@@ -33364,6 +33442,9 @@ msgid "Kick current connection from device side and make it reconnect."
 msgstr ""
 
 msgid "Kick current connection from host side and make it reconnect."
+msgstr ""
+
+msgid "Kill one or more units"
 msgstr ""
 
 msgid "Kill only processes the specified user owns. Command names are optional"
@@ -33481,9 +33562,6 @@ msgid "Launch python shell"
 msgstr ""
 
 msgid "Launch the Protontricks GUI"
-msgstr ""
-
-msgid "Launch the terminal user interface"
 msgstr ""
 
 msgid "Launch utility at startup and reload on file change"
@@ -33993,6 +34071,9 @@ msgstr ""
 msgid "Linewrap entries as width[,indent1[,indent2]]"
 msgstr ""
 
+msgid "Link a unit file into the unit search path"
+msgstr ""
+
 msgid "Link against framework (Darwin)"
 msgstr ""
 
@@ -34063,6 +34144,9 @@ msgid "List APIs"
 msgstr ""
 
 msgid "List CloudFront distribution points"
+msgstr ""
+
+msgid "List Copr repositories"
 msgstr ""
 
 msgid "List DPP-capable devices"
@@ -34150,9 +34234,6 @@ msgid "List all active hooks"
 msgstr ""
 
 msgid "List all analyzed versions"
-msgstr ""
-
-msgid "List all apps"
 msgstr ""
 
 msgid "List all apps in the target space"
@@ -34263,9 +34344,6 @@ msgstr ""
 msgid "List all directories from which unit files may be loaded"
 msgstr ""
 
-msgid "List all discovered fonts"
-msgstr ""
-
 msgid "List all dist-tags"
 msgstr ""
 
@@ -34312,6 +34390,9 @@ msgid "List all files/folders in directory"
 msgstr ""
 
 msgid "List all forward socket connections"
+msgstr ""
+
+msgid "List all games for all Steam installations"
 msgstr ""
 
 msgid "List all help topics"
@@ -35050,6 +35131,9 @@ msgid "List format"
 msgstr ""
 
 msgid "List full dependencies for a given identity"
+msgstr ""
+
+msgid "List games for a single Steam installation"
 msgstr ""
 
 msgid "List generation ids for client"
@@ -35862,9 +35946,6 @@ msgstr ""
 msgid "List stemcells"
 msgstr ""
 
-msgid "List style variants of each family"
-msgstr ""
-
 msgid "List subcommands"
 msgstr ""
 
@@ -35986,6 +36067,9 @@ msgid "List the files owned by PACKAGE"
 msgstr ""
 
 msgid "List the files that are supplied by the named package"
+msgstr ""
+
+msgid "List the host and all running local containers"
 msgstr ""
 
 msgid "List the installed extensions"
@@ -36933,6 +37017,9 @@ msgstr ""
 msgid "Long listing format"
 msgstr ""
 
+msgid "Look at all journal files instead of local ones"
+msgstr ""
+
 msgid "Look for (non-boring) files that could be added"
 msgstr ""
 
@@ -37375,6 +37462,9 @@ msgid "Manage .NET tool"
 msgstr ""
 
 msgid "Manage .pac* files"
+msgstr ""
+
+msgid "Manage Copr repositories"
 msgstr ""
 
 msgid "Manage Flexible Resources between Primary and Secondary Controller "
@@ -38443,6 +38533,9 @@ msgid "Mount all available ZFS filesystems"
 msgstr ""
 
 msgid "Mount an entire disk (all mountable volumes)"
+msgstr ""
+
+msgid "Mount an image into the mount namespace of a unit"
 msgstr ""
 
 msgid "Mount as mountable"
@@ -39723,9 +39816,6 @@ msgstr ""
 msgid "One or more Kitchen Driver gems to be installed or added to a Gemfile "
 msgstr ""
 
-msgid "One or more absolute directories to ignore"
-msgstr ""
-
 msgid "Only  match  processes  whose  effective  user ID is listed"
 msgstr ""
 
@@ -40419,9 +40509,6 @@ msgstr ""
 msgid "Open non-regular files"
 msgstr ""
 
-msgid "Open output file after compilation"
-msgstr ""
-
 msgid "Open package repository page in the browser"
 msgstr ""
 
@@ -40554,7 +40641,13 @@ msgstr ""
 msgid "Operate on a range"
 msgstr ""
 
+msgid "Operate on an alternate filesystem root"
+msgstr ""
+
 msgid "Operate on cached data, no network repo access"
+msgstr ""
+
+msgid "Operate on disk image as filesystem root"
 msgstr ""
 
 msgid "Operate on local CONTAINER"
@@ -41073,6 +41166,15 @@ msgstr ""
 msgid "Output in RFC 2822 format"
 msgstr ""
 
+msgid "Output in RFC 3339 format with date precision"
+msgstr ""
+
+msgid "Output in RFC 3339 format with nanosecond precision"
+msgstr ""
+
+msgid "Output in RFC 3339 format with second precision"
+msgstr ""
+
 msgid "Output in an easy-to-parse format for scripts"
 msgstr ""
 
@@ -41194,6 +41296,12 @@ msgid "Output only names of config variables"
 msgstr ""
 
 msgid "Output only the last line of the --stat format containing the total"
+msgstr ""
+
+msgid "Output only trailers"
+msgstr ""
+
+msgid "Output only trailers from the input"
 msgstr ""
 
 msgid "Output only whether the files differ"
@@ -42381,9 +42489,6 @@ msgstr ""
 msgid "Path to config file. Default ~/.config/mariner/config.yaml"
 msgstr ""
 
-msgid "Path to custom CA certificate"
-msgstr ""
-
 msgid "Path to db to use"
 msgstr ""
 
@@ -42924,6 +43029,9 @@ msgstr ""
 msgid "Perform temporary expression replacement during the SSA->normal phase"
 msgstr ""
 
+msgid "Perform the mount operation in the mount namespace specified by ns"
+msgstr ""
+
 msgid "Perform the necessary tests to observe the performance"
 msgstr ""
 
@@ -43063,9 +43171,6 @@ msgid "Pixel color interpolation method [method]"
 msgstr ""
 
 msgid "Pixel storage type [type]"
-msgstr ""
-
-msgid "Pixels per inch for PNG export"
 msgstr ""
 
 msgid "Place comment block with TAG (or those preceding keyword lines) in output file"
@@ -43506,6 +43611,9 @@ msgstr ""
 msgid "Prepend the name of the cpu to all public symbol names"
 msgstr ""
 
+msgid "Prepend the specified directory to all mount targets"
+msgstr ""
+
 msgid "Prepends a time stamp to each trace or verbose line that curl displays"
 msgstr ""
 
@@ -43702,6 +43810,9 @@ msgid "Prevent floating point registers from being used in any manner"
 msgstr ""
 
 msgid "Prevent including compiler-rt symbols"
+msgstr ""
+
+msgid "Prevent one or more units from starting"
 msgstr ""
 
 msgid "Prevent override"
@@ -43903,6 +44014,9 @@ msgid "Print PPID"
 msgstr ""
 
 msgid "Print SRCINFO to stdout"
+msgstr ""
+
+msgid "Print TFLint version"
 msgstr ""
 
 msgid "Print TYPE form"
@@ -44107,9 +44221,6 @@ msgid "Print additional debug info"
 msgstr ""
 
 msgid "Print additional fields"
-msgstr ""
-
-msgid "Print additional statistics about the file traversal to stderr"
 msgstr ""
 
 msgid "Print all active monitors"
@@ -44317,6 +44428,9 @@ msgid "Print commands as they're executed"
 msgstr ""
 
 msgid "Print commands before executing them"
+msgstr ""
+
+msgid "Print commit contents"
 msgstr ""
 
 msgid "Print compiler information"
@@ -44673,9 +44787,6 @@ msgstr ""
 msgid "Print help for `zig`"
 msgstr ""
 
-msgid "Print help for the given subcommand(s)"
-msgstr ""
-
 msgid "Print help info and exit"
 msgstr ""
 
@@ -44689,9 +44800,6 @@ msgid "Print help message"
 msgstr ""
 
 msgid "Print help message and exit"
-msgstr ""
-
-msgid "Print help message or the help of the given subcommand(s)"
 msgstr ""
 
 msgid "Print help of uncommon options"
@@ -45432,6 +45540,9 @@ msgstr ""
 msgid "Print raw entry names"
 msgstr ""
 
+msgid "Print raw gpg status output"
+msgstr ""
+
 msgid "Print raw stats"
 msgstr ""
 
@@ -45585,6 +45696,12 @@ msgstr ""
 msgid "Print synopsis and options"
 msgstr ""
 
+msgid "Print system info for debugging"
+msgstr ""
+
+msgid "Print tag contents"
+msgstr ""
+
 msgid "Print tally"
 msgstr ""
 
@@ -45688,6 +45805,9 @@ msgid "Print the description of a key"
 msgstr ""
 
 msgid "Print the domain's hostname"
+msgstr ""
+
+msgid "Print the dput configuration"
 msgstr ""
 
 msgid "Print the drive capabilities for SCSI-3/mmc compliant drives"
@@ -45955,9 +46075,6 @@ msgid "Print the version of setfacl and exit"
 msgstr ""
 
 msgid "Print the version of the program and exit"
-msgstr ""
-
-msgid "Print the version string"
 msgstr ""
 
 msgid "Print the version string of firewalld"
@@ -46276,9 +46393,6 @@ msgid "Prints an EEPROM dump"
 msgstr ""
 
 msgid "Prints an estimate of the download size of the APK"
-msgstr ""
-
-msgid "Prints author and licensing information"
 msgstr ""
 
 msgid "Prints backup sets and chains currently in repository"
@@ -46635,9 +46749,6 @@ msgstr ""
 msgid "Process all users' calendars and mail the results"
 msgstr ""
 
-msgid "Process an input file to extract metadata"
-msgstr ""
-
 msgid "Process at queue only once"
 msgstr ""
 
@@ -46821,9 +46932,6 @@ msgstr ""
 msgid "Produce output in JSON format"
 msgstr ""
 
-msgid "Produce performance timings"
-msgstr ""
-
 msgid "Produce report on all TAGs"
 msgstr ""
 
@@ -46893,9 +47001,6 @@ msgstr ""
 msgid "Project author"
 msgstr ""
 
-msgid "Project directory"
-msgstr ""
-
 msgid "Project language"
 msgstr ""
 
@@ -46906,9 +47011,6 @@ msgid "Project path"
 msgstr ""
 
 msgid "Project release"
-msgstr ""
-
-msgid "Project root (for absolute paths)"
 msgstr ""
 
 msgid "Project type"
@@ -47527,6 +47629,9 @@ msgid "Query the package names only"
 msgstr ""
 
 msgid "Query the specified service"
+msgstr ""
+
+msgid "Query the unit that owns a process"
 msgstr ""
 
 msgid "Query to select investment transactions"
@@ -48279,6 +48384,12 @@ msgstr ""
 msgid "Reboot to EFI setup"
 msgstr ""
 
+msgid "Reboot userspace"
+msgstr ""
+
+msgid "Reboot via kexec"
+msgstr ""
+
 msgid "Reboots the device, optionally into the bootloader or recovery program"
 msgstr ""
 
@@ -48978,6 +49089,9 @@ msgstr ""
 msgid "Reload server configuration"
 msgstr ""
 
+msgid "Reload the configuration of the system manager"
+msgstr ""
+
 msgid "Reload the default keys"
 msgstr ""
 
@@ -49035,6 +49149,9 @@ msgstr ""
 msgid "Remote url used by `git push`"
 msgstr ""
 
+msgid "Remount a subtree and all possible submounts somewhere else"
+msgstr ""
+
 msgid "Remount a subtree to a second position"
 msgstr ""
 
@@ -49069,6 +49186,9 @@ msgid "Remove ZFS label information from the specified device"
 msgstr ""
 
 msgid "Remove [all] packages from cache"
+msgstr ""
+
+msgid "Remove a Copr repository"
 msgstr ""
 
 msgid "Remove a NuGet package reference"
@@ -49905,6 +50025,9 @@ msgstr ""
 msgid "Remove this from lock"
 msgstr ""
 
+msgid "Remove trailers with whitespace values"
+msgstr ""
+
 msgid "Remove trailing '/' from source args"
 msgstr ""
 
@@ -50607,6 +50730,9 @@ msgstr ""
 msgid "Request a subset of objects from server"
 msgstr ""
 
+msgid "Request a unit reload its configuration"
+msgstr ""
+
 msgid "Request allocation of a pseudo TTY for stdio"
 msgstr ""
 
@@ -50623,6 +50749,9 @@ msgid "Request debug info and also use level to specify how much information"
 msgstr ""
 
 msgid "Request distinct server name"
+msgstr ""
+
+msgid "Request dry-run of dinstall after upload"
 msgstr ""
 
 msgid "Request given address in DHCP DISCOVER message"
@@ -51417,9 +51546,6 @@ msgstr ""
 msgid "Retrieve current host IP address and place it under a configurable project property"
 msgstr ""
 
-msgid "Retrieve exactly one element"
-msgstr ""
-
 msgid "Retrieve fresh bugs"
 msgstr ""
 
@@ -51651,6 +51777,9 @@ msgstr ""
 msgid "Return whether zone has been added"
 msgstr ""
 
+msgid "Return zero exit status even if issues found"
+msgstr ""
+
 msgid "Returns 0 if panic mode is enabled, 1 otherwise"
 msgstr ""
 
@@ -51751,9 +51880,6 @@ msgid "Revert to previously booted tree"
 msgstr ""
 
 msgid "Revert to the received value if available"
-msgstr ""
-
-msgid "Revert to the version from before the last update"
 msgstr ""
 
 msgid "Review the control file before creating a .deb"
@@ -52120,6 +52246,9 @@ msgid "Run command as group"
 msgstr ""
 
 msgid "Run command as user"
+msgstr ""
+
+msgid "Run command in each directory recursively"
 msgstr ""
 
 msgid "Run command in the background"
@@ -52680,6 +52809,9 @@ msgstr ""
 msgid "Run tracer process as tracee's grandchild in a separate session"
 msgstr ""
 
+msgid "Run under the specified unit name"
+msgstr ""
+
 msgid "Run unit tests"
 msgstr ""
 
@@ -53136,9 +53268,6 @@ msgstr ""
 msgid "Save and restore package state"
 msgstr ""
 
-msgid "Save authtoken to configuration file"
-msgstr ""
-
 msgid "Save brightness"
 msgstr ""
 
@@ -53559,7 +53688,10 @@ msgstr ""
 msgid "Search for fonts in directory"
 msgstr ""
 
-msgid "Search for game(s) with the given name"
+msgid "Search for game(s) with the given name among all Steam installations"
+msgstr ""
+
+msgid "Search for game(s) with the given name for a single Steam installation"
 msgstr ""
 
 msgid "Search for gems under specific paths"
@@ -54348,9 +54480,6 @@ msgstr ""
 msgid "Selects which device lsusb will examine"
 msgstr ""
 
-msgid "Self update the Typst CLI"
-msgstr ""
-
 msgid "Semantic version category for new version"
 msgstr ""
 
@@ -54883,6 +55012,9 @@ msgid "Set `echo` shell variable"
 msgstr ""
 
 msgid "Set `verbose` shell variable"
+msgstr ""
+
+msgid "Set a Terraform variable"
 msgstr ""
 
 msgid "Set a backup destination"
@@ -55687,6 +55819,9 @@ msgid "Set maximum number of per-user tasks"
 msgstr ""
 
 msgid "Set maximum number of redirects"
+msgstr ""
+
+msgid "Set maximum number of workers in recursive inspection"
 msgstr ""
 
 msgid "Set maximum size of a single allocated block"
@@ -57144,9 +57279,6 @@ msgstr ""
 msgid "Set watches"
 msgstr ""
 
-msgid "Set when to use color"
-msgstr ""
-
 msgid "Set where to write formatted output"
 msgstr ""
 
@@ -57298,6 +57430,9 @@ msgid "Sets maximum bits allowed for bitmaps"
 msgstr ""
 
 msgid "Sets minimum bits allowed for bitmaps"
+msgstr ""
+
+msgid "Sets minimum severity level for exiting with a non-zero error code"
 msgstr ""
 
 msgid "Sets number of rotated logs to keep, default 4"
@@ -57634,6 +57769,9 @@ msgid "Shortcut for --style=gv_spartan.dat"
 msgstr ""
 
 msgid "Shortcut for --style=gv_widgetless.dat"
+msgstr ""
+
+msgid "Shortcut for --via-shell --chdir='~'"
 msgstr ""
 
 msgid "Shorten some address references at link time, when possible; uses the linker option -relax"
@@ -59481,6 +59619,9 @@ msgstr ""
 msgid "Show properties of machines"
 msgstr ""
 
+msgid "Show properties of one or more units, jobs, or the manager itself"
+msgstr ""
+
 msgid "Show properties of systemd-timedated"
 msgstr ""
 
@@ -59832,6 +59973,9 @@ msgstr ""
 msgid "Show the author email instead of author name"
 msgstr ""
 
+msgid "Show the backing files of one or more units"
+msgstr ""
+
 msgid "Show the branch and tracking info even in short-format"
 msgstr ""
 
@@ -59986,6 +60130,9 @@ msgid "Show the maintainer(s) for the pkg"
 msgstr ""
 
 msgid "Show the manual page"
+msgstr ""
+
+msgid "Show the manual page for a unit"
 msgstr ""
 
 msgid "Show the menubar"
@@ -61518,6 +61665,9 @@ msgstr ""
 msgid "Source name for underlying storage"
 msgstr ""
 
+msgid "Source of default options"
+msgstr ""
+
 msgid "Source of the commit message"
 msgstr ""
 
@@ -61639,6 +61789,9 @@ msgid "Specifies an alternate server"
 msgstr ""
 
 msgid "Specifies an alternate username"
+msgstr ""
+
+msgid "Specifies an alternative fstab file"
 msgstr ""
 
 msgid "Specifies an alternative installroot"
@@ -62641,6 +62794,9 @@ msgid "Specify directory for rpm database"
 msgstr ""
 
 msgid "Specify directory with configuration files"
+msgstr ""
+
+msgid "Specify disk image dissection policy"
 msgstr ""
 
 msgid "Specify display"
@@ -63927,12 +64083,6 @@ msgstr ""
 msgid "Start a SOPS key kervice server"
 msgstr ""
 
-msgid "Start a TCP tunnel"
-msgstr ""
-
-msgid "Start a TLS tunnel"
-msgstr ""
-
 msgid "Start a block commit operation"
 msgstr ""
 
@@ -63979,9 +64129,6 @@ msgid "Start all auto-detected arrays"
 msgstr ""
 
 msgid "Start an Elm project"
-msgstr ""
-
-msgid "Start an HTTP tunnel"
 msgstr ""
 
 msgid "Start an IRB session in the context of the current bundle"
@@ -64170,6 +64317,9 @@ msgstr ""
 msgid "Start interface"
 msgstr ""
 
+msgid "Start language server"
+msgstr ""
+
 msgid "Start machine"
 msgstr ""
 
@@ -64285,9 +64435,6 @@ msgid "Start this profile"
 msgstr ""
 
 msgid "Start tracking work in Phrequent"
-msgstr ""
-
-msgid "Start tunnels by name from the configuration file"
 msgstr ""
 
 msgid "Start up the visual interface and display its preview screen"
@@ -64581,6 +64728,9 @@ msgstr ""
 msgid "Stop playing"
 msgstr ""
 
+msgid "Stop preventing one or more units from starting"
+msgstr ""
+
 msgid "Stop preventing package modification"
 msgstr ""
 
@@ -64786,9 +64936,6 @@ msgid "Streams test logs"
 msgstr ""
 
 msgid "String as the value for the given key"
-msgstr ""
-
-msgid "String key-value pair for `sys.inputs`"
 msgstr ""
 
 msgid "String literal mode"
@@ -65344,6 +65491,9 @@ msgid "Switch to a commit for inspection and discardable experiment"
 msgstr ""
 
 msgid "Switch to a different tree"
+msgstr ""
+
+msgid "Switch to a different working directory before executing the command"
 msgstr ""
 
 msgid "Switch to a profile"
@@ -65940,6 +66090,9 @@ msgstr ""
 msgid "Terminates the logkeys daemon"
 msgstr ""
 
+msgid "Terraform variable file name"
+msgstr ""
+
 msgid "Terse output for machine consumption. Implies --no-abbrev and --no-color"
 msgstr ""
 
@@ -66243,9 +66396,6 @@ msgstr ""
 msgid "The age recipient the new group should contain. Can be specified more than once"
 msgstr ""
 
-msgid "The amount of threads to use"
-msgstr ""
-
 msgid "The architecture reported by uname in the container"
 msgstr ""
 
@@ -66355,9 +66505,6 @@ msgid "The format to convert from"
 msgstr ""
 
 msgid "The format to convert to"
-msgstr ""
-
-msgid "The format with which to print byte counts"
 msgstr ""
 
 msgid "The full cost-based query optimiser is enabled."
@@ -67911,6 +68058,9 @@ msgstr ""
 msgid "Type of workload to produce"
 msgstr ""
 
+msgid "Types of module to call"
+msgstr ""
+
 msgid "Typeset abstract as topic"
 msgstr ""
 
@@ -68095,6 +68245,9 @@ msgid "Unedit/unlock a set of files"
 msgstr ""
 
 msgid "Unfavourite a status"
+msgstr ""
+
+msgid "Unfold multiline trailer values"
 msgstr ""
 
 msgid "Unfollow an account"
@@ -68577,9 +68730,6 @@ msgstr ""
 msgid "Update modules"
 msgstr ""
 
-msgid "Update ngrok to the latest version"
-msgstr ""
-
 msgid "Update object name stored in a ref safely"
 msgstr ""
 
@@ -68949,6 +69099,9 @@ msgstr ""
 msgid "Upload finished packages"
 msgstr ""
 
+msgid "Upload host"
+msgstr ""
+
 msgid "Upload locally saved terminal session to asciinema.org"
 msgstr ""
 
@@ -68962,6 +69115,9 @@ msgid "Upload release"
 msgstr ""
 
 msgid "Upload stemcell"
+msgstr ""
+
+msgid "Upload to a delayed queue"
 msgstr ""
 
 msgid "Upload to server"
@@ -70455,6 +70611,9 @@ msgstr ""
 msgid "Use openssh if available"
 msgstr ""
 
+msgid "Use options from fstab/mtab even if both device and dir are specified"
+msgstr ""
+
 msgid "Use original SCP protocol instead of SFTP"
 msgstr ""
 
@@ -70471,6 +70630,9 @@ msgid "Use packages from REPO"
 msgstr ""
 
 msgid "Use paired-single floating-point instructions"
+msgstr ""
+
+msgid "Use passive mode for FTP"
 msgstr ""
 
 msgid "Use passive mode for data transfers"
@@ -72300,9 +72462,6 @@ msgstr ""
 msgid "Watch a specific file or directory"
 msgstr ""
 
-msgid "Watch an input file and recompile on changes"
-msgstr ""
-
 msgid "Watch and list new logs"
 msgstr ""
 
@@ -72367,6 +72526,12 @@ msgid "What to do when an email ends with CRLF"
 msgstr ""
 
 msgid "What to do when receiving events while the command is running"
+msgstr ""
+
+msgid "What to do when there is already a trailer with the same key"
+msgstr ""
+
+msgid "What to do when there is no other trailer with the same key"
 msgstr ""
 
 msgid "Whatever to reset the module registry for every test"
@@ -72508,6 +72673,9 @@ msgid "When used with -f, causes Mutt not to start if there are no messages"
 msgstr ""
 
 msgid "When used with -s, --silent, it makes curl show an error message if it fails"
+msgstr ""
+
+msgid "Where new trailers will be added"
 msgstr ""
 
 msgid "Where to install C header files"
@@ -73870,9 +74038,6 @@ msgid "bind for command mode instead of normal mode"
 msgstr ""
 
 msgid "bind key to command"
-msgstr ""
-
-msgid "bind remote address (requires you reserve an address)"
 msgstr ""
 
 msgid "binding for command mode"
@@ -75324,9 +75489,6 @@ msgstr ""
 msgid "enable word mangling rules"
 msgstr ""
 
-msgid "enable/disable http introspection"
-msgstr ""
-
 msgid "enables a keepalive every N seconds"
 msgstr ""
 
@@ -75334,9 +75496,6 @@ msgid "end fields with NUL"
 msgstr ""
 
 msgid "end filenames with NUL, for use with xargs"
-msgstr ""
-
-msgid "enforce basic auth on tunnel endpoint, 'user:password'"
 msgstr ""
 
 msgid "enforce strict mode"
@@ -75436,6 +75595,12 @@ msgid "explain what is being done by atool"
 msgstr ""
 
 msgid "explain why packages or modules are needed"
+msgstr ""
+
+msgid "explicitly define the argument as the mount source"
+msgstr ""
+
+msgid "explicitly define the argument as the mount target"
 msgstr ""
 
 msgid "explicitly set BootOrder XXXX,YYYY,ZZZZ (hex)"
@@ -76023,10 +76188,7 @@ msgstr ""
 msgid "highlight this process and its ancestors"
 msgstr ""
 
-msgid "host tunnel on a custom subdomain"
-msgstr ""
-
-msgid "host tunnel on custom hostname (requires DNS CNAME)"
+msgid "how to combine with options from fstab/mtab"
 msgstr ""
 
 msgid "http-server serving the current directory"
@@ -76716,9 +76878,6 @@ msgstr ""
 msgid "list-dependencies flat, not as tree"
 msgstr ""
 
-msgid "listen for http, https or both: true/false/both"
-msgstr ""
-
 msgid "listen mode, for inbound connects"
 msgstr ""
 
@@ -76815,9 +76974,6 @@ msgstr ""
 msgid "log positions of (de)serialized objects in the snapshot"
 msgstr ""
 
-msgid "log record format: 'term', 'logfmt', 'json'"
-msgstr ""
-
 msgid "log statistical profiling information"
 msgstr ""
 
@@ -76828,9 +76984,6 @@ msgid "log updates using the specified FMT"
 msgstr ""
 
 msgid "log what we're doing to the specified FILE"
-msgstr ""
-
-msgid "logging level"
 msgstr ""
 
 msgid "loglevel of client"
@@ -77218,12 +77371,6 @@ msgid "new package description"
 msgstr ""
 
 msgid "new package name"
-msgstr ""
-
-msgid "ngrok server region [us , eu, au, ap] (default: us)"
-msgstr ""
-
-msgid "ngrok.com authtoken identifying a user"
 msgstr ""
 
 msgid "no cleaning of distfiles."
@@ -77622,15 +77769,6 @@ msgstr ""
 msgid "path to SSH private key file. May be repeated."
 msgstr ""
 
-msgid "path to TLS certificate authority to verify client certs"
-msgstr ""
-
-msgid "path to a TLS certificate for TLS termination"
-msgstr ""
-
-msgid "path to a TLS key for TLS termination"
-msgstr ""
-
 msgid "path to a custom ESLint configuration file"
 msgstr ""
 
@@ -77649,13 +77787,7 @@ msgstr ""
 msgid "path to config file for the test"
 msgstr ""
 
-msgid "path to config files; they are merged if multiple"
-msgstr ""
-
 msgid "path to log file"
-msgstr ""
-
-msgid "path to log file, 'stdout', 'stderr' or 'false'"
 msgstr ""
 
 msgid "path to plan to insert multiple data files that have master-detail relationships"
@@ -78558,7 +78690,7 @@ msgstr ""
 msgid "reset branch name to parent branch name"
 msgstr ""
 
-msgid "reset cache (DNS\t)"
+msgid "reset cache"
 msgstr ""
 
 msgid "reset terminal state"
@@ -78961,9 +79093,6 @@ msgid "set BootNext to XXXX (hex)"
 msgstr ""
 
 msgid "set Git namespace"
-msgstr ""
-
-msgid "set Host header; if 'rewrite' use local address hostname"
 msgstr ""
 
 msgid "set NAME to default values"
@@ -79725,9 +79854,6 @@ msgstr ""
 msgid "start a server in the background"
 msgstr ""
 
-msgid "start all tunnels in the configuration file"
-msgstr ""
-
 msgid "start and print only the URL"
 msgstr ""
 
@@ -79741,9 +79867,6 @@ msgid "start debugger"
 msgstr ""
 
 msgid "start emacs with specified init directory"
-msgstr ""
-
-msgid "start running no tunnels"
 msgstr ""
 
 msgid "start session"
@@ -80161,9 +80284,6 @@ msgid "update a KRL"
 msgstr ""
 
 msgid "update a record"
-msgstr ""
-
-msgid "update channel (stable, beta)"
 msgstr ""
 
 msgid "update client status bar"

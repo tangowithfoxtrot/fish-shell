@@ -1,3 +1,5 @@
+# localization: tier1
+
 # This file does some internal fish setup.
 # It is not recommended to remove or edit it.
 #
@@ -36,8 +38,8 @@ status get-file __fish_build_paths.fish | source
 
 # Compute the directories for vendor configuration.  We want to include
 # all of XDG_DATA_DIRS, as well as the __extra_* dirs defined above.
-set -l xdg_data_dirs
-if set -q XDG_DATA_DIRS
+set -l xdg_data_dirs /usr/local/share/fish /usr/share/fish
+if test -n "$XDG_DATA_DIRS"
     set --path xdg_data_dirs $XDG_DATA_DIRS
     set xdg_data_dirs (string replace -r '([^/])/$' '$1' -- $xdg_data_dirs)/fish
 end
@@ -207,7 +209,9 @@ end
 if status is-interactive
     __fish_migrate
 end
-fish_config theme choose default --no-override
+if status is-interactive || set -qgx __fish_force_load_default_theme
+    fish_config theme choose default --no-override
+end
 
 # As last part of initialization, source the conf directories.
 # Implement precedence (User > Admin > Extra (e.g. vendors) > Fish) by basically doing "basename".

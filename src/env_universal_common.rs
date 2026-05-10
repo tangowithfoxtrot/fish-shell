@@ -1,19 +1,19 @@
-use crate::common::{
-    UnescapeFlags, UnescapeStringStyle, unescape_string, valid_var_name, wcs2zstring,
-};
+use crate::common::valid_var_name;
 use crate::env::{EnvVar, EnvVarFlags, VarTable};
 use crate::flog::{flog, flogf};
 use crate::fs::{PotentialUpdate, lock_and_load, rewrite_via_temporary_file};
 use crate::path::path_get_config;
 use crate::prelude::*;
 use crate::wutil::{FileId, INVALID_FILE_ID, file_id_for_file, file_id_for_path_narrow, wrealpath};
+use fish_common::{UnescapeFlags, UnescapeStringStyle, unescape_string};
 use fish_wcstringutil::{LineIterator, join_strings};
-use fish_widestring::decode_byte_from_char;
+use fish_widestring::{decode_byte_from_char, wcs2zstring};
+use itertools::Itertools as _;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read as _, Write as _};
 use std::mem::MaybeUninit;
 
 /// Callback data, reflecting a change in universal variables.
@@ -88,7 +88,7 @@ impl EnvUniversal {
     }
     // Return flags from the variable with the given name.
     pub fn get_flags(&self, name: &wstr) -> Option<EnvVarFlags> {
-        self.vars.get(name).map(|var| var.get_flags())
+        self.vars.get(name).map(|var| var.flags())
     }
     // Sets a variable.
     pub fn set(&mut self, key: &wstr, var: EnvVar) {
@@ -317,21 +317,15 @@ impl EnvUniversal {
         contents.extend_from_slice(UVARS_VERSION_3_0);
         contents.push(b'\n');
 
-        // Preserve legacy behavior by sorting the values first
-        let mut cloned: Vec<(&wstr, &EnvVar)> =
-            vars.iter().map(|(key, var)| (key.as_ref(), var)).collect();
-        cloned.sort_by(|(lkey, _), (rkey, _)| lkey.cmp(rkey));
+        vars.iter()
+            // Preserve legacy behavior by sorting the values first
+            .sorted_by_key(|(k, _)| *k)
+            .for_each(|(k, v)| {
+                // Append the entry. Note that append_file_entry may fail,
+                // but that only affects one variable; soldier on.
+                append_file_entry(v.flags(), k, &encode_serialized(v.as_list()), &mut contents);
+            });
 
-        for (key, var) in cloned {
-            // Append the entry. Note that append_file_entry may fail, but that only affects one
-            // variable; soldier on.
-            append_file_entry(
-                var.get_flags(),
-                key,
-                &encode_serialized(var.as_list()),
-                &mut contents,
-            );
-        }
         contents
     }
 
@@ -808,15 +802,15 @@ fn skip_spaces(mut s: &wstr) -> &wstr {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        env::{EnvVar, EnvVarFlags, VarTable},
+        env_universal_common::{EnvUniversal, UvarFormat},
+        prelude::*,
+        tests::prelude::*,
+        wutil::{INVALID_FILE_ID, file_id_for_path},
+    };
     use fish_tempfile::TempDir;
-    use fish_widestring::{ENCODE_DIRECT_BASE, char_offset};
-
-    use crate::common::{osstr2wcstring, wcs2osstring};
-    use crate::env::{EnvVar, EnvVarFlags, VarTable};
-    use crate::env_universal_common::{EnvUniversal, UvarFormat};
-    use crate::prelude::*;
-    use crate::tests::prelude::*;
-    use crate::wutil::{INVALID_FILE_ID, file_id_for_path};
+    use fish_widestring::{ENCODE_DIRECT_BASE, char_offset, osstr2wcstring, wcs2osstring};
 
     const UVARS_PER_THREAD: usize = 8;
 
@@ -831,7 +825,7 @@ mod tests {
     }
 
     fn test_universal_helper(x: usize, path: &wstr) {
-        let _cleanup = test_init();
+        test_init();
         let mut uvars = EnvUniversal::new();
         uvars.initialize_at_path(path.to_owned());
 
@@ -854,7 +848,7 @@ mod tests {
 
     #[test]
     fn test_universal() {
-        let _cleanup = test_init();
+        test_init();
         let (_test_dir, test_path) = make_test_uvar_path().unwrap();
 
         let threads = 1;
@@ -894,7 +888,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_universal_output() {
-        let _cleanup = test_init();
+        test_init();
         let flag_export = EnvVarFlags::EXPORT;
         let flag_pathvar = EnvVarFlags::PATHVAR;
 
@@ -951,7 +945,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_universal_parsing() {
-        let _cleanup = test_init();
+        test_init();
         let input = concat!(
             "# This file contains fish universal variable definitions.\n",
             "# VERSION: 3.0\n",
@@ -1003,7 +997,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_universal_parsing_legacy() {
-        let _cleanup = test_init();
+        test_init();
         let input = concat!(
             "# This file contains fish universal variable definitions.\n",
             "SET varA:ValA1\\x1eValA2\n",
@@ -1031,7 +1025,7 @@ mod tests {
 
     #[test]
     fn test_universal_callbacks() {
-        let _cleanup = test_init();
+        test_init();
         let (_test_dir, test_path) = make_test_uvar_path().unwrap();
         let mut uvars1 = EnvUniversal::new();
         let mut uvars2 = EnvUniversal::new();
@@ -1101,7 +1095,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_universal_formats() {
-        let _cleanup = test_init();
+        test_init();
         macro_rules! validate {
             ( $version_line:literal, $expected_format:expr ) => {
                 assert_eq!(
@@ -1122,7 +1116,7 @@ mod tests {
 
     #[test]
     fn test_universal_ok_to_save() {
-        let _cleanup = test_init();
+        test_init();
         // Ensure we don't try to save after reading from a newer fish.
         let (_test_dir, test_path) = make_test_uvar_path().unwrap();
         let contents = b"# VERSION: 99999.99\n";

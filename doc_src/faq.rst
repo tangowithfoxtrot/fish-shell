@@ -91,7 +91,7 @@ The prompt is the output of the ``fish_prompt`` function. Put it in ``~/.config/
     function fish_prompt
         set_color $fish_color_cwd
         echo -n (prompt_pwd)
-        set_color normal
+        set_color --reset
         echo -n ' > '
     end
 
@@ -329,7 +329,7 @@ Sometimes, there is disagreement on the width. There are numerous causes and fix
 - It is possible the character is too new for your system to know - in this case you need to refrain from using it.
 - Fish or your terminal might not know about the character or handle it wrong - in this case fish or your terminal needs to be fixed, or you need to update to a fixed version.
 - The character has an "ambiguous" width and fish thinks that means a width of X while your terminal thinks it's Y. In this case you either need to change your terminal's configuration or set $fish_ambiguous_width to the correct value.
-- The character is an emoji and the host system only supports Unicode 8, while you are running the terminal on a system that uses Unicode >= 9. In this case set $fish_emoji_width to 2.
+- The character is an emoji and your system only supports Unicode 8. In this case set $fish_emoji_width to 1.
 
 This also means that a few things are unsupportable:
 

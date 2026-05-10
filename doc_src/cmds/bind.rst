@@ -102,7 +102,7 @@ The following options are available:
     **--preset** should only be used in full binding sets (like when working on ``fish_vi_key_bindings``).
 
 **-s** or **--silent**
-    Silences some of the error messages, including for unknown key names and unbound sequences.
+    Silences error message for unbound sequences.
 
 **--color** *WHEN*
     Controls when to use syntax highlighting colors when listing bindings.
@@ -400,6 +400,13 @@ The following special input functions are available:
 
 ``self-insert-notfirst``
     inserts the matching sequence into the command line, unless the cursor is at the beginning
+
+``get-key``
+    sets :envvar:`fish_key` to the key that was pressed to trigger this binding. Example use::
+
+        for i in (seq 0 9)
+            bind $i get-key 'commandline -i "#$fish_key"' 'set -eg fish_key'
+        end
 
 ``suppress-autosuggestion``
     remove the current autosuggestion. Returns true if there was a suggestion to remove.

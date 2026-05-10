@@ -235,7 +235,7 @@ It is possible to pipe a different output file descriptor by prepending its FD n
 
 will attempt to build ``fish``, and any errors will be shown using the ``less`` pager. [#]_
 
-As a convenience, the pipe ``&|`` redirects both stdout and stderr to the same process. This is different from bash, which uses ``|&``.
+As a convenience, the pipe ``&|`` (as well as the ``|&`` alias which is also supported by Bash) both redirect stdout and stderr to the same process.
 
 .. [#] A "pager" here is a program that takes output and "paginates" it. ``less`` doesn't just do pages, it allows arbitrary scrolling (even back!).
 
@@ -1573,7 +1573,7 @@ You can change the settings of fish by changing the values of certain variables.
 
 .. envvar:: fish_emoji_width
 
-   controls whether fish assumes emoji render as 2 cells or 1 cell wide. This is necessary because the correct value changed from 1 to 2 in Unicode 9, and some terminals may not be aware. Set this if you see graphical glitching related to emoji (or other "special" characters). It should usually be auto-detected.
+   controls whether fish assumes emoji render as 2 cells or 1 cell wide. This is necessary because the correct value changed from 1 to 2 in Unicode 9, and some terminals may not be aware. Set this if you see graphical glitching related to emoji (or other "special" characters). It defaults to 2.
 
 .. envvar:: fish_autosuggestion_enabled
 
@@ -1645,6 +1645,18 @@ You can change the settings of fish by changing the values of certain variables.
 .. envvar:: umask
 
    the current file creation mask. The preferred way to change the umask variable is through the :doc:`umask <cmds/umask>` function. An attempt to set umask to an invalid value will always fail.
+
+.. envvar:: SHELL_PROMPT_PREFIX
+
+   if set, this string is automatically prepended to the left prompt. This is a standard environment variable that may be set by tools like systemd's ``run0`` to indicate special shell sessions.
+
+.. envvar:: SHELL_PROMPT_SUFFIX
+
+   if set, this string is automatically appended to the left prompt. This is a standard environment variable that may be set by tools like systemd's ``run0`` to indicate special shell sessions.
+
+.. envvar:: SHELL_WELCOME
+
+   if set, this string is displayed when an interactive shell starts, after the greeting. This is a standard environment variable that may be set by tools like systemd's ``run0`` to display session information.
 
 .. envvar:: BROWSER
 
@@ -2043,8 +2055,8 @@ Here is what they mean:
 - ``ampersand-nobg-in-token`` was introduced in fish 3.4 (and made the default in 3.5). It makes it so a ``&`` is no longer interpreted as the backgrounding operator in the middle of a token, so dealing with URLs becomes easier. Either put spaces or a semicolon after the ``&``. This is recommended formatting anyway, and ``fish_indent`` will have done it for you already.
 - ``remove-percent-self`` turns off the special ``%self`` expansion. It was introduced in 4.0. To get fish's pid, you can use the :envvar:`fish_pid` variable.
 - ``test-require-arg`` removes :doc:`builtin test <cmds/test>`'s one-argument form (``test "string"``. It was introduced in 4.0. To test if a string is non-empty, use ``test -n "string"``. If disabled, any call to ``test`` that would change sends a :ref:`debug message <debugging-fish>` of category "deprecated-test", so starting fish with ``fish --debug=deprecated-test`` can be used to find offending calls.
-- ``mark-prompt`` makes fish report to the terminal the beginning and and of both shell prompts and command output.
-- ``ignore-terminfo`` disables lookup of $TERM in the terminfo database. Use ``no-ignore-terminfo`` to turn it back on.
+- ``mark-prompt`` makes fish report to the terminal the beginning and end of both shell prompts and command output.
+- ``ignore-terminfo`` was introduced in fish 4.1 and cannot be turned off since fish 4.5. It can still be tested for compatibility, but a ``no-ignore-terminfo`` value will be ignored. The flag disabled lookup of $TERM in the terminfo database.
 - ``query-term`` allows fish to query the terminal by writing escape sequences and reading the terminal's response.
   This enables features such as :ref:`scrolling <term-compat-cursor-position-report>`.
   If you use an incompatible terminal, you can -- for the time being -- work around it by running (once) ``set -Ua fish_features no-query-term``.

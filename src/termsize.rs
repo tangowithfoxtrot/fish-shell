@@ -1,10 +1,10 @@
 // Support for exposing the terminal size.
-use crate::common::assert_sync;
 use crate::env::{EnvMode, EnvVar, Environment};
 use crate::flog::flog;
 use crate::parser::{Parser, ParserEnvSetMode};
 use crate::prelude::*;
 use crate::wutil::fish_wcstoi;
+use fish_common::assert_sync;
 use std::mem::MaybeUninit;
 use std::num::NonZeroU16;
 use std::sync::Mutex;
@@ -256,13 +256,13 @@ pub fn termsize_update(parser: &Parser) -> Termsize {
 }
 
 /// May be called form a signal handler (WINCH).
-pub fn safe_termsize_invalidate_tty() {
+pub fn signal_safe_termsize_invalidate_tty() {
     TTY_TERMSIZE_GEN_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::env::{EnvMode, EnvSetMode, Environment};
+    use crate::env::{EnvMode, EnvSetMode, Environment as _};
     use crate::termsize::*;
     use crate::tests::prelude::*;
     use std::sync::Mutex;
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_termsize() {
-        let _cleanup = test_init();
+        test_init();
         let env_global = EnvSetMode::new(EnvMode::GLOBAL, false);
         let parser = TestParser::new();
         let vars = parser.vars();
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(ts.last(), Termsize::defaults());
 
         // Ok let's tell it. But it still doesn't update right away.
-        let handle_winch = safe_termsize_invalidate_tty;
+        let handle_winch = signal_safe_termsize_invalidate_tty;
         handle_winch();
         assert_eq!(ts.last(), Termsize::defaults());
 

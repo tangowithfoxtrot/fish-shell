@@ -78,6 +78,7 @@ echo no default universal variables
 # Labeled color variables may be updated by fish.
 {
     $fish -c '
+        fish_config theme choose default
         set -g fish_color_autosuggestion red
         set -g fish_color_command green --theme=default
         __fish_migrate
@@ -89,7 +90,7 @@ echo no default universal variables
         # CHECK: fish_color_autosuggestion red
         # CHECK: fish_color_command green --theme=default
         # CHECK: fish_color_autosuggestion red
-        # CHECK: fish_color_command normal --theme=default
+        # CHECK: fish_color_command --reset --theme=default
     '
 }
 

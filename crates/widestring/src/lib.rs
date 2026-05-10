@@ -6,13 +6,34 @@
 
 pub mod word_char;
 
-use std::{iter, slice};
+use std::{
+    ffi::{CStr, CString, OsStr, OsString},
+    iter,
+    os::unix::ffi::{OsStrExt as _, OsStringExt as _},
+    slice,
+};
 pub use widestring::{Utf32Str as wstr, Utf32String as WString, utf32str as L, utfstr::CharsUtf32};
 
 pub mod prelude {
     pub use crate::{IntoCharIter, L, ToWString, WExt, WString, wstr};
 }
 
+// Highest legal ASCII value.
+pub const ASCII_MAX: char = 127 as char;
+
+// Highest legal 16-bit Unicode value.
+pub const UCS2_MAX: char = '\u{FFFF}';
+
+// Highest legal byte value.
+pub const BYTE_MAX: char = 0xFF as char;
+
+// Unicode BOM value.
+pub const UTF8_BOM_WCHAR: char = '\u{FEFF}';
+
+/// The character to use where the text has been truncated.
+pub const ELLIPSIS_CHAR: char = '\u{2026}'; // ('…')
+
+pub const SPECIAL_KEY_ENCODE_BASE: char = '\u{F500}';
 // These are in the Unicode private-use range. We really shouldn't use this
 // range but have little choice in the matter given how our lexer/parser works.
 // We can't use non-characters for these two ranges because there are only 66 of
@@ -25,8 +46,78 @@ pub mod prelude {
 // Note: We don't use the highest 8 bit range (0xF800 - 0xF8FF) because we know
 // of at least one use of a codepoint in that range: the Apple symbol (0xF8FF)
 // on Mac OS X. See http://www.unicode.org/faq/private_use.html.
-pub const ENCODE_DIRECT_BASE: char = '\u{F600}';
+pub const ENCODE_DIRECT_BASE: char = char_offset(SPECIAL_KEY_ENCODE_BASE, 256);
 pub const ENCODE_DIRECT_END: char = char_offset(ENCODE_DIRECT_BASE, 256);
+
+// Use Unicode "non-characters" for internal characters as much as we can. This
+// gives us 32 "characters" for internal use that we can guarantee should not
+// appear in our input stream. See http://www.unicode.org/faq/private_use.html.
+pub const RESERVED_CHAR_BASE: char = '\u{FDD0}';
+pub const RESERVED_CHAR_END: char = '\u{FDF0}';
+// Split the available non-character values into two ranges to ensure there are
+// no conflicts among the places we use these special characters.
+pub const EXPAND_RESERVED_BASE: char = RESERVED_CHAR_BASE;
+pub const EXPAND_RESERVED_END: char = char_offset(EXPAND_RESERVED_BASE, 16);
+pub const WILDCARD_RESERVED_BASE: char = EXPAND_RESERVED_END;
+pub const WILDCARD_RESERVED_END: char = char_offset(WILDCARD_RESERVED_BASE, 16);
+// Make sure the ranges defined above don't exceed the range for non-characters.
+// This is to make sure we didn't do something stupid in subdividing the
+// Unicode range for our needs.
+const _: () = assert!(WILDCARD_RESERVED_END <= RESERVED_CHAR_END);
+
+/// Character representing any character except '/' (slash).
+pub const ANY_CHAR: char = char_offset(WILDCARD_RESERVED_BASE, 0);
+/// Character representing any character string not containing '/' (slash).
+pub const ANY_STRING: char = char_offset(WILDCARD_RESERVED_BASE, 1);
+/// Character representing any character string.
+pub const ANY_STRING_RECURSIVE: char = char_offset(WILDCARD_RESERVED_BASE, 2);
+/// This is a special pseudo-char that is not used other than to mark the
+/// end of the special characters so we can sanity check the enum range.
+#[allow(dead_code)]
+pub const ANY_SENTINEL: char = char_offset(WILDCARD_RESERVED_BASE, 3);
+
+/// Character representing a home directory.
+pub const HOME_DIRECTORY: char = char_offset(EXPAND_RESERVED_BASE, 0);
+/// Character representing process expansion for %self.
+pub const PROCESS_EXPAND_SELF: char = char_offset(EXPAND_RESERVED_BASE, 1);
+/// Character representing variable expansion.
+pub const VARIABLE_EXPAND: char = char_offset(EXPAND_RESERVED_BASE, 2);
+/// Character representing variable expansion into a single element.
+pub const VARIABLE_EXPAND_SINGLE: char = char_offset(EXPAND_RESERVED_BASE, 3);
+/// Character representing the start of a bracket expansion.
+pub const BRACE_BEGIN: char = char_offset(EXPAND_RESERVED_BASE, 4);
+/// Character representing the end of a bracket expansion.
+pub const BRACE_END: char = char_offset(EXPAND_RESERVED_BASE, 5);
+/// Character representing separation between two bracket elements.
+pub const BRACE_SEP: char = char_offset(EXPAND_RESERVED_BASE, 6);
+/// Character that takes the place of any whitespace within non-quoted text in braces
+pub const BRACE_SPACE: char = char_offset(EXPAND_RESERVED_BASE, 7);
+/// Separate subtokens in a token with this character.
+pub const INTERNAL_SEPARATOR: char = char_offset(EXPAND_RESERVED_BASE, 8);
+/// Character representing an empty variable expansion. Only used transitively while expanding
+/// variables.
+pub const VARIABLE_EXPAND_EMPTY: char = char_offset(EXPAND_RESERVED_BASE, 9);
+
+const _: () = assert!(
+    EXPAND_RESERVED_END as u32 > VARIABLE_EXPAND_EMPTY as u32,
+    "Characters used in expansions must stay within private use area"
+);
+
+/// The string represented by PROCESS_EXPAND_SELF
+pub const PROCESS_EXPAND_SELF_STR: &wstr = L!("%self");
+
+/// Return true if the character is in a range reserved for fish's private use.
+///
+/// NOTE: This is used when tokenizing the input. It is also used when reading input, before
+/// tokenization, to replace such chars with REPLACEMENT_WCHAR if they're not part of a quoted
+/// string. We don't want external input to be able to feed reserved characters into our
+/// lexer/parser or code evaluator.
+//
+// TODO: Actually implement the replacement as documented above.
+pub fn fish_reserved_codepoint(c: char) -> bool {
+    (c >= RESERVED_CHAR_BASE && c < RESERVED_CHAR_END)
+        || (c >= SPECIAL_KEY_ENCODE_BASE && c < ENCODE_DIRECT_END)
+}
 
 /// Encode a literal byte in a UTF-32 character. This is required for e.g. the echo builtin, whose
 /// escape sequences can be used to construct raw byte sequences which are then interpreted as e.g.
@@ -38,6 +129,86 @@ pub const ENCODE_DIRECT_END: char = char_offset(ENCODE_DIRECT_BASE, 256);
 pub fn encode_byte_to_char(byte: u8) -> char {
     char::from_u32(u32::from(ENCODE_DIRECT_BASE) + u32::from(byte))
         .expect("private-use codepoint should be valid char")
+}
+
+/// Returns a newly allocated multibyte character string equivalent of the specified wide character
+/// string.
+///
+/// This function decodes illegal character sequences in a reversible way using the private use
+/// area.
+pub fn wcs2bytes(input: impl IntoCharIter) -> Vec<u8> {
+    let mut result = vec![];
+    wcs2bytes_appending(&mut result, input);
+    result
+}
+
+pub fn wcs2osstring(input: &wstr) -> OsString {
+    if input.is_empty() {
+        return OsString::new();
+    }
+
+    let mut result = vec![];
+    wcs2bytes_appending(&mut result, input);
+    OsString::from_vec(result)
+}
+
+/// Same as [`wcs2bytes`]. Meant to be used when we need a zero-terminated string to feed legacy APIs.
+/// Note: if `input` contains any interior NUL bytes, the result will be truncated at the first!
+pub fn wcs2zstring(input: &wstr) -> CString {
+    if input.is_empty() {
+        return CString::default();
+    }
+
+    let mut vec = Vec::with_capacity(input.len() + 1);
+    str2bytes_callback(input, |buff| {
+        vec.extend_from_slice(buff);
+        true
+    });
+    vec.push(b'\0');
+
+    match CString::from_vec_with_nul(vec) {
+        Ok(cstr) => cstr,
+        Err(err) => {
+            // `input` contained a NUL in the middle; we can retrieve `vec`, though
+            let mut vec = err.into_bytes();
+            let pos = vec.iter().position(|c| *c == b'\0').unwrap();
+            vec.truncate(pos + 1);
+            // Safety: We truncated after the first NUL
+            unsafe { CString::from_vec_with_nul_unchecked(vec) }
+        }
+    }
+}
+
+/// Like [`wcs2bytes`], but appends to `output` instead of returning a new string.
+pub fn wcs2bytes_appending(output: &mut Vec<u8>, input: impl IntoCharIter) {
+    str2bytes_callback(input, |buff| {
+        output.extend_from_slice(buff);
+        true
+    });
+}
+
+/// Implementation of wcs2bytes that accepts a callback.
+/// The first argument can be either a `&str` or `&wstr`.
+/// This invokes `func` with byte slices containing the UTF-8 encoding of the characters in the
+/// input, doing one invocation per character.
+/// If `func` returns false, it stops; otherwise it continues.
+/// Return false if the callback returned false, otherwise true.
+pub fn str2bytes_callback(input: impl IntoCharIter, mut func: impl FnMut(&[u8]) -> bool) -> bool {
+    // A `char` represents an Unicode scalar value, which takes up at most 4 bytes when encoded in UTF-8.
+    let mut converted = [0_u8; 4];
+
+    for c in input.chars() {
+        let bytes = if let Some(byte) = decode_byte_from_char(c) {
+            converted[0] = byte;
+            &converted[..=0]
+        } else {
+            c.encode_utf8(&mut converted).as_bytes()
+        };
+        if !func(bytes) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Decode a literal byte from a UTF-32 character.
@@ -53,11 +224,359 @@ pub fn decode_byte_from_char(c: char) -> Option<u8> {
     }
 }
 
+/// A trait to make it more convenient to pass ascii/Unicode strings to functions that can take
+/// non-Unicode values. The result is nul-terminated and can be passed to OS functions.
+///
+/// This is only implemented for owned types where an owned instance will skip allocations (e.g.
+/// `CString` can return `self`) but not implemented for owned instances where a new allocation is
+/// always required (e.g. implemented for `&wstr` but not `WideString`) because you might as well be
+/// left with the original item if we're going to allocate from scratch in all cases.
+pub trait ToCString {
+    /// Correctly convert to a nul-terminated [`CString`] that can be passed to OS functions.
+    fn to_cstring(self) -> CString;
+}
+
+impl ToCString for CString {
+    fn to_cstring(self) -> CString {
+        self
+    }
+}
+
+impl ToCString for &CStr {
+    fn to_cstring(self) -> CString {
+        self.to_owned()
+    }
+}
+
+/// Safely converts from `&wstr` to a `CString` to a nul-terminated `CString` that can be passed to
+/// OS functions, taking into account non-Unicode values that have been shifted into the private-use
+/// range by using [`wcs2zstring()`].
+impl ToCString for &wstr {
+    /// The wide string may contain non-Unicode bytes mapped to the private-use Unicode range, so we
+    /// have to use [`wcs2zstring()`](self::wcs2zstring) to convert it correctly.
+    fn to_cstring(self) -> CString {
+        self::wcs2zstring(self)
+    }
+}
+
+/// Safely converts from `&WString` to a nul-terminated `CString` that can be passed to OS
+/// functions, taking into account non-Unicode values that have been shifted into the private-use
+/// range by using [`wcs2zstring()`].
+impl ToCString for &WString {
+    fn to_cstring(self) -> CString {
+        self.as_utfstr().to_cstring()
+    }
+}
+
+/// Convert a (probably ascii) string to CString that can be passed to OS functions.
+impl ToCString for Vec<u8> {
+    fn to_cstring(mut self) -> CString {
+        self.push(b'\0');
+        CString::from_vec_with_nul(self).unwrap()
+    }
+}
+
+/// Convert a (probably ascii) string to nul-terminated CString that can be passed to OS functions.
+impl ToCString for &[u8] {
+    fn to_cstring(self) -> CString {
+        CString::new(self).unwrap()
+    }
+}
+
+mod decoder {
+    use crate::{ENCODE_DIRECT_BASE, ENCODE_DIRECT_END, char_offset, wstr};
+    use buffer::Buffer;
+    use std::{char::REPLACEMENT_CHARACTER, ops::Range};
+    use widestring::utfstr::CharsUtf32;
+
+    mod buffer {
+        // The size required for a PUA-encoded character from our special PUA range - 1,
+        // since that is the maximum number characters our look-ahead needs to check.
+        const MAX_SIZE: usize = 2;
+        pub(super) struct Buffer {
+            buffer: [char; MAX_SIZE],
+            length: usize,
+        }
+
+        impl Buffer {
+            pub(super) fn empty() -> Self {
+                Self {
+                    buffer: ['\0'; MAX_SIZE],
+                    length: 0,
+                }
+            }
+
+            pub(super) fn push(&mut self, c: char) {
+                self.buffer[self.length] = c;
+                self.length += 1;
+            }
+
+            pub(super) fn pop(&mut self) -> Option<char> {
+                if self.length == 0 {
+                    return None;
+                }
+                self.length -= 1;
+                Some(self.buffer[self.length])
+            }
+
+            pub(super) fn pop_front(&mut self) -> Option<char> {
+                if self.length == 0 {
+                    return None;
+                }
+                self.buffer.rotate_left(1);
+                self.length -= 1;
+                Some(self.buffer[MAX_SIZE - 1])
+            }
+        }
+    }
+
+    const PUA_ENCODE_RANGE: Range<char> = ENCODE_DIRECT_BASE..ENCODE_DIRECT_END;
+    const ENCODED_PUA_CHAR_FIRST_CHAR: char = char_offset(ENCODE_DIRECT_BASE, 0xef);
+    // The second UTF-8 byte of a character in our special PUA range is in the range
+    // 0x98..0x9c.
+    const ENCODED_PUA_CHAR_SECOND_CHAR_RANGE: Range<char> =
+        char_offset(ENCODE_DIRECT_BASE, 0x98)..char_offset(ENCODE_DIRECT_BASE, 0x9c);
+
+    /// This serves as the data container for building a double-ended iterator which decodes our
+    /// PUA-encoded chars into a char iterator where each encoded non-UTF-8 byte is replaced by the
+    /// replacement character, and each encoded PUA codepoint is turned back into a single char
+    /// whose value is the original PUA codepoint.
+    ///
+    /// The latter part makes the decoding logic somewhat complicated, because encoded PUA chars
+    /// take up 3 chars in our encoding. Therefore, in some cases, we need to take more than 1 char
+    /// from the `encoded_chars` iterator before we know whether to decode 3 chars together into a
+    /// single char, or whether the chars should be replaced by the replacement char individually.
+    /// In cases where we took more than 1 char and then notice that individual replacement is
+    /// warranted, we return a replacement char for the first char we took from the iterator, and
+    /// cache the 1 or 2 other chars we read in `buffer_front` or `buffer_back`, depending on the
+    /// reading direction. Buffers store elements in such an order that getting the next character
+    /// requires `pop` when using the buffer associated with the current reading direction, and
+    /// `pop_front` when using the other buffer. This is done to optimize the common case of
+    /// iterating in a single direction.
+    ///
+    /// The buffers have to be considered before taking more chars from `encoded_chars`.
+    /// If the iterator is only read in one direction, the buffer for the other direction will not
+    /// be used. But because it's possible that the iterator is read from both ends, it can happen
+    /// that when `encoded_chars` runs out, the buffer for the opposite reading direction is
+    /// non-empty. In the [`Self::next`] and [`Self::next_back`] implementations, this logic is
+    /// encapsulated into closures for getting the next char from the appropriate source.
+    /// At most 2 chars will ever be stored in a buffer, so they are implemented using a fixed-size
+    /// array, requiring no heap allocations.
+    ///
+    /// Note that in most cases, we can avoid using the buffers, and simply forward the char
+    /// obtained from `encoded_chars`. Only chars in [`PUA_ENCODE_RANGE`] can possibly encode PUA
+    /// chars, so if we read any other char, we know that it's not part of such an encoding and can
+    /// return it directly. If we read in the forward direction, we can also exploit knowledge about
+    /// the possible values of our PUA encoding. Specifically, the first char in such an encoding
+    /// will always be [`ENCODED_PUA_CHAR_FIRST_CHAR`], and the second char will be in the range
+    /// [`ENCODED_PUA_CHAR_SECOND_CHAR_RANGE`].
+    pub(super) struct Decoder<'a> {
+        encoded_chars: CharsUtf32<'a>,
+        buffer_front: Buffer,
+        buffer_back: Buffer,
+    }
+
+    impl<'a> Decoder<'a> {
+        pub(super) fn new(encoded_str: &'a wstr) -> Self {
+            Self {
+                encoded_chars: encoded_str.chars(),
+                buffer_front: Buffer::empty(),
+                buffer_back: Buffer::empty(),
+            }
+        }
+    }
+
+    fn try_pua_decoding(encoding: &[char; 3]) -> Option<char> {
+        let mut bytes = [0u8; 3];
+        for (index, &c) in encoding.iter().enumerate() {
+            bytes[index] = super::decode_byte_from_char(c)?;
+        }
+        let first_decoded_char =
+            std::str::from_utf8(&bytes).ok()?.chars().next().expect(
+                "Non-empty byte slice which is valid UTF-8 must result in at least one char.",
+            );
+        // For strings whose width we compute, we only expect invalid UTF-8 and codepoints from the
+        // PUA encoding range to be PUA encoded.
+        // If we reach this point, the encoded bytes are valid UTF-8, so the only remaining
+        // expected case are codepoints from the PUA encoding range.
+        // These all take 3 bytes to represent in UTF-8, so if we check that the first parsed
+        // codepoint is in the expected range, we know that exactly 3 bytes were consumed for
+        // parsing this codepoint.
+        assert!(PUA_ENCODE_RANGE.contains(&first_decoded_char));
+        Some(first_decoded_char)
+    }
+
+    fn replace_if_pua_encoded(c: char) -> char {
+        if PUA_ENCODE_RANGE.contains(&c) {
+            REPLACEMENT_CHARACTER
+        } else {
+            c
+        }
+    }
+
+    impl<'a> Iterator for Decoder<'a> {
+        type Item = char;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let mut get_next_char = || {
+                self.buffer_front
+                    .pop()
+                    .or_else(|| self.encoded_chars.next())
+                    .or_else(|| self.buffer_back.pop_front())
+            };
+            let c_0 = get_next_char()?;
+            if c_0 != ENCODED_PUA_CHAR_FIRST_CHAR {
+                return Some(replace_if_pua_encoded(c_0));
+            }
+            if let Some(c_1) = get_next_char() {
+                if ENCODED_PUA_CHAR_SECOND_CHAR_RANGE.contains(&c_1) {
+                    if let Some(c_2) = get_next_char() {
+                        if let Some(decoded_pua_char) = try_pua_decoding(&[c_0, c_1, c_2]) {
+                            return Some(decoded_pua_char);
+                        }
+                        self.buffer_front.push(c_2);
+                    }
+                }
+                self.buffer_front.push(c_1);
+            }
+            // If decoding 3 consecutive PUA chars into the encoded PUA char fails, `c_0` should be
+            // returned. `c_0` is `ENCODED_PUA_CHAR_FIRST_CHAR` if we reach this point, so return
+            // the `REPLACEMENT_CHARACTER` in these cases.
+            Some(REPLACEMENT_CHARACTER)
+        }
+    }
+
+    impl<'a> DoubleEndedIterator for Decoder<'a> {
+        fn next_back(&mut self) -> Option<Self::Item> {
+            let mut get_next_char = || {
+                self.buffer_back
+                    .pop()
+                    .or_else(|| self.encoded_chars.next_back())
+                    .or_else(|| self.buffer_front.pop_front())
+            };
+            let c_2 = get_next_char()?;
+            if !PUA_ENCODE_RANGE.contains(&c_2) {
+                return Some(c_2);
+            }
+            if let Some(c_1) = get_next_char() {
+                if PUA_ENCODE_RANGE.contains(&c_1) {
+                    if let Some(c_0) = get_next_char() {
+                        if let Some(decoded_pua_char) = try_pua_decoding(&[c_0, c_1, c_2]) {
+                            return Some(decoded_pua_char);
+                        }
+                        self.buffer_back.push(c_0);
+                    }
+                    self.buffer_back.push(c_1);
+                }
+            }
+            // If decoding 3 consecutive PUA chars into the encoded PUA char fails, `c_2` should be
+            // returned. `c_2` is in `PUA_ENCODE_RANGE` if we reach this point, so return the
+            // `REPLACEMENT_CHARACTER` in these cases.
+            Some(REPLACEMENT_CHARACTER)
+        }
+    }
+}
+
+/// Only exists for tests. Exported because the encoding functionality is not available in this
+/// crate. Do not use for non-testing purposes.
+pub fn decode_with_replacement(encoded_str: &wstr) -> impl DoubleEndedIterator<Item = char> {
+    decoder::Decoder::new(encoded_str)
+}
+
+/// Takes a PUA-encoded string, decodes it by restoring encoded PUA codepoints and replacing encoded
+/// non-UTF-8 bytes by the replacement character U+FFFD.
+/// The result is passed to the [`unicode_width`] crate, which will compute its width, which will be
+/// the return value of this function.
+pub fn decoded_width(encoded_str: &wstr) -> usize {
+    // TODO: Avoid constructing String by using `unicode_width::char_iter_width` once that is
+    // available in a released version of the crate (it's already on the crate's master branch).
+    use unicode_width::UnicodeWidthStr as _;
+    decoder::Decoder::new(encoded_str)
+        .collect::<String>()
+        .width()
+}
+
 pub const fn char_offset(base: char, offset: u32) -> char {
     match char::from_u32(base as u32 + offset) {
         Some(c) => c,
         None => panic!("not a valid char"),
     }
+}
+
+/// Encodes the bytes in `input` into a [`WString`], encoding non-UTF-8 bytes into private-use-area
+/// code-points. Bytes which would be parsed into our reserved PUA range are encoded individually,
+/// to allow for correct round-tripping.
+pub fn bytes2wcstring(mut input: &[u8]) -> WString {
+    if input.is_empty() {
+        return WString::new();
+    }
+
+    let mut result = WString::with_capacity(input.len());
+
+    fn append_escaped_str(output: &mut WString, input: &str) {
+        for (i, c) in input.char_indices() {
+            if fish_reserved_codepoint(c) {
+                for byte in &input.as_bytes()[i..i + c.len_utf8()] {
+                    output.push(encode_byte_to_char(*byte));
+                }
+            } else {
+                output.push(c);
+            }
+        }
+    }
+
+    while !input.is_empty() {
+        match std::str::from_utf8(input) {
+            Ok(parsed_str) => {
+                append_escaped_str(&mut result, parsed_str);
+                // The entire remaining input could be parsed, so we are done.
+                break;
+            }
+            Err(e) => {
+                let (valid, after_valid) = input.split_at(e.valid_up_to());
+                // SAFETY: The previous `str::from_utf8` call established that the prefix `valid`
+                // is valid UTF-8. This prefix may be empty.
+                let parsed_str = unsafe { std::str::from_utf8_unchecked(valid) };
+                append_escaped_str(&mut result, parsed_str);
+                // The length of the prefix of `after_valid` which is invalid UTF-8.
+                // The remaining bytes of `input` (if any) will be parsed in subsequent iterations
+                // of the loop, starting from the first byte that starts a valid UTF-8-encoded codepoint.
+                // `error_len` can return `None`, if it sees a byte sequence that could be the
+                // prefix of a valid code-point encoding at the end of the byte slice.
+                // This is useful when the input is chunked, but we don't do that, so in this case
+                // we use our custom encoding for all remaining bytes (at most 3).
+                let error_len = e.error_len().unwrap_or(after_valid.len());
+                for byte in &after_valid[..error_len] {
+                    result.push(encode_byte_to_char(*byte));
+                }
+                input = &after_valid[error_len..];
+            }
+        }
+    }
+    result
+}
+
+/// Use this rather than [`WString::from_str`] when the input could contain PUA bytes we use to
+/// encode non-UTF-8 bytes. Otherwise, when decoding the resulting [`WString`], the PUA bytes in
+/// the input would be converted to non-UTF-8 bytes.
+pub fn str2wcstring<S: AsRef<str>>(input: S) -> WString {
+    bytes2wcstring(input.as_ref().as_bytes())
+}
+
+pub fn cstr2wcstring<C: AsRef<CStr>>(input: C) -> WString {
+    bytes2wcstring(input.as_ref().to_bytes())
+}
+
+pub fn osstr2wcstring<O: AsRef<OsStr>>(input: O) -> WString {
+    bytes2wcstring(input.as_ref().as_bytes())
+}
+
+/// # SAFETY
+///
+/// `input` must point to a valid NUL-terminated string.
+pub unsafe fn charptr2wcstring(input: *const libc::c_char) -> WString {
+    let input: &[u8] = unsafe { CStr::from_ptr(input).to_bytes() };
+    bytes2wcstring(input)
 }
 
 /// Finds `needle` in a `haystack` and returns the index of the first matching element, if any.

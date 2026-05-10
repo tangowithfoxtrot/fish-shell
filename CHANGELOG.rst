@@ -1,6 +1,114 @@
 fish ?.?.? (released ???)
 =========================
 
+fish 4.7.1 (released May 08, 2026)
+==================================
+
+This release fixes a regression in 4.7.0 that caused the web config (``fish_config``) to fail to start (:issue:`12717`).
+
+fish 4.7.0 (released May 05, 2026)
+==================================
+
+Deprecations and removed features
+---------------------------------
+- The default theme (i.e. the ``fish_color_*`` variables) is no longer set in non-interactive shells.
+
+Interactive improvements
+------------------------
+- :doc:`prompt_pwd <cmds/prompt_pwd>` now strips control characters.
+- Repaint events (as triggered by changes to color variables or by event handlers running ``commandline -f repaint``) no longer reset the completion pager and other transient UI states (:issue:`12683`).
+- :envvar:`fish_color_valid_path` now respects background and underline colors (:issue:`12622`).
+- :doc:`funced <cmds/funced>` will no longer lose work if there are parse errors multiple times without new changes to the file.
+- Fixed a case where directory completions were sorted in a surprising order (:issue:`12695`).
+- When at the command token, the :kbd:`alt-o` binding will now open read-only files too (:issue:`12671`).
+- Private mode in-memory history (``set fish_history``) is no longer shared with :doc:`builtin read <cmds/read>` (:issue:`12662`).
+
+Other improvements
+------------------
+- History is no longer corrupted with NUL bytes when fish receives SIGTERM or SIGHUP (:issue:`10300`).
+- :doc:`fish_update_completions <cmds/fish_update_completions>` now handles groff ``\X'...'`` device control escapes, fixing completion generation for man pages produced by help2man 1.50 and later (such as coreutils 9.10).
+- Removing history entries via the :doc:`web-based config <cmds/fish_config>` is more intuitive.
+- If :envvar:`XDG_DATA_DIRS` is empty, the default value is assumed, which means that fish will now also use configuration from paths like ``$PREFIX/share/fish/vendor_completions.d`` (:issue:`11349`).
+- Some internal file descriptors were moved to number 10 or higher, to reduce risk of clashes with those used by the user in scripts.
+- The wording of error messages has been made consistent, especially for builtin subcommands (:issue:`12556`).
+
+For distributors and developers
+-------------------------------
+- When the default global config directory (``$PREFIX/etc/fish``) exists but has been overridden via ``-DCMAKE_INSTALL_SYSCONFDIR``, fish will now respect that override (:issue:`10748`).
+- ``build_tools/update_translations.fish`` has been replaced by ``cargo xtask gettext {check,new,update}`` (:issue:`12676`).
+- ``cargo xtask shellcheck`` to lint shell-scripts.
+
+Regression fixes:
+-----------------
+- (from 4.6) Vi mode ``dl`` (:issue:`12461`).
+- (from 4.6) Backspace after newline (:issue:`12583`).
+- (from 4.3.3) Long options were spuriously completed after typing short options (85e76ba3561).
+- (from 3.2) ``nosuchcommand || echo hello`` executes the right hand side again (:issue:`12654`).
+
+fish 4.6.0 (released March 28, 2026)
+====================================
+
+Notable improvements and fixes
+------------------------------
+- New Spanish translations (:issue:`12489`).
+- New Japanese translations (:issue:`12499`).
+
+Deprecations and removed features
+---------------------------------
+- The default width for emoji is switched from 1 to 2, improving the experience for users connecting to old systems from modern desktops. Users of old desktops who notice that lines containing emoji are misaligned can set ``$fish_emoji_width`` back to 1 (:issue:`12562`).
+
+Interactive improvements
+------------------------
+- The tab completion pager now left-justifies the description of each column (:issue:`12546`).
+- fish now supports the ``SHELL_PROMPT_PREFIX``, ``SHELL_PROMPT_SUFFIX``, and ``SHELL_WELCOME`` environment variables. The prefix and suffix are automatically prepended and appended to the left prompt, and the welcome message is displayed on startup after the greeting.
+  These variables are set by systemd's ``run0`` for example (:issue:`10924`).
+
+Improved terminal support
+-------------------------
+- ``set_color`` is able to turn off italics, reverse mode, strikethrough and underline individually (e.g. ``--italics=off``).
+- ``set_color`` learned the foreground (``--foreground`` or ``-f``) and reset (``--reset``) options.
+- An error caused by slow terminal responses at macOS startup has been addressed (:issue:`12571`).
+
+Other improvements
+------------------
+- Signals like ``SIGWINCH`` (as sent on terminal resize) no longer interrupt builtin output (:issue:`12496`).
+- For compatibility with Bash, fish now accepts ``|&`` as alternate spelling of ``&|``, for piping both standard output and standard error (:issue:`11516`).
+- ``fish_indent`` now preserves comments and newlines immediately preceding a brace block (``{ }``) (:issue:`12505`).
+- A crash when suspending certain pipelines with :kbd:`ctrl-z` has been fixed (:issue:`12301`).
+
+For distributors and developers
+-------------------------------
+- ``cargo xtask`` subcommands no longer panic on test failures.
+
+Regression fixes:
+-----------------
+- (from 4.5.0) Intermediate ``⏎`` artifact when redrawing prompt (:issue:`12476`).
+- (from 4.4.0) ``history`` honors explicitly specified ``--color=`` again (:issue:`12512`).
+- (from 4.4.0) Vi mode ``dl`` and ``dh`` (:issue:`12461`).
+- (from 4.3.0) Error completing of commands starting with ``-`` (:issue:`12522`).
+
+fish 4.5.0 (released February 17, 2026)
+=======================================
+
+This is mostly a patch release for Vi mode regressions in 4.4.0 but other minor behavior changes are included as well.
+
+Interactive improvements
+------------------------
+- :kbd:`ctrl-l` no longer cancels history search (:issue:`12436`).
+- History search cursor positioning now works correctly with characters of arbitrary width.
+
+Deprecations and removed features
+---------------------------------
+- fish no longer reads the terminfo database to alter behaviour based on the :envvar:`TERM` environment variable, and does not depend on ncurses or terminfo. The ``ignore-terminfo`` feature flag, introduced and enabled by default in fish 4.1, is now permanently enabled. fish may no longer work correctly on Data General Dasher D220 and Wyse WY-350 terminals, but should continue to work on all known terminal emulators released in the 21st century.
+
+Regression fixes:
+-----------------
+- (from 4.4.0) Vi mode ``d,f`` key binding did not work (:issue:`12417`).
+- (from 4.4.0) Vi mode ``c,w`` key binding wrongly deleted trailing spaces (:issue:`12443`).
+- (from 4.4.0) Vi mode crash on ``c,i,w`` after accepting autosuggestion (:issue:`12430`).
+- (from 4.4.0) ``fish_vi_key_bindings`` called with a mode argument produced an error (:issue:`12413`).
+- (from 4.0.0) Build on Illumos (:issue:`12410`).
+
 fish 4.4.0 (released February 03, 2026)
 =======================================
 
@@ -18,9 +126,9 @@ Interactive improvements
 New or improved bindings
 ------------------------
 - Vi mode word movements (``w``, ``W``, ``e``, and ``E``) are now largely in line with Vim. The only exception is that underscores are treated as word separators (:issue:`12269`).
-- New special input functions to support these movements: ``forward-word-vi``, ``kill-word-vi``, ``forward-bigword-vi``, ``kill-bigword-vi``, ````forward-word-end``, ``backward-word-end``, ``forward-bigword-end``, ``backward-bigword-end``, ````kill-a-word``, ``kill-inner-word``, ``kill-a-bigword``, and ``kill-inner-bigword``.
+- New special input functions to support these movements: ``forward-word-vi``, ``kill-word-vi``, ``forward-bigword-vi``, ``kill-bigword-vi``, ``forward-word-end``, ``backward-word-end``, ``forward-bigword-end``, ``backward-bigword-end``, ``kill-a-word``, ``kill-inner-word``, ``kill-a-bigword``, and ``kill-inner-bigword``.
 - Vi mode key bindings now support counts for movement and deletion commands (e.g. `d3w` or `3l`), via a new operator mode (:issue:`2192`).
-- New ``catpuccin-*`` color themes.
+- New ``catppuccin-*`` color themes.
 
 Improved terminal support
 -------------------------

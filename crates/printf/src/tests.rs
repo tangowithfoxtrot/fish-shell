@@ -1,6 +1,6 @@
 use crate::arg::ToArg;
 use crate::locale::{C_LOCALE, EN_US_LOCALE, Locale};
-use crate::{Error, FormatString, sprintf_locale};
+use crate::{Error, FormatString as _, sprintf_locale};
 use std::f64::consts::{E, PI, TAU};
 use std::ffi::CStr;
 use std::fmt;
@@ -13,7 +13,7 @@ macro_rules! sprintf_check {
         $(,)? // optional trailing comma
     ) => {
         {
-            use unicode_width::UnicodeWidthStr;
+            use unicode_width::UnicodeWidthStr as _;
             let mut target = String::new();
             let mut args = [$($arg.to_arg()),*];
             let len = $crate::printf_c_locale(
@@ -400,8 +400,10 @@ fn test_char() {
 
 #[test]
 fn test_ptr() {
-    assert_fmt!("%p", core::ptr::null::<u8>() => "0");
-    assert_fmt!("%p", 0xDEADBEEF_usize as *const u8 => "0xdeadbeef");
+    assert_fmt!("%p", core::ptr::null::<()>() => "0");
+
+    let tmp = core::ptr::without_provenance::<()>(0xDEADBEEF);
+    assert_fmt!("%p", tmp => "0xdeadbeef");
 }
 
 #[test]

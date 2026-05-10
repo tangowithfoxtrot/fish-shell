@@ -1,8 +1,7 @@
 //! Helper functions for working with wcstring.
 
-use fish_common::{get_ellipsis_char, get_ellipsis_str};
 use fish_fallback::{fish_wcwidth, lowercase, lowercase_rev, wcscasecmp, wcscasecmp_fuzzy};
-use fish_widestring::{decode_byte_from_char, prelude::*};
+use fish_widestring::{ELLIPSIS_CHAR, prelude::*};
 
 /// Return the number of newlines in a string.
 pub fn count_newlines(s: &wstr) -> usize {
@@ -336,30 +335,6 @@ pub fn string_fuzzy_match_string(
     StringFuzzyMatch::try_create(string, match_against, anchor_start)
 }
 
-/// Implementation of wcs2bytes that accepts a callback.
-/// The first argument can be either a `&str` or `&wstr`.
-/// This invokes `func` with byte slices containing the UTF-8 encoding of the characters in the
-/// input, doing one invocation per character.
-/// If `func` returns false, it stops; otherwise it continues.
-/// Return false if the callback returned false, otherwise true.
-pub fn str2bytes_callback(input: impl IntoCharIter, mut func: impl FnMut(&[u8]) -> bool) -> bool {
-    // A `char` represents an Unicode scalar value, which takes up at most 4 bytes when encoded in UTF-8.
-    let mut converted = [0_u8; 4];
-
-    for c in input.chars() {
-        let bytes = if let Some(byte) = decode_byte_from_char(c) {
-            converted[0] = byte;
-            &converted[..=0]
-        } else {
-            c.encode_utf8(&mut converted).as_bytes()
-        };
-        if !func(bytes) {
-            return false;
-        }
-    }
-    true
-}
-
 /// Split a string by runs of any of the separator characters provided in `seps`.
 /// Note the delimiters are the characters in `seps`, not `seps` itself.
 /// `seps` may contain the NUL character.
@@ -473,32 +448,13 @@ pub fn split_about<'haystack>(
     output
 }
 
-#[derive(Eq, PartialEq)]
-pub enum EllipsisType {
-    None,
-    // Prefer niceness over minimalness
-    Prettiest,
-    // Make every character count ($ instead of ...)
-    Shortest,
-}
-
-pub fn truncate(input: &wstr, max_len: usize, etype: Option<EllipsisType>) -> WString {
-    let etype = etype.unwrap_or(EllipsisType::Prettiest);
+// TODO: This should work on render width rather than the number of codepoints.
+pub fn truncate(input: &wstr, max_len: usize) -> WString {
     if input.len() <= max_len {
         return input.to_owned();
     }
-
-    if etype == EllipsisType::None {
-        return input[..max_len].to_owned();
-    }
-    if etype == EllipsisType::Prettiest {
-        let ellipsis_str = get_ellipsis_str();
-        let mut output = input[..max_len - ellipsis_str.len()].to_owned();
-        output += ellipsis_str;
-        return output;
-    }
     let mut output = input[..max_len - 1].to_owned();
-    output.push(get_ellipsis_char());
+    output.push(ELLIPSIS_CHAR);
     output
 }
 
@@ -565,12 +521,12 @@ impl<'a> Iterator for LineIterator<'a> {
     }
 }
 
-/// Like fish_wcwidth, but returns 0 for characters with no real width instead of -1.
+/// Like fish_wcwidth, but returns 0 for characters with no real width instead of none.
 pub fn fish_wcwidth_visible(c: char) -> isize {
     if c == '\x08' {
         return -1;
     }
-    fish_wcwidth(c).max(0)
+    fish_wcwidth(c).unwrap_or_default().try_into().unwrap()
 }
 
 #[cfg(test)]

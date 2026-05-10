@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::get_ellipsis_str;
+use fish_widestring::{ELLIPSIS_CHAR, decoded_width};
 
 pub struct Shorten<'args> {
     ellipsis: &'args wstr,
@@ -9,12 +9,14 @@ pub struct Shorten<'args> {
     quiet: bool,
     shorten_from: Direction,
 }
+/// The character to use where the text has been truncated, in a [`wstr`].
+const ELLIPSIS_WSTR: &wstr = wstr::from_char_slice(&[ELLIPSIS_CHAR]);
 
 impl Default for Shorten<'_> {
     fn default() -> Self {
         Self {
-            ellipsis: get_ellipsis_str(),
-            ellipsis_width: width_without_escapes(get_ellipsis_str(), 0),
+            ellipsis: ELLIPSIS_WSTR,
+            ellipsis_width: decoded_width(ELLIPSIS_WSTR),
             max: None,
             no_newline: false,
             quiet: false,
@@ -25,7 +27,8 @@ impl Default for Shorten<'_> {
 
 impl<'args> StringSubCommand<'args> for Shorten<'args> {
     const LONG_OPTIONS: &'static [WOption<'static>] = &[
-        // FIXME: documentation says it's --char
+        // Support both spellings: docs use --char, older fish accepted --chars.
+        wopt(L!("char"), RequiredArgument, 'c'),
         wopt(L!("chars"), RequiredArgument, 'c'),
         wopt(L!("max"), RequiredArgument, 'm'),
         wopt(L!("no-newline"), NoArgument, 'N'),
@@ -34,22 +37,18 @@ impl<'args> StringSubCommand<'args> for Shorten<'args> {
     ];
     const SHORT_OPTIONS: &'static wstr = L!("c:m:Nlq");
 
-    fn parse_opt(
-        &mut self,
-        name: &wstr,
-        c: char,
-        arg: Option<&'args wstr>,
-    ) -> Result<(), StringError> {
+    fn parse_opt(&mut self, c: char, arg: Option<&'args wstr>) -> Result<(), StringError<'_>> {
         match c {
             'c' => {
                 self.ellipsis = arg.unwrap();
                 self.ellipsis_width = width_without_escapes(self.ellipsis, 0);
             }
             'm' => {
+                let arg = arg.unwrap();
                 self.max = Some(
-                    fish_wcstol(arg.unwrap())?
+                    Self::parse_arg_number(arg)?
                         .try_into()
-                        .map_err(|_| invalid_args!(BUILTIN_ERR_INVALID_MAX_VALUE, name, arg))?,
+                        .map_err(|_| err_fmt!(Error::INVALID_MAX_VALUE, arg))?,
                 );
             }
             'N' => self.no_newline = true,

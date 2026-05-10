@@ -16,7 +16,7 @@ pub unsafe fn set_libc_locales(log_ok: bool) -> bool {
         if log_ok {
             crate::flog::flog!(env_locale, {
                 let source = if value == from_environment {
-                    "from environment".to_string()
+                    "from environment".to_owned()
                 } else {
                     format!("to '{}'", value.to_str().unwrap())
                 };
@@ -35,9 +35,6 @@ pub unsafe fn set_libc_locales(log_ok: bool) -> bool {
         }
         ok &= locale_string.is_some();
     };
-    // For wcwidth(3p)
-    set("LC_CTYPE", libc::LC_CTYPE, from_environment);
-    set("LC_CTYPE", libc::LC_CTYPE, c"C.UTF-8");
     // For strerror(3p) and strsignal(3p)
     set("LC_MESSAGES", libc::LC_MESSAGES, from_environment);
     // For builtin printf

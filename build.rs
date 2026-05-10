@@ -6,6 +6,10 @@ use rsconf::Target;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    let is_nightly =
+        rustc_version::version_meta().unwrap().channel == rustc_version::Channel::Nightly;
+    rsconf::declare_cfg("nightly", is_nightly);
+
     setup_paths();
 
     // Add our default to enable tools that don't go through CMake, like "cargo test" and the
@@ -159,16 +163,14 @@ fn setup_paths() {
     }
 
     let prefix = overridable_path("PREFIX", |env_prefix| {
-        Some(PathBuf::from(
-            env_prefix.unwrap_or("/usr/local".to_string()),
-        ))
+        Some(PathBuf::from(env_prefix.unwrap_or("/usr/local".to_owned())))
     })
     .unwrap();
 
     overridable_path("SYSCONFDIR", |env_sysconfdir| {
         Some(join_if_relative(
             &prefix,
-            env_sysconfdir.unwrap_or("/etc/".to_string()),
+            env_sysconfdir.unwrap_or("/etc/".to_owned()),
         ))
     });
 
@@ -199,5 +201,5 @@ fn get_version() -> String {
     )
     .unwrap()
     .trim_ascii_end()
-    .to_string()
+    .to_owned()
 }

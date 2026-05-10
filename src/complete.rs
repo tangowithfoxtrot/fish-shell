@@ -1,3 +1,40 @@
+use crate::{
+    abbrs::with_abbrs,
+    ast::unescape_keyword,
+    autoload::{Autoload, AutoloadResult},
+    builtins::shared::{builtin_exists, builtin_get_desc, builtin_get_names},
+    common::valid_var_name_char,
+    env::{EnvMode, EnvStack, Environment},
+    exec::exec_subshell,
+    expand::{
+        ExpandFlags, ExpandResultCode, expand_escape_string, expand_escape_variable, expand_one,
+        expand_string, expand_to_receiver,
+    },
+    flog::{flog, flogf},
+    function,
+    history::{History, history_id},
+    localization::{LocalizableString, localizable_string},
+    operation_context::OperationContext,
+    parse_constants::SourceRange,
+    parse_util::{get_cmdsubst_extent, get_process_extent, unescape_wildcards},
+    parser::{Block, Parser, ParserEnvSetMode},
+    parser_keywords::parser_keywords_is_subcommand,
+    path::{path_get_path, path_try_get_path},
+    prelude::*,
+    reader::{get_quote, is_backslashed},
+    tokenizer::{Tok, TokFlags, TokenType, Tokenizer, variable_assignment_equals_pos},
+    wildcard::{wildcard_complete, wildcard_has, wildcard_match},
+    wutil::wrealpath,
+};
+use assert_matches::assert_matches;
+use bitflags::bitflags;
+use fish_common::{ScopeGuard, UnescapeFlags, UnescapeStringStyle, escape, unescape_string};
+use fish_util::wcsfilecmp;
+use fish_wcstringutil::{
+    StringFuzzyMatch, string_fuzzy_match_string, string_prefixes_string,
+    string_suffixes_string_case_insensitive, strip_executable_suffix,
+};
+use fish_widestring::{WExt as _, charptr2wcstring};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -9,51 +46,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-use crate::{
-    abbrs::with_abbrs,
-    autoload::Autoload,
-    builtins::shared::{builtin_exists, builtin_get_desc, builtin_get_names},
-    common::{
-        ScopeGuard, UnescapeFlags, UnescapeStringStyle, escape, unescape_string,
-        valid_var_name_char,
-    },
-    env::{EnvMode, EnvStack, Environment},
-    exec::exec_subshell,
-    expand::{
-        ExpandFlags, ExpandResultCode, expand_escape_string, expand_escape_variable, expand_one,
-        expand_string, expand_to_receiver,
-    },
-    flog::{flog, flogf},
-    function,
-    history::{History, history_session_id},
-    operation_context::OperationContext,
-    parse_constants::SourceRange,
-    parse_util::{get_cmdsubst_extent, get_process_extent, unescape_wildcards},
-    parser::{Block, Parser, ParserEnvSetMode},
-    parser_keywords::parser_keywords_is_subcommand,
-    path::{path_get_path, path_try_get_path},
-    prelude::*,
-    tokenizer::{Tok, TokFlags, TokenType, Tokenizer, variable_assignment_equals_pos},
-    wildcard::{wildcard_complete, wildcard_has, wildcard_match},
-    wutil::wrealpath,
-};
-use crate::{
-    ast::unescape_keyword,
-    autoload::AutoloadResult,
-    common::charptr2wcstring,
-    localization::{LocalizableString, localizable_string},
-    reader::{get_quote, is_backslashed},
-};
-use assert_matches::assert_matches;
-use bitflags::bitflags;
-use fish_util::wcsfilecmp;
-use fish_wcstringutil::{
-    StringFuzzyMatch, string_fuzzy_match_string, string_prefixes_string,
-    string_prefixes_string_case_insensitive, string_suffixes_string_case_insensitive,
-    strip_executable_suffix,
-};
-use fish_widestring::WExt;
 
 // Completion description strings, mostly for different types of files, such as sockets, block
 // devices, etc.
@@ -166,7 +158,10 @@ impl Completion {
         r#match: StringFuzzyMatch, /* = exact_match */
         flags: CompleteFlags,
     ) -> Self {
-        let flags = resolve_auto_space(&completion, flags);
+        let mut flags = resolve_auto_space(&completion, flags);
+        if r#match.requires_full_replacement() {
+            flags |= CompleteFlags::REPLACES_TOKEN;
+        }
         Self {
             completion,
             description,
@@ -321,12 +316,12 @@ impl CompletionReceiver {
     }
 
     /// Returns the list of completions.
-    pub fn get_list(&self) -> &[Completion] {
+    pub fn as_list(&self) -> &[Completion] {
         &self.completions
     }
 
     /// Returns the list of completions.
-    pub fn get_list_mut(&mut self) -> &mut [Completion] {
+    pub fn as_list_mut(&mut self) -> &mut [Completion] {
         &mut self.completions
     }
 
@@ -981,7 +976,7 @@ impl<'ctx> Completer<'ctx> {
         }
 
         let keep_going =
-            self.completions.get_list().iter().any(|c| {
+            self.completions.as_list().iter().any(|c| {
                 c.completion.is_empty() || c.completion.as_char_slice().last() != Some(&'/')
             });
         if !keep_going {
@@ -999,11 +994,14 @@ impl<'ctx> Completer<'ctx> {
         // systems with a large set of manuals, but it should be ok since apropos is only called once.
         // For Cygwin, also try to find the exact match for the non-exe name
         let lookup_cmd = sprintf!(
-            "functions -q __fish_describe_command &&{ __fish_describe_command %s %s}",
+            "functions -q __fish_describe_command &&{ __fish_describe_command -- %s %s}",
             &escape(cmd),
             &no_exe
                 .map(|(cmd_sans_exe, _)| {
-                    sprintf!("; __fish_describe_command --exact %s", escape(cmd_sans_exe))
+                    sprintf!(
+                        "; __fish_describe_command --exact -- %s",
+                        escape(cmd_sans_exe)
+                    )
                 })
                 .unwrap_or_default()[..]
         );
@@ -1060,7 +1058,7 @@ impl<'ctx> Completer<'ctx> {
 
         // Then do a lookup on every completion and if a match is found, change to the new
         // description.
-        for completion in self.completions.get_list_mut() {
+        for completion in self.completions.as_list_mut() {
             let el = &completion.completion;
             if let Some(&desc) = lookup.get(el.as_utfstr()) {
                 completion.description = desc.to_owned();
@@ -1189,7 +1187,7 @@ impl<'ctx> Completer<'ctx> {
         let mut saved_statuses = None;
         let mut scope = None;
         if let Some(parser) = self.ctx.maybe_parser() {
-            saved_statuses = Some(parser.get_last_statuses());
+            saved_statuses = Some(parser.last_statuses());
             scope = Some(parser.push_scope(|s| s.is_interactive = false));
         }
 
@@ -1487,14 +1485,12 @@ impl<'ctx> Completer<'ctx> {
                     continue;
                 };
 
-                let mut offset = 0;
-                let mut flags = CompleteFlags::empty();
-
-                if r#match.requires_full_replacement() {
-                    flags = CompleteFlags::REPLACES_TOKEN;
+                let offset = if r#match.requires_full_replacement() {
+                    0
                 } else {
-                    offset = s.len();
-                }
+                    s.len()
+                };
+                let completion = whole_opt.slice_from(offset);
 
                 // does this switch have any known arguments
                 let has_arg = !o.comp.is_empty();
@@ -1506,14 +1502,14 @@ impl<'ctx> Completer<'ctx> {
                     // a completion. By default we avoid using '=' and instead rely on '--switch
                     // switch-arg', since it is more commonly supported by homebrew getopt-like
                     // functions.
-                    let completion = sprintf!("%s=", whole_opt.slice_from(offset));
+                    let completion = sprintf!("%s=", completion);
 
                     // Append a long-style option with a mandatory trailing equal sign
                     if !self.completions.add(Completion::new(
                         completion,
                         o.desc.localize().to_owned(),
-                        StringFuzzyMatch::exact_match(),
-                        flags | CompleteFlags::NO_SPACE,
+                        r#match,
+                        CompleteFlags::NO_SPACE,
                     )) {
                         return false;
                     }
@@ -1521,10 +1517,10 @@ impl<'ctx> Completer<'ctx> {
 
                 // Append a long-style option
                 if !self.completions.add(Completion::new(
-                    whole_opt.slice_from(offset).to_owned(),
+                    completion.to_owned(),
                     o.desc.localize().to_owned(),
-                    StringFuzzyMatch::exact_match(),
-                    flags,
+                    r#match,
+                    CompleteFlags::empty(),
                 )) {
                     return false;
                 }
@@ -1670,7 +1666,7 @@ impl<'ctx> Completer<'ctx> {
                 // Take only the suffix.
                 env_name.slice_from(varlen).to_owned()
             } else {
-                flags |= CompleteFlags::REPLACES_TOKEN | CompleteFlags::DONT_ESCAPE;
+                flags |= CompleteFlags::DONT_ESCAPE;
                 whole_var.slice_to(start_offset).to_owned() + env_name.as_utfstr()
             };
 
@@ -1679,7 +1675,7 @@ impl<'ctx> Completer<'ctx> {
                 // $history can be huge, don't put all of it in the completion description; see
                 // #6288.
                 if env_name == "history" {
-                    let history = History::with_name(&history_session_id(self.ctx.vars()));
+                    let history = History::new(history_id(self.ctx.vars()));
                     for i in 1..std::cmp::min(history.size(), 64) {
                         if i > 1 {
                             desc.push(' ');
@@ -1739,10 +1735,8 @@ impl<'ctx> Completer<'ctx> {
 
             match c {
                 '\\' => skip_next = true,
-                '$' => {
-                    if mode == Unquoted || mode == DoubleQuoted {
-                        variable_start = Some(in_pos);
-                    }
+                '$' if (mode == Unquoted || mode == DoubleQuoted) => {
+                    variable_start = Some(in_pos);
                 }
                 '\'' => {
                     if mode == SingleQuoted {
@@ -1758,9 +1752,7 @@ impl<'ctx> Completer<'ctx> {
                         mode = DoubleQuoted;
                     }
                 }
-                _ => {
-                    // all other chars ignored here
-                }
+                _ => (),
             }
         }
 
@@ -1811,8 +1803,12 @@ impl<'ctx> Completer<'ctx> {
                 if ptr.is_null() {
                     return None;
                 }
+                // SAFETY: We established that `getpwent` returned non-NULL, in which case `ptr`
+                // will point to a valid `passwd` struct.
                 let pw = unsafe { ptr.read() };
-                Some(charptr2wcstring(pw.pw_name))
+                // SAFETY: This assumes that the successful `getpwent` call put a pointer to a valid
+                // string into `pw.pw_name`.
+                Some(unsafe { charptr2wcstring(pw.pw_name) })
             }
 
             let _guard = SETPWENT_LOCK.lock().unwrap();
@@ -1823,30 +1819,23 @@ impl<'ctx> Completer<'ctx> {
                     break;
                 }
 
-                if string_prefixes_string(user_name, &pw_name) {
+                if let Some(r#match) = StringFuzzyMatch::try_create(user_name, &pw_name, true) {
                     let desc = wgettext_fmt!(COMPLETE_USER_DESC, &pw_name);
                     // Append a user name.
                     // TODO: propagate overflow?
+                    let mut flags = CompleteFlags::NO_SPACE;
+                    if r#match.requires_full_replacement() {
+                        flags |= CompleteFlags::DONT_ESCAPE;
+                    }
                     let _ = self.completions.add(Completion::new(
-                        pw_name.slice_from(name_len).to_owned(),
+                        if r#match.requires_full_replacement() {
+                            sprintf!("~%s", &pw_name)
+                        } else {
+                            pw_name.slice_from(name_len).to_owned()
+                        },
                         desc,
-                        StringFuzzyMatch::exact_match(),
-                        CompleteFlags::NO_SPACE,
-                    ));
-                    result = true;
-                } else if string_prefixes_string_case_insensitive(user_name, &pw_name) {
-                    let name = sprintf!("~%s", &pw_name);
-                    let desc = wgettext_fmt!(COMPLETE_USER_DESC, &pw_name);
-
-                    // Append a user name
-                    // TODO: propagate overflow?
-                    let _ = self.completions.add(Completion::new(
-                        name,
-                        desc,
-                        StringFuzzyMatch::exact_match(),
-                        CompleteFlags::REPLACES_TOKEN
-                            | CompleteFlags::DONT_ESCAPE
-                            | CompleteFlags::NO_SPACE,
+                        r#match,
+                        flags,
                     ));
                     result = true;
                 }
@@ -2124,7 +2113,7 @@ impl<'ctx> Completer<'ctx> {
         arg_strs.sort();
 
         let mut comp_str;
-        for comp in self.completions.get_list_mut() {
+        for comp in self.completions.as_list_mut() {
             comp_str = comp.completion.clone();
             if !comp.replaces_token() {
                 comp_str.insert_utfstr(0, prefix);
@@ -2321,7 +2310,7 @@ pub fn complete_add(
         result_mode,
         comp,
         // The external source is a completion script in `share`,
-        // from which `build_tools/fish_xgettext.fish` extracts descriptions.
+        // from which `cargo xtask gettext update` extracts descriptions.
         desc: LocalizableString::from_external_source(desc),
         conditions: condition,
         flags,
@@ -2632,18 +2621,20 @@ mod tests {
         complete_add, complete_add_wrapper, complete_get_wrap_targets, complete_remove_wrapper,
         sort_and_prioritize,
     };
-    use crate::abbrs::{self, Abbreviation, with_abbrs_mut};
-    use crate::common::str2wcstring;
-    use crate::env::{EnvMode, EnvSetMode, Environment};
-    use crate::io::IoChain;
-    use crate::operation_context::{
-        EXPANSION_LIMIT_BACKGROUND, EXPANSION_LIMIT_DEFAULT, OperationContext, no_cancel,
+    use crate::{
+        abbrs::{self, Abbreviation, with_abbrs_mut},
+        env::{EnvMode, EnvSetMode, Environment as _},
+        io::IoChain,
+        operation_context::{
+            EXPANSION_LIMIT_BACKGROUND, EXPANSION_LIMIT_DEFAULT, OperationContext, no_cancel,
+        },
+        parser::ParserEnvSetMode,
+        prelude::*,
+        reader::completion_apply_to_command_line,
+        tests::prelude::*,
     };
-    use crate::parser::ParserEnvSetMode;
-    use crate::prelude::*;
-    use crate::reader::completion_apply_to_command_line;
-    use crate::tests::prelude::*;
     use fish_wcstringutil::join_strings;
+    use fish_widestring::str2wcstring;
     use std::collections::HashMap;
     use std::ffi::CString;
 
@@ -2655,7 +2646,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_complete() {
-        let _cleanup = test_init();
+        test_init();
         let vars = PwdEnvironment {
             parent: TestEnvironment {
                 vars: HashMap::from([
@@ -3173,7 +3164,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_autosuggest_suggest_special() {
-        let _cleanup = test_init();
+        test_init();
         let parser = TestParser::new();
         macro_rules! perform_one_autosuggestion_cd_test {
             ($command:literal, $expected:literal, $vars:expr) => {
@@ -3354,7 +3345,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_autosuggestion_ignores() {
-        let _cleanup = test_init();
+        test_init();
         // Testing scenarios that should produce no autosuggestions
         macro_rules! perform_one_autosuggestion_should_ignore_test {
             ($command:literal) => {

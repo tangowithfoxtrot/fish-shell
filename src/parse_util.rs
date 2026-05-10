@@ -1,37 +1,38 @@
 //! Various mostly unrelated utility functions related to parsing, loading and evaluating fish code.
-use crate::ast::{
-    self, Ast, Keyword, Kind, Leaf, Node, NodeVisitor, Token, Traversal, is_same_node,
+use crate::{
+    ast::{
+        self, Ast, Keyword as _, Kind, Leaf as _, Node, NodeVisitor, Token as _, Traversal,
+        is_same_node,
+    },
+    builtins::shared::builtin_exists,
+    common::{valid_var_name, valid_var_name_char},
+    expand::{ExpandFlags, ExpandResultCode, expand_one, expand_to_command_and_args},
+    operation_context::OperationContext,
+    parse_constants::{
+        ERROR_BAD_VAR_CHAR1, ERROR_BRACKETED_VARIABLE_QUOTED1, ERROR_BRACKETED_VARIABLE1,
+        ERROR_NO_VAR_NAME, ERROR_NOT_ARGV_AT, ERROR_NOT_ARGV_COUNT, ERROR_NOT_ARGV_STAR,
+        ERROR_NOT_PID, ERROR_NOT_STATUS, INVALID_BREAK_ERR_MSG, INVALID_CONTINUE_ERR_MSG,
+        INVALID_PIPELINE_CMD_ERR_MSG, ParseError, ParseErrorCode, ParseErrorList, ParseIssue,
+        ParseKeyword, ParseTokenType, ParseTreeFlags, PipelinePosition, SourceRange,
+        StatementDecoration, UNKNOWN_BUILTIN_ERR_MSG, parse_error_offset_source_start,
+    },
+    prelude::*,
+    tokenizer::{
+        TOK_ACCEPT_UNFINISHED, TOK_SHOW_COMMENTS, Tok, TokenType, Tokenizer, comment_end,
+        is_token_delimiter, quote_end,
+    },
 };
-use crate::builtins::shared::builtin_exists;
-use crate::common::{
-    EscapeFlags, EscapeStringStyle, UnescapeFlags, UnescapeStringStyle, escape_string,
-    unescape_string, valid_var_name, valid_var_name_char,
-};
-use crate::expand::{
-    BRACE_BEGIN, BRACE_END, BRACE_SEP, ExpandFlags, ExpandResultCode, INTERNAL_SEPARATOR,
-    VARIABLE_EXPAND, VARIABLE_EXPAND_EMPTY, VARIABLE_EXPAND_SINGLE, expand_one,
-    expand_to_command_and_args,
-};
-use crate::future_feature_flags::{FeatureFlag, feature_test};
-use crate::operation_context::OperationContext;
-use crate::parse_constants::{
-    ERROR_BAD_VAR_CHAR1, ERROR_BRACKETED_VARIABLE_QUOTED1, ERROR_BRACKETED_VARIABLE1,
-    ERROR_NO_VAR_NAME, ERROR_NOT_ARGV_AT, ERROR_NOT_ARGV_COUNT, ERROR_NOT_ARGV_STAR, ERROR_NOT_PID,
-    ERROR_NOT_STATUS, INVALID_BREAK_ERR_MSG, INVALID_CONTINUE_ERR_MSG,
-    INVALID_PIPELINE_CMD_ERR_MSG, ParseError, ParseErrorCode, ParseErrorList, ParseKeyword,
-    ParseTokenType, ParseTreeFlags, ParserTestErrorBits, PipelinePosition, SourceRange,
-    StatementDecoration, UNKNOWN_BUILTIN_ERR_MSG, parse_error_offset_source_start,
-};
-use crate::prelude::*;
-use crate::tokenizer::{
-    TOK_ACCEPT_UNFINISHED, TOK_SHOW_COMMENTS, Tok, TokenType, Tokenizer, comment_end,
-    is_token_delimiter, quote_end,
-};
-use crate::wildcard::{ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE};
-use fish_common::help_section;
+use fish_common::{UnescapeFlags, UnescapeStringStyle, help_section, unescape_string};
+use fish_feature_flags::{FeatureFlag, feature_test};
 use fish_wcstringutil::{count_newlines, truncate};
-use std::ops::Range;
-use std::{iter, ops};
+use fish_widestring::{
+    ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE, BRACE_BEGIN, BRACE_END, BRACE_SEP,
+    INTERNAL_SEPARATOR, VARIABLE_EXPAND, VARIABLE_EXPAND_EMPTY, VARIABLE_EXPAND_SINGLE,
+};
+use std::{
+    iter,
+    ops::{self, Range},
+};
 
 /// Handles slices: the square brackets in an expression like $foo[5..4]
 /// Return the length of the slice starting at `in`, or 0 if there is no slice, or None on error.
@@ -693,64 +694,6 @@ fn error_for_character(c: char) -> WString {
     }
 }
 
-/// Attempts to escape the string 'cmd' using the given quote type, as determined by the quote
-/// character. The quote can be a single quote or double quote, or L'\0' to indicate no quoting (and
-/// thus escaping should be with backslashes). Optionally do not escape tildes.
-pub fn escape_string_with_quote(
-    cmd: &wstr,
-    quote: Option<char>,
-    escape_flags: EscapeFlags,
-) -> WString {
-    let Some(quote) = quote else {
-        return escape_string(cmd, EscapeStringStyle::Script(escape_flags));
-    };
-    // Here we are going to escape a string with quotes.
-    // A few characters cannot be represented inside quotes, e.g. newlines. In that case,
-    // terminate the quote and then re-enter it.
-    let mut result = WString::new();
-    result.reserve(cmd.len());
-    for c in cmd.chars() {
-        match c {
-            '\n' => {
-                for c in [quote, '\\', 'n', quote] {
-                    result.push(c);
-                }
-            }
-            '\t' => {
-                for c in [quote, '\\', 't', quote] {
-                    result.push(c);
-                }
-            }
-            '\x08' => {
-                for c in [quote, '\\', 'b', quote] {
-                    result.push(c);
-                }
-            }
-            '\r' => {
-                for c in [quote, '\\', 'r', quote] {
-                    result.push(c);
-                }
-            }
-            '\\' => {
-                result.push_str("\\\\");
-            }
-            '$' => {
-                if quote == '"' {
-                    result.push('\\');
-                }
-                result.push('$');
-            }
-            _ => {
-                if c == quote {
-                    result.push('\\');
-                }
-                result.push(c);
-            }
-        }
-    }
-    result
-}
-
 /// Given a string, parse it as fish code and then return the indents. The return value has the same
 /// size as the string.
 pub fn compute_indents(src: &wstr) -> Vec<i32> {
@@ -1025,17 +968,13 @@ impl<'a> NodeVisitor<'a> for IndentVisitor<'a> {
             //   ....cmd3
             //   end
             // See #7252.
-            Kind::JobContinuation(node) => {
-                if self.has_newline(&node.newlines) {
-                    inc_dec = (1, 1);
-                }
+            Kind::JobContinuation(node) if self.has_newline(&node.newlines) => {
+                inc_dec = (1, 1);
             }
 
             // Likewise for && and ||.
-            Kind::JobConjunctionContinuation(node) => {
-                if self.has_newline(&node.newlines) {
-                    inc_dec = (1, 1);
-                }
+            Kind::JobConjunctionContinuation(node) if self.has_newline(&node.newlines) => {
+                inc_dec = (1, 1);
             }
 
             Kind::CaseItemList(_) => {
@@ -1118,14 +1057,14 @@ impl<'a> NodeVisitor<'a> for IndentVisitor<'a> {
 }
 
 /// Given a string, detect parse errors in it. If allow_incomplete is set, then if the string is
-/// incomplete (e.g. an unclosed quote), an error is not returned and the ParserTestErrorBits::INCOMPLETE bit
+/// incomplete (e.g. an unclosed quote), an error is not returned and `ParseIssue::incomplete`
 /// is set in the return value. If allow_incomplete is not set, then incomplete strings result in an
 /// error.
 pub fn detect_parse_errors(
     buff_src: &wstr,
     mut out_errors: Option<&mut ParseErrorList>,
     allow_incomplete: bool, /*=false*/
-) -> Result<(), ParserTestErrorBits> {
+) -> Result<(), ParseIssue> {
     // Whether there's an unclosed quote or subshell, and therefore unfinished. This is only set if
     // allow_incomplete is set.
     let mut has_unclosed_quote_or_subshell = false;
@@ -1161,7 +1100,7 @@ pub fn detect_parse_errors(
     assert!(!has_unclosed_quote_or_subshell || allow_incomplete);
     if has_unclosed_quote_or_subshell {
         // We do not bother to validate the rest of the tree in this case.
-        return Err(ParserTestErrorBits::INCOMPLETE);
+        return ParseIssue::INCOMPLETE;
     }
 
     // Early parse error, stop here.
@@ -1169,7 +1108,7 @@ pub fn detect_parse_errors(
         if let Some(errors) = out_errors.as_mut() {
             errors.extend(parse_errors);
         }
-        return Err(ParserTestErrorBits::ERROR);
+        return ParseIssue::ERROR;
     }
 
     // Defer to the tree-walking version.
@@ -1182,11 +1121,10 @@ pub fn detect_parse_errors_in_ast(
     ast: &Ast,
     buff_src: &wstr,
     mut out_errors: Option<&mut ParseErrorList>,
-) -> Result<(), ParserTestErrorBits> {
-    let mut res = ParserTestErrorBits::default();
-
-    // Whether we encountered a parse error.
-    let mut errored = false;
+) -> Result<(), ParseIssue> {
+    // The issue to return.
+    // We break out various reasons for incompleteness to be explicit.
+    let mut issue = ParseIssue::default();
 
     // Whether we encountered an unclosed block. We detect this via an 'end_command' block without
     // source.
@@ -1208,30 +1146,29 @@ pub fn detect_parse_errors_in_ast(
     let mut traversal = ast::Traversal::new(ast.top());
     while let Some(node) = traversal.next() {
         match node.kind() {
-            Kind::JobContinuation(jc) => {
+            Kind::JobContinuation(jc)
                 // Somewhat clumsy way of checking for a statement without source in a pipeline.
                 // See if our pipe has source but our statement does not.
-                if jc.pipe.has_source() && jc.statement.try_source_range().is_none() {
+                if jc.pipe.has_source() && jc.statement.try_source_range().is_none() => {
                     has_unclosed_pipe = true;
                 }
-            }
             Kind::JobConjunction(job_conjunction) => {
-                errored |= detect_errors_in_job_conjunction(job_conjunction, &mut out_errors);
+                issue.error |= detect_errors_in_job_conjunction(job_conjunction, &mut out_errors);
             }
-            Kind::JobConjunctionContinuation(jcc) => {
+            Kind::JobConjunctionContinuation(jcc)
                 // Somewhat clumsy way of checking for a job without source in a conjunction.
                 // See if our conjunction operator (&& or ||) has source but our job does not.
-                if jcc.conjunction.has_source() && jcc.job.try_source_range().is_none() {
+                if jcc.conjunction.has_source() && jcc.job.try_source_range().is_none() => {
                     has_unclosed_conjunction = true;
                 }
-            }
             Kind::Argument(arg) => {
                 let arg_src = arg.source(buff_src);
-                res |= detect_errors_in_argument(arg, arg_src, &mut out_errors)
-                    .err()
-                    .unwrap_or_default();
+                if let Err(e) = detect_errors_in_argument(arg, arg_src, &mut out_errors) {
+                    issue.error |= e.error;
+                    issue.incomplete |= e.incomplete;
+                }
             }
-            Kind::JobPipeline(job) => {
+            Kind::JobPipeline(job)
                 // Disallow background in the following cases:
                 //
                 // foo & ; and bar
@@ -1239,12 +1176,12 @@ pub fn detect_parse_errors_in_ast(
                 // if foo & ; end
                 // while foo & ; end
                 // If it's not a background job, nothing to do.
-                if job.bg.is_some() {
-                    errored |= detect_errors_in_backgrounded_job(&traversal, job, &mut out_errors);
+                if job.bg.is_some() => {
+                    issue.error |=
+                        detect_errors_in_backgrounded_job(&traversal, job, &mut out_errors);
                 }
-            }
             Kind::DecoratedStatement(stmt) => {
-                errored |= detect_errors_in_decorated_statement(
+                issue.error |= detect_errors_in_decorated_statement(
                     buff_src,
                     &traversal,
                     stmt,
@@ -1256,7 +1193,7 @@ pub fn detect_parse_errors_in_ast(
                 if !block.end.has_source() {
                     has_unclosed_block = true;
                 }
-                errored |= detect_errors_in_block_redirection_list(
+                issue.error |= detect_errors_in_block_redirection_list(
                     node,
                     &block.args_or_redirs,
                     &mut out_errors,
@@ -1267,7 +1204,7 @@ pub fn detect_parse_errors_in_ast(
                 if !brace_statement.right_brace.has_source() {
                     has_unclosed_block = true;
                 }
-                errored |= detect_errors_in_block_redirection_list(
+                issue.error |= detect_errors_in_block_redirection_list(
                     node,
                     &brace_statement.args_or_redirs,
                     &mut out_errors,
@@ -1278,7 +1215,7 @@ pub fn detect_parse_errors_in_ast(
                 if !ifs.end.has_source() {
                     has_unclosed_block = true;
                 }
-                errored |= detect_errors_in_block_redirection_list(
+                issue.error |= detect_errors_in_block_redirection_list(
                     node,
                     &ifs.args_or_redirs,
                     &mut out_errors,
@@ -1289,7 +1226,7 @@ pub fn detect_parse_errors_in_ast(
                 if !switchs.end.has_source() {
                     has_unclosed_block = true;
                 }
-                errored |= detect_errors_in_block_redirection_list(
+                issue.error |= detect_errors_in_block_redirection_list(
                     node,
                     &switchs.args_or_redirs,
                     &mut out_errors,
@@ -1299,17 +1236,11 @@ pub fn detect_parse_errors_in_ast(
         }
     }
 
-    if errored {
-        res |= ParserTestErrorBits::ERROR;
-    }
-
-    if has_unclosed_block || has_unclosed_pipe || has_unclosed_conjunction {
-        res |= ParserTestErrorBits::INCOMPLETE;
-    }
-    if res == ParserTestErrorBits::default() {
-        Ok(())
+    issue.incomplete |= has_unclosed_block || has_unclosed_pipe || has_unclosed_conjunction;
+    if issue.error || issue.incomplete {
+        Err(issue)
     } else {
-        Err(res)
+        Ok(())
     }
 }
 
@@ -1386,16 +1317,17 @@ pub fn detect_errors_in_argument(
     arg: &ast::Argument,
     arg_src: &wstr,
     out_errors: &mut Option<&mut ParseErrorList>,
-) -> Result<(), ParserTestErrorBits> {
+) -> Result<(), ParseIssue> {
     let Some(source_range) = arg.try_source_range() else {
         return Ok(());
     };
 
     let source_start = source_range.start();
-    let mut err = ParserTestErrorBits::default();
+    let mut issue = ParseIssue::default();
 
+    // Check if a subtoken contains errors. Returns true if there is an error, and appends to out_errors if provided.
     let check_subtoken =
-        |begin: usize, end: usize, out_errors: &mut Option<&mut ParseErrorList>| {
+        |begin: usize, end: usize, out_errors: &mut Option<&mut ParseErrorList>| -> bool {
             let Some(unesc) = unescape_string(
                 &arg_src[begin..end],
                 UnescapeStringStyle::Script(UnescapeFlags::SPECIAL),
@@ -1415,7 +1347,7 @@ pub fn detect_errors_in_argument(
                             "Incomplete escape sequence '%s'",
                             arg_src
                         );
-                        return ParserTestErrorBits::ERROR;
+                        return true;
                     }
                     append_syntax_error!(
                         out_errors,
@@ -1425,10 +1357,10 @@ pub fn detect_errors_in_argument(
                         arg_src
                     );
                 }
-                return ParserTestErrorBits::ERROR;
+                return true;
             };
 
-            let mut err = ParserTestErrorBits::default();
+            let mut errored = false;
             // Check for invalid variable expansions.
             let unesc = unesc.as_char_slice();
             for (idx, c) in unesc.iter().enumerate() {
@@ -1436,10 +1368,10 @@ pub fn detect_errors_in_argument(
                     continue;
                 }
                 let next_char = unesc.get(idx + 1).copied().unwrap_or('\0');
-                if ![VARIABLE_EXPAND, VARIABLE_EXPAND_SINGLE, '('].contains(&next_char)
+                if !matches!(next_char, VARIABLE_EXPAND | VARIABLE_EXPAND_SINGLE | '(')
                     && !valid_var_name_char(next_char)
                 {
-                    err = ParserTestErrorBits::ERROR;
+                    errored = true;
                     if let Some(out_errors) = out_errors {
                         let mut first_dollar = idx;
                         while first_dollar > 0
@@ -1453,7 +1385,7 @@ pub fn detect_errors_in_argument(
                 }
             }
 
-            err
+            errored
         };
 
     let mut cursor = 0;
@@ -1471,24 +1403,25 @@ pub fn detect_errors_in_argument(
             Some(&mut has_dollar),
         ) {
             MaybeParentheses::Error => {
-                err |= ParserTestErrorBits::ERROR;
+                issue.error = true;
                 append_syntax_error!(out_errors, source_start, 1, "Mismatched parenthesis");
-                return Err(err);
+                return Err(issue);
             }
             MaybeParentheses::None => {
                 do_loop = false;
             }
             MaybeParentheses::CommandSubstitution(parens) => {
-                err |= check_subtoken(
+                issue.error |= check_subtoken(
                     checked,
                     parens.start() - if has_dollar { 1 } else { 0 },
                     out_errors,
                 );
                 let mut subst_errors = ParseErrorList::new();
-                if let Err(subst_err) =
+                if let Err(e) =
                     detect_parse_errors(&arg_src[parens.command()], Some(&mut subst_errors), false)
                 {
-                    err |= subst_err;
+                    issue.error |= e.error;
+                    issue.incomplete |= e.incomplete;
                 }
 
                 // Our command substitution produced error offsets relative to its source. Tweak the
@@ -1505,9 +1438,12 @@ pub fn detect_errors_in_argument(
         }
     }
 
-    err |= check_subtoken(checked, arg_src.len(), out_errors);
-
-    if err.is_empty() { Ok(()) } else { Err(err) }
+    issue.error |= check_subtoken(checked, arg_src.len(), out_errors);
+    if issue.error || issue.incomplete {
+        Err(issue)
+    } else {
+        Ok(())
+    }
 }
 
 fn detect_errors_in_job_conjunction(
@@ -1889,7 +1825,7 @@ pub fn expand_variable_error(
                         global_after_dollar_pos,
                         1,
                         ERROR_BRACKETED_VARIABLE_QUOTED1,
-                        truncate(var_name, VAR_ERR_LEN, None)
+                        truncate(var_name, VAR_ERR_LEN)
                     );
                 } else {
                     append_syntax_error!(
@@ -1897,7 +1833,7 @@ pub fn expand_variable_error(
                         global_after_dollar_pos,
                         1,
                         ERROR_BRACKETED_VARIABLE1,
-                        truncate(var_name, VAR_ERR_LEN, None),
+                        truncate(var_name, VAR_ERR_LEN),
                     );
                 }
             } else {
@@ -1964,10 +1900,9 @@ const VAR_ERR_LEN: usize = 16;
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOL_AFTER_BACKGROUND_ERROR_MSG, compute_indents, detect_parse_errors,
-        escape_string_with_quote, get_cmdsubst_extent, get_process_extent, slice_length,
+        BOOL_AFTER_BACKGROUND_ERROR_MSG, compute_indents, detect_parse_errors, get_cmdsubst_extent,
+        get_process_extent, slice_length,
     };
-    use crate::common::EscapeFlags;
     use crate::parse_constants::{
         ERROR_BAD_VAR_CHAR1, ERROR_BRACKETED_VARIABLE_QUOTED1, ERROR_BRACKETED_VARIABLE1,
         ERROR_NO_VAR_NAME, ERROR_NOT_ARGV_AT, ERROR_NOT_ARGV_COUNT, ERROR_NOT_ARGV_STAR,
@@ -1980,7 +1915,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_error_messages() {
-        let _cleanup = test_init();
+        test_init();
         // Given a format string, returns a list of non-empty strings separated by format specifiers. The
         // format specifiers themselves are omitted.
         fn separate_by_format_specifiers(format: &wstr) -> Vec<&wstr> {
@@ -2072,7 +2007,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_cmdsubst_extent() {
-        let _cleanup = test_init();
+        test_init();
         let a = L!("echo (echo (echo hi");
         assert_eq!(get_cmdsubst_extent(a, 0), 0..a.len());
         assert_eq!(get_cmdsubst_extent(a, 1), 0..a.len());
@@ -2088,7 +2023,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_slice_length() {
-        let _cleanup = test_init();
+        test_init();
         assert_eq!(slice_length(L!("[2]")), Some(3));
         assert_eq!(slice_length(L!("[12]")), Some(4));
         assert_eq!(slice_length(L!("[\"foo\"]")), Some(7));
@@ -2097,81 +2032,8 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_escape_quotes() {
-        let _cleanup = test_init();
-        macro_rules! validate {
-            ($cmd:expr, $quote:expr, $no_tilde:expr, $expected:expr) => {
-                assert_eq!(
-                    escape_string_with_quote(
-                        L!($cmd),
-                        $quote,
-                        if $no_tilde {
-                            EscapeFlags::NO_TILDE
-                        } else {
-                            EscapeFlags::empty()
-                        }
-                    ),
-                    L!($expected)
-                );
-            };
-        }
-        macro_rules! validate_no_quoted {
-            ($cmd:expr, $quote:expr, $no_tilde:expr, $expected:expr) => {
-                assert_eq!(
-                    escape_string_with_quote(
-                        L!($cmd),
-                        $quote,
-                        EscapeFlags::NO_QUOTED
-                            | if $no_tilde {
-                                EscapeFlags::NO_TILDE
-                            } else {
-                                EscapeFlags::empty()
-                            }
-                    ),
-                    L!($expected)
-                );
-            };
-        }
-
-        validate!("abc~def", None, false, "'abc~def'");
-        validate!("abc~def", None, true, "abc~def");
-        validate!("~abc", None, false, "'~abc'");
-        validate!("~abc", None, true, "~abc");
-
-        // These are "raw string literals"
-        validate_no_quoted!("abc", None, false, "abc");
-        validate_no_quoted!("abc~def", None, false, "abc\\~def");
-        validate_no_quoted!("abc~def", None, true, "abc~def");
-        validate_no_quoted!("abc\\~def", None, false, "abc\\\\\\~def");
-        validate_no_quoted!("abc\\~def", None, true, "abc\\\\~def");
-        validate_no_quoted!("~abc", None, false, "\\~abc");
-        validate_no_quoted!("~abc", None, true, "~abc");
-        validate_no_quoted!("~abc|def", None, false, "\\~abc\\|def");
-        validate_no_quoted!("|abc~def", None, false, "\\|abc\\~def");
-        validate_no_quoted!("|abc~def", None, true, "\\|abc~def");
-        validate_no_quoted!("foo\nbar", None, false, "foo\\nbar");
-
-        // Note tildes are not expanded inside quotes, so no_tilde is ignored with a quote.
-        validate_no_quoted!("abc", Some('\''), false, "abc");
-        validate_no_quoted!("abc\\def", Some('\''), false, "abc\\\\def");
-        validate_no_quoted!("abc'def", Some('\''), false, "abc\\'def");
-        validate_no_quoted!("~abc'def", Some('\''), false, "~abc\\'def");
-        validate_no_quoted!("~abc'def", Some('\''), true, "~abc\\'def");
-        validate_no_quoted!("foo\nba'r", Some('\''), false, "foo'\\n'ba\\'r");
-        validate_no_quoted!("foo\\\\bar", Some('\''), false, "foo\\\\\\\\bar");
-
-        validate_no_quoted!("abc", Some('"'), false, "abc");
-        validate_no_quoted!("abc\\def", Some('"'), false, "abc\\\\def");
-        validate_no_quoted!("~abc'def", Some('"'), false, "~abc'def");
-        validate_no_quoted!("~abc'def", Some('"'), true, "~abc'def");
-        validate_no_quoted!("foo\nba'r", Some('"'), false, "foo\"\\n\"ba'r");
-        validate_no_quoted!("foo\\\\bar", Some('"'), false, "foo\\\\\\\\bar");
-    }
-
-    #[test]
-    #[serial]
     fn test_indents() {
-        let _cleanup = test_init();
+        test_init();
         // A struct which is either text or a new indent.
         struct Segment {
             // The indent to set
@@ -2202,9 +2064,9 @@ mod tests {
             };
         }
 
-        #[rustfmt::skip]
-        #[allow(clippy::redundant_closure_call)]
-        (|| {
+        // TODO: feature(stmt_expr_attributes): use #[rustfmt::skip]
+        #[cfg_attr(any(), rustfmt::skip)]
+        {
             validate!(
                 0, "if", 1, " foo",
                 0, "\nend"
@@ -2406,6 +2268,6 @@ mod tests {
                 0, "\n",
                 0, r#"$()"$() ""#
             );
-        })();
+        }
     }
 }

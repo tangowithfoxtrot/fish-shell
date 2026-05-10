@@ -2,30 +2,33 @@
 //! functions for tracking children. These functions do not themselves launch new processes,
 //! the exec library will call proc to create representations of the running jobs as needed.
 
-use crate::ast;
-use crate::common::{Timepoint, WSL, escape, is_windows_subsystem_for_linux, timef};
-use crate::env::Statuses;
-use crate::event::{self, Event};
-use crate::flog::{flog, flogf};
-use crate::global_safety::RelaxedAtomicBool;
-use crate::io::IoChain;
-use crate::job_group::{JobGroup, MaybeJobId};
-use crate::parse_tree::NodeRef;
-use crate::parser::{Block, Parser};
-use crate::portable_atomic::AtomicU64;
-use crate::prelude::*;
-use crate::reader::{fish_is_unwinding_for_exit, reader_schedule_prompt_repaint};
-use crate::redirection::RedirectionSpecList;
-use crate::signal::{Signal, signal_set_handlers_once};
-use crate::topic_monitor::{GenerationsList, Topic, topic_monitor_principal};
-use crate::wait_handle::{InternalJobId, WaitHandle, WaitHandleRef, WaitHandleStore};
-use crate::wutil::{wbasename, wperror};
+use crate::{
+    ast,
+    common::{WSL, is_windows_subsystem_for_linux},
+    env::Statuses,
+    event::{self, Event},
+    flog::{flog, flogf},
+    global_safety::RelaxedAtomicBool,
+    io::IoChain,
+    job_group::{JobGroup, MaybeJobId},
+    parse_tree::NodeRef,
+    parser::{Block, Parser},
+    portable_atomic::AtomicU64,
+    prelude::*,
+    reader::{fish_is_unwinding_for_exit, reader_schedule_prompt_repaint},
+    redirection::RedirectionSpecList,
+    signal::{Signal, signal_set_handlers_once},
+    topic_monitor::{GenerationsList, Topic, topic_monitor_principal},
+    wait_handle::{WaitHandle, WaitHandleRef, WaitHandleStore},
+    wutil::{perror_nix, wbasename},
+};
 use cfg_if::cfg_if;
+use fish_common::{Timepoint, escape, timef};
 use fish_widestring::ToWString;
 use libc::{
     _SC_CLK_TCK, EXIT_SUCCESS, SIG_IGN, SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGINT, SIGPIPE, SIGQUIT,
     SIGSEGV, SIGSYS, SIGTTOU, STDOUT_FILENO, WCONTINUED, WEXITSTATUS, WIFCONTINUED, WIFEXITED,
-    WIFSIGNALED, WIFSTOPPED, WNOHANG, WTERMSIG, WUNTRACED,
+    WIFSIGNALED, WIFSTOPPED, WNOHANG, WSTOPSIG, WTERMSIG, WUNTRACED,
 };
 use nix::{
     sys::{
@@ -34,14 +37,18 @@ use nix::{
     },
     unistd::getpgrp,
 };
-use std::cell::{Cell, Ref, RefCell, RefMut};
-use std::fs;
-use std::io::{Read, Write};
-use std::num::NonZeroU32;
-use std::os::fd::RawFd;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::{
+    cell::{Cell, Ref, RefCell, RefMut},
+    fs,
+    io::Write as _,
+    num::NonZeroU32,
+    os::fd::RawFd,
+    rc::Rc,
+    sync::{
+        Arc, LazyLock, Mutex, OnceLock,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 /// Types of processes.
 #[derive(Default)]
@@ -150,7 +157,7 @@ impl ProcStatus {
         assert!(
             ret >= 0,
             "trying to create proc_status_t from failed waitid()/waitpid() call \
-               or invalid builtin exit code!"
+            or invalid builtin exit code!"
         );
 
         const {
@@ -195,6 +202,11 @@ impl ProcStatus {
         WIFSIGNALED(self.status())
     }
 
+    pub fn stop_signal(&self) -> libc::c_int {
+        assert!(self.stopped(), "Process is not signal stopped");
+        WSTOPSIG(self.status())
+    }
+
     /// Return the signal code, given that we signal exited.
     pub fn signal_code(&self) -> libc::c_int {
         assert!(self.signal_exited(), "Process is not signal exited");
@@ -218,8 +230,10 @@ impl ProcStatus {
             128 + self.signal_code()
         } else if self.normal_exited() {
             i32::from(self.exit_code())
+        } else if self.stopped() {
+            128 + self.stop_signal()
         } else {
-            panic!("Process is not exited")
+            panic!("Unsupported status value")
         }
     }
 }
@@ -301,6 +315,14 @@ impl Pid {
     #[inline(always)]
     pub fn as_nix_pid(&self) -> nix::unistd::Pid {
         nix::unistd::Pid::from_raw(self.as_pid_t())
+    }
+
+    #[inline(always)]
+    // The nix Pid type does not guarantee non-zero values.
+    // It is safe to use this on the result of nix's getpid, since getpid does not fail, and the ID
+    // of the calling process is never 0.
+    pub fn from_nix_pid_unchecked(pid: nix::unistd::Pid) -> Self {
+        Self::new(pid.as_raw())
     }
 }
 
@@ -519,7 +541,7 @@ impl Process {
     }
 
     /// Return the wait handle for the process, if it exists.
-    pub fn get_wait_handle(&self) -> Option<WaitHandleRef> {
+    pub fn wait_handle(&self) -> Option<WaitHandleRef> {
         self.wait_handle.borrow().clone()
     }
 
@@ -543,7 +565,7 @@ impl Process {
                 wbasename(&self.actual_cmd.clone()).to_owned(),
             )));
         }
-        self.get_wait_handle()
+        self.wait_handle()
     }
 }
 
@@ -585,6 +607,11 @@ pub struct JobFlags {
     pub is_group_root: bool,
 }
 
+/// The non user-visible, never-recycled job ID.
+/// Every job has a unique positive value for this.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord)]
+pub struct InternalJobId(u64);
+
 /// A struct representing a job. A job is a pipeline of one or more processes.
 #[derive(Default)]
 pub struct Job {
@@ -611,11 +638,11 @@ pub struct Job {
 
 impl Job {
     pub fn new(properties: JobProperties, command_str: WString) -> Self {
-        static NEXT_INTERNAL_JOB_ID: AtomicU64 = AtomicU64::new(0);
+        static NEXT_INTERNAL_JOB_ID: AtomicU64 = AtomicU64::new(1);
         Job {
             properties,
             command_str,
-            internal_job_id: NEXT_INTERNAL_JOB_ID.fetch_add(1, Ordering::Relaxed),
+            internal_job_id: InternalJobId(NEXT_INTERNAL_JOB_ID.fetch_add(1, Ordering::Relaxed)),
             ..Default::default()
         }
     }
@@ -655,7 +682,7 @@ impl Job {
             // Can't reap twice.
             p.is_completed() ||
             // Can't reap the group leader in an under-construction job.
-            (!self.is_constructed() && self.get_pgid() == p.pid())
+            (!self.is_constructed() && self.pgid() == p.pid())
         )
     }
 
@@ -676,14 +703,14 @@ impl Job {
 
     /// Return our pgid, or none if we don't have one, or are internal to fish
     /// This never returns fish's own pgroup.
-    pub fn get_pgid(&self) -> Option<Pid> {
-        self.group().get_pgid()
+    pub fn pgid(&self) -> Option<Pid> {
+        self.group().pgid()
     }
 
     /// Return the pid of the last external process in the job.
     /// This may be none if the job consists of just internal fish functions or builtins.
     /// This will never be fish's own pid.
-    pub fn get_last_pid(&self) -> Option<Pid> {
+    pub fn last_pid(&self) -> Option<Pid> {
         self.external_procs().last().and_then(|proc| proc.pid())
     }
 
@@ -699,7 +726,7 @@ impl Job {
     }
 
     /// Access mutable job flags.
-    pub fn mut_flags(&self) -> RefMut<'_, JobFlags> {
+    pub fn flags_mut(&self) -> RefMut<'_, JobFlags> {
         self.job_flags.borrow_mut()
     }
 
@@ -721,7 +748,7 @@ impl Job {
     /// Mark this job as constructed. The job must not have previously been marked as constructed.
     pub fn mark_constructed(&self) {
         assert!(!self.is_constructed(), "Job was already constructed");
-        self.mut_flags().constructed = true;
+        self.flags_mut().constructed = true;
     }
 
     /// Return whether we have internal or external procs, respectively.
@@ -821,7 +848,7 @@ impl Job {
             let procs = self.processes();
             let p = procs.last().unwrap();
             if p.status().normal_exited() || p.status().signal_exited() {
-                if let Some(statuses) = self.get_statuses() {
+                if let Some(statuses) = self.statuses() {
                     parser.set_last_statuses(statuses);
                     parser.libdata_mut().status_count += 1;
                 }
@@ -832,7 +859,7 @@ impl Job {
     /// Prepare to resume a stopped job by sending SIGCONT and clearing the stopped flag.
     /// Return true on success, false if we failed to send the signal.
     pub fn resume(&self) -> bool {
-        self.mut_flags().notified_of_stop = false;
+        self.flags_mut().notified_of_stop = false;
         if !self.signal(NixSignal::SIGCONT) {
             flogf!(
                 proc_pgroup,
@@ -852,10 +879,9 @@ impl Job {
     /// Send the specified signal to all processes in this job.
     /// Return true on success, false on failure.
     pub fn signal(&self, signal: NixSignal) -> bool {
-        if let Some(pgid) = self.group().get_pgid() {
-            if killpg(pgid.as_nix_pid(), signal).is_err() {
-                let strsignal = signal.as_str();
-                wperror(&sprintf!("killpg(%d, %s)", pgid, strsignal));
+        if let Some(pgid) = self.group().pgid() {
+            if let Err(err) = killpg(pgid.as_nix_pid(), signal) {
+                perror_nix(&format!("killpg({pgid}, {})", signal.as_str()), err);
                 return false;
             }
         } else {
@@ -870,7 +896,7 @@ impl Job {
     }
 
     /// Returns the statuses for this job.
-    pub fn get_statuses(&self) -> Option<Statuses> {
+    pub fn statuses(&self) -> Option<Statuses> {
         let mut st = Statuses::default();
         let mut has_status = false;
         let mut laststatus = 0;
@@ -1018,14 +1044,9 @@ pub fn proc_get_jiffies(inpid: Pid) -> ClockTicks {
     }
 
     let filename = format!("/proc/{}/stat", inpid);
-    let Ok(mut f) = fs::File::open(filename) else {
+    let Ok(buf) = fs::read(filename) else {
         return 0;
     };
-
-    let mut buf = vec![];
-    if f.read_to_end(&mut buf).is_err() {
-        return 0;
-    }
 
     let mut timesstrs = buf.split(|c| *c == b' ').skip(13);
     let mut sum = 0;
@@ -1111,7 +1132,7 @@ pub fn hup_jobs(jobs: &JobList) {
     let fish_pgrp = getpgrp();
     let mut kill_list = Vec::new();
     for j in jobs {
-        let Some(pgid) = j.get_pgid() else { continue };
+        let Some(pgid) = j.pgid() else { continue };
         if pgid.as_nix_pid() != fish_pgrp && !j.is_completed() {
             j.signal(NixSignal::SIGHUP);
             if j.is_stopped() {
@@ -1193,12 +1214,12 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool, block_io: Opt
             if proc.has_pid() {
                 // Reaps with a pid.
                 reapgens.set_min_from(Topic::SigChld, &proc.gens);
-                reapgens.set_min_from(Topic::SigHupInt, &proc.gens);
+                reapgens.set_min_from(Topic::SigHupIntTerm, &proc.gens);
             }
             if proc.internal_proc.borrow().is_some() {
                 // Reaps with an internal process.
                 reapgens.set_min_from(Topic::InternalExit, &proc.gens);
-                reapgens.set_min_from(Topic::SigHupInt, &proc.gens);
+                reapgens.set_min_from(Topic::SigHupIntTerm, &proc.gens);
             }
         }
     }
@@ -1221,7 +1242,7 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool, block_io: Opt
             }
 
             // Always update the signal hup/int gen.
-            proc.gens.sighupint.set(reapgens.sighupint.get());
+            proc.gens.sighupintterm.set(reapgens.sighupintterm.get());
 
             // Nothing to do if we did not get a new sigchld.
             if proc.gens.sigchld == reapgens.sigchld {
@@ -1251,7 +1272,7 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool, block_io: Opt
                 j.group().set_is_foreground(false);
             }
             if status.continued() {
-                j.mut_flags().notified_of_stop = false;
+                j.flags_mut().notified_of_stop = false;
             }
             if status.normal_exited() || status.signal_exited() {
                 flogf!(
@@ -1290,7 +1311,7 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool, block_io: Opt
             }
 
             // Always update the signal hup/int gen.
-            proc.gens.sighupint.set(reapgens.sighupint.get());
+            proc.gens.sighupintterm.set(reapgens.sighupintterm.get());
 
             // Nothing to do if we did not get a new internal exit.
             if proc.gens.internal_exit == reapgens.internal_exit {
@@ -1357,7 +1378,7 @@ fn generate_job_exit_events(j: &Job, out_evts: &mut Vec<Event>) {
     if !j.from_event_handler() || !j.is_foreground() {
         // job_exit events.
         if j.posts_job_exit_events() {
-            if let Some(last_pid) = j.get_last_pid() {
+            if let Some(last_pid) = j.last_pid() {
                 out_evts.push(Event::job_exit(last_pid, j.internal_job_id));
             }
         }
@@ -1420,7 +1441,7 @@ fn job_or_proc_wants_summary(j: &Job) -> bool {
 fn call_job_summary(parser: &Parser, cmd: &wstr) {
     let event = Event::generic(L!("fish_job_summary").to_owned());
     let b = parser.push_block(Block::event_block(event));
-    let saved_status = parser.get_last_statuses();
+    let saved_status = parser.last_statuses();
     parser.eval(cmd, &IoChain::new());
     parser.set_last_statuses(saved_status);
     parser.pop_block(b);
@@ -1465,7 +1486,7 @@ fn summary_command(j: &Job, p: Option<&Process>) -> WString {
             if j.external_procs().count() > 1 {
                 // I don't think it's safe to blindly unwrap here because even though we exited with
                 // a signal, the job could have contained a fish function?
-                let pid = p.pid().map_or("-".to_string(), |p| p.to_string());
+                let pid = p.pid().map_or("-".to_owned(), |p| p.to_string());
                 buffer += &sprintf!(" %s", pid)[..];
 
                 buffer.push(' ');
@@ -1525,7 +1546,7 @@ fn save_wait_handle_for_completed_job(job: &Job, store: &mut WaitHandleStore) {
 
     // Mark all wait handles as complete (but don't create just for this).
     for proc in job.processes().iter() {
-        if let Some(wh) = proc.get_wait_handle() {
+        if let Some(wh) = proc.wait_handle() {
             wh.set_status_and_complete(proc.status().status_value());
         }
     }
@@ -1569,7 +1590,7 @@ fn process_clean_after_marking(parser: &Parser, interactive: bool) -> bool {
             && should_process_job(j)
             && job_wants_summary(j)
         {
-            j.mut_flags().notified_of_stop = true;
+            j.flags_mut().notified_of_stop = true;
             jobs_to_summarize.push(j.clone());
         }
     }

@@ -1,9 +1,15 @@
 //! Generic utilities library.
 
+use errno::errno;
 use fish_widestring::prelude::*;
-use rand::{SeedableRng, rngs::SmallRng};
-use std::cmp::Ordering;
-use std::time;
+use rand::{SeedableRng as _, rngs::SmallRng};
+use std::{
+    cmp::Ordering,
+    ffi::CStr,
+    io::Write as _,
+    os::fd::{BorrowedFd, RawFd},
+    time,
+};
 
 /// Compares two wide character strings with an (arguably) intuitive ordering. This function tries
 /// to order strings in a way which is intuitive to humans with regards to sorting strings
@@ -57,14 +63,23 @@ pub fn wcsfilecmp(a: &wstr, b: &wstr) -> Ordering {
             continue;
         }
 
-        // Sort dashes after Z - see #5634
-        let mut acl = if ac == '-' { '[' } else { ac };
-        let mut bcl = if bc == '-' { '[' } else { bc };
+        let transform = |c| {
+            // Sort dashes after Z - see #5634
+            if c == '-' {
+                return '[';
+            }
+            if c == '/' {
+                return '\0';
+            }
+            c
+        };
+        let ac = transform(ac);
+        let bc = transform(bc);
         // TODO Compare the tail (enabled by Rust's Unicode support).
-        acl = acl.to_uppercase().next().unwrap();
-        bcl = bcl.to_uppercase().next().unwrap();
+        let ac = ac.to_uppercase().next().unwrap();
+        let bc = bc.to_uppercase().next().unwrap();
 
-        match acl.cmp(&bcl) {
+        match ac.cmp(&bc) {
             Ordering::Equal => {
                 ai += 1;
                 bi += 1;
@@ -127,9 +142,9 @@ pub fn wcsfilecmp_glob(a: &wstr, b: &wstr) -> Ordering {
         }
 
         // TODO Compare the tail (enabled by Rust's Unicode support).
-        let acl = ac.to_lowercase().next().unwrap();
-        let bcl = bc.to_lowercase().next().unwrap();
-        match acl.cmp(&bcl) {
+        let ac = ac.to_lowercase().next().unwrap();
+        let bc = bc.to_lowercase().next().unwrap();
+        match ac.cmp(&bc) {
             Ordering::Equal => {
                 ai += 1;
                 bi += 1;
@@ -234,6 +249,26 @@ fn wcsfilecmp_leading_digits(a: &wstr, b: &wstr) -> (Ordering, usize, usize) {
     (ret, ai, bi)
 }
 
+pub fn write_to_fd(input: &[u8], fd: RawFd) -> nix::Result<usize> {
+    nix::unistd::write(unsafe { BorrowedFd::borrow_raw(fd) }, input)
+}
+
+/// Prints the provided string, followed by a colon, space, and the string representation of the
+/// current errno via [`libc::strerror`].
+pub fn perror(s: &str) {
+    let e = errno().0;
+    let mut stderr = std::io::stderr().lock();
+    if !s.is_empty() {
+        let _ = write!(stderr, "{s}: ");
+    }
+    let slice = unsafe {
+        let msg = libc::strerror(e);
+        CStr::from_ptr(msg).to_bytes()
+    };
+    let _ = stderr.write_all(slice);
+    let _ = stderr.write_all(b"\n");
+}
+
 #[cfg(test)]
 mod tests {
     use super::wcsfilecmp;
@@ -288,5 +323,8 @@ mod tests {
         validate!("a00b", "a0b", Ordering::Less);
         validate!("a0b", "a00b", Ordering::Greater);
         validate!("a-b", "azb", Ordering::Greater);
+        validate!("a", "a b", Ordering::Less);
+        validate!("a/", "a b/", Ordering::Less);
+        validate!("a/b", "a b", Ordering::Less); // Note this is arbitrary.
     }
 }
