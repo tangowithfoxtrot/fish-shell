@@ -166,8 +166,11 @@ impl<'args> StringSubCommand<'args> for Shorten<'args> {
 
                     pos += skip_escapes(&line, pos).max(1);
                 }
-                if self.quiet && pos != 0 {
-                    return Ok(());
+                if self.quiet {
+                    if pos != 0 {
+                        return Ok(());
+                    }
+                    continue;
                 }
 
                 let output = match pos {
@@ -215,8 +218,11 @@ impl<'args> StringSubCommand<'args> for Shorten<'args> {
                 }
             }
 
-            if self.quiet && pos != line.len() {
-                return Ok(());
+            if self.quiet {
+                if pos != line.len() {
+                    return Ok(());
+                }
+                continue;
             }
 
             if pos == line.len() {

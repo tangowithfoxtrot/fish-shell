@@ -1064,6 +1064,14 @@ string shorten -m 2 foo
 string shorten -m 5 foobar
 # CHECK: foob…
 
+# Should produce no output and return false because there was nothing to shorten.
+string shorten -m 2 -q 12
+echo $status
+# CHECK: 1
+string shorten -lm 2 -q 12
+echo $status
+# CHECK: 1
+
 # Char is longer than width, we truncate instead.
 string shorten -m 5 --char ........ foobar
 # CHECK: fooba
