@@ -74349,6 +74349,9 @@ msgstr ""
 msgid "configure the Salesforce CLI"
 msgstr ""
 
+msgid "connect adb to the Android container"
+msgstr ""
+
 msgid "connect to a custom bus"
 msgstr ""
 
@@ -74437,6 +74440,9 @@ msgid "create a Visualforce page"
 msgstr ""
 
 msgid "create a backup of one or several jails"
+msgstr ""
+
+msgid "create a bugreport archive interactively"
 msgstr ""
 
 msgid "create a bundle for an Aura component or a Lightning web component"
@@ -74785,6 +74791,9 @@ msgid "disables timeouts, given implicitly with --debug"
 msgstr ""
 
 msgid "discard uncommitted changes (no backup)"
+msgstr ""
+
+msgid "disconnect adb from the Android container"
 msgstr ""
 
 msgid "disconnect and wait for reassociate command before connecting"
@@ -77025,6 +77034,9 @@ msgstr ""
 msgid "make vendored copy of dependencies"
 msgstr ""
 
+msgid "manage adb connection"
+msgstr ""
+
 msgid "manage and query devices in the filesystem"
 msgstr ""
 
@@ -78841,6 +78853,9 @@ msgid "run as a headless session (requires -s)"
 msgstr ""
 
 msgid "run as if started in dir"
+msgstr ""
+
+msgid "run as user mode, connecting to the remote initializer service"
 msgstr ""
 
 msgid "run command"
