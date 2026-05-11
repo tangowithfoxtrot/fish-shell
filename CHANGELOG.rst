@@ -1,6 +1,11 @@
 fish ?.?.? (released ???)
 =========================
 
+Interactive improvements
+------------------------
+- On the first run after upgrading from an older version, fish will try harder to check if the current theme matches a historical default, in which case fish won't create ``~/.config/fish/conf.d/fish_frozen_theme.fish``.
+  This means that on systems where fish version 3.x was installed originally, the update will avoid creating that file (:issue:`12725`).
+
 fish 4.7.1 (released May 08, 2026)
 ==================================
 
