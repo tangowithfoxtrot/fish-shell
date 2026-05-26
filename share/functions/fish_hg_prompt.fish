@@ -36,6 +36,9 @@ function fish_hg_prompt --description 'Write out the hg prompt'
         set branch "$branch|$bookmark"
     end
 
+    # Strip control characters for display.
+    set branch (string replace -ra '[[:cntrl:]]' '' -- $branch)
+
     if not set -q fish_prompt_hg_show_informative_status
         set_color --reset
         echo -n " ($branch)"
