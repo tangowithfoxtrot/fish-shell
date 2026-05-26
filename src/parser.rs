@@ -11,6 +11,7 @@ use crate::{
     },
     event::{self, Event},
     expand::{ExpandFlags, ExpandResultCode, expand_string, replace_home_directory_with_tilde},
+    fds::{BEST_O_SEARCH, open_dir},
     flog, flogf, function,
     io::IoChain,
     job_group::MaybeJobId,
@@ -25,6 +26,7 @@ use crate::{
     proc::{InternalJobId, JobGroupRef, JobList, JobRef, Pid, ProcStatus, job_reap},
     signal::{RawSignal, signal_check_cancel, signal_clear_cancel},
     wait_handle::WaitHandleStore,
+    wutil::perror_nix,
 };
 use assert_matches::assert_matches;
 use fish_common::{
@@ -38,6 +40,7 @@ use std::fs::File;
 use std::io::Write as _;
 use std::num::NonZeroU32;
 use std::ops::DerefMut;
+use std::os::fd::OwnedFd;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -271,6 +274,16 @@ pub struct LibraryData {
     /// the command line.
     pub transient_commandline: ScopedRefCell<Option<WString>>,
 
+    /// A file descriptor holding the current working directory.
+    /// Note that the long-term design of fish will implement subshells using threads;
+    /// these subshells necessarily may have distinct CWDs. The process-wide CWD is only
+    /// used for transitory checks, such as surrounding fork().
+    /// fish code should generally NOT assume that the process-wide CWD matches this.
+    /// Either resolve full paths, or use the _at() family of syscalls with this fd.
+    /// This is never null and never invalid except in crazy error conditions
+    /// (e.g. starting fish in a chmod 000 directory) which have yet to be rationalized.
+    pub cwd_fd: Option<Arc<OwnedFd>>,
+
     /// Variables supporting the "status" builtin.
     pub status_vars: StatusVars,
 
@@ -443,7 +456,7 @@ impl ParserEnvSetMode {
 impl Parser {
     /// Create a parser.
     pub fn new(variables: EnvStack, cancel_behavior: CancelBehavior) -> Parser {
-        let result = Self {
+        let mut result = Self {
             interactive_initialized: false,
             current_node: ScopedRefCell::new(None),
             current_filename: ScopedRefCell::new(None),
@@ -461,6 +474,15 @@ impl Parser {
             #[cfg(test)]
             test_only_suppress_stderr: false,
         };
+
+        match open_dir(c".", BEST_O_SEARCH) {
+            Ok(fd) => {
+                result.libdata_mut().cwd_fd = Some(Arc::new(fd));
+            }
+            Err(err) => {
+                perror_nix("Unable to open the current working directory", err);
+            }
+        }
 
         result
     }
