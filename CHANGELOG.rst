@@ -11,6 +11,7 @@ Interactive improvements
   This means that on systems where fish version 3.x was installed originally, the update will avoid creating that file (:issue:`12725`).
 - ``fish_hg_prompt``, ``fish_git_prompt`` and ``fish_fossil_prompt`` now strip control characters from VCS state read off disk, matching ``prompt_pwd``.
 - The sample informative and minimalist prompts now use ``prompt_pwd`` instead of printing ``$PWD`` directly.
+- ``bind`` shows the file where bindings were defined (:issue:`12504`).
 
 For distributors and developers
 -------------------------------
@@ -28,7 +29,8 @@ For distributors and developers
 
 Regression fixes:
 -----------------
-- (from 4.4) Vi mode ``x`` in :doc:`builtin read <cmds/read>` (:issue:`12724`).
+- (from 4.4.0) Vi mode ``c,W`` key binding wrongly deleted trailing spaces (:issue:`12790`).
+- (from 4.4.0) Vi mode ``x`` in :doc:`builtin read <cmds/read>` (:issue:`12724`).
 - (from 4.3.3) Repeated tab would sometimes insert smartcase completions redundantly.
 
 fish 4.7.1 (released May 08, 2026)
