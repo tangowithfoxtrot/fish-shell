@@ -1,5 +1,5 @@
 use crate::{
-    abbrs::with_abbrs,
+    abbrs::{Position, with_abbrs},
     ast::unescape_keyword,
     autoload::{Autoload, AutoloadResult},
     builtins::shared::{builtin_exists, builtin_get_desc, builtin_get_names},
@@ -689,7 +689,7 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
                 return;
             }
             self.complete_cmd(WString::new());
-            self.complete_abbr(WString::new());
+            self.complete_abbr(L!(""), true);
             return;
         };
 
@@ -744,9 +744,8 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
                 return;
             }
             // Complete command filename.
-            let current_token = current_token.to_owned();
-            self.complete_abbr(current_token.clone());
-            self.complete_cmd(current_token);
+            self.complete_abbr(current_token, true);
+            self.complete_cmd(current_token.to_owned());
             return;
         }
         // See whether we are in an argument, in a redirection or in the whitespace in between.
@@ -785,10 +784,17 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
             }
         }
 
-        let mut do_file = false;
+        #[derive(Eq, PartialEq)]
+        enum DoFile {
+            No,
+            Yes,
+            Only,
+        }
+
+        let mut do_file = DoFile::No;
         let mut handle_as_special_cd = false;
         if in_redirection {
-            do_file = true;
+            do_file = DoFile::Only;
         } else {
             // Try completing as an argument.
             let mut arg_data = CustomArgData::new(&mut var_assignments);
@@ -818,11 +824,15 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
                     command_range,
                     &mut arg_data,
                 );
-                do_file = arg_data.do_file;
+                do_file = if arg_data.do_file {
+                    DoFile::Yes
+                } else {
+                    DoFile::No
+                };
 
                 // If we're autosuggesting, and the token is empty, don't do file suggestions.
                 if is_autosuggest && arg_data.current_argument.is_empty() {
-                    do_file = false;
+                    do_file = DoFile::No;
                 }
             }
 
@@ -834,10 +844,14 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
         // Maybe apply variable assignments.
         let block = self.apply_var_assignments(&var_assignments);
         if !self.ctx.check_cancel() {
+            if do_file != DoFile::Only {
+                self.complete_abbr(current_argument, false);
+            }
+
             // This function wants the unescaped string.
             self.complete_param_expand(
                 current_argument,
-                do_file,
+                do_file != DoFile::No,
                 handle_as_special_cd,
                 cur_tok.is_unterminated_brace,
             );
@@ -1145,15 +1159,18 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
         }
     }
 
-    /// Attempt to complete an abbreviation for the given string.
-    fn complete_abbr(&mut self, cmd: WString) {
+    /// Attempt to complete a non-regex abbreviation for the given string.
+    fn complete_abbr(&mut self, cmd: &wstr, is_command_position: bool) {
         // Copy the list of names and descriptions so as not to hold the lock across the call to
         // complete_strings.
         let mut possible_comp = Vec::new();
         let mut descs = HashMap::new();
         with_abbrs(|set| {
             for abbr in set.list() {
-                if !abbr.is_regex() {
+                if abbr.is_regex() {
+                    continue;
+                }
+                if abbr.position == Position::Anywhere || is_command_position {
                     possible_comp.push(Completion::from_completion(abbr.key.clone()));
                     descs.insert(abbr.key.clone(), abbr.replacement.clone());
                 }
@@ -1165,7 +1182,7 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
             wgettext_fmt!(ABBR_DESC, replacement)
         };
         self.complete_strings(
-            &cmd,
+            cmd,
             &{ Box::new(desc_func) as _ },
             &possible_comp,
             CompleteFlags::NO_SPACE,
@@ -3195,6 +3212,7 @@ mod tests {
 
         complete_remove_wrapper(L!("cdwrap1").into(), L!("cd"));
         complete_remove_wrapper(L!("cdwrap2").into(), L!("cdwrap1"));
+        with_abbrs_mut(|abbrset| abbrset.clear());
         parser.popd(pushed_dirs);
     }
 
