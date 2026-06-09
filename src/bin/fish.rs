@@ -20,16 +20,11 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 use fish::{
     ast,
     builtins::{
-        error::Error,
+        Error, STATUS_CMD_ERROR, STATUS_CMD_OK, STATUS_CMD_UNKNOWN, VERSION_STRING_TEMPLATE,
         fish_indent, fish_key_reader,
-        shared::{STATUS_CMD_ERROR, STATUS_CMD_OK, STATUS_CMD_UNKNOWN, VERSION_STRING_TEMPLATE},
     },
     common::{PACKAGE_NAME, PROFILING_ACTIVE, PROGRAM_NAME},
-    env::{
-        EnvMode, Statuses,
-        config_paths::ConfigPaths,
-        environment::{EnvStack, Environment as _, env_init},
-    },
+    env::{EnvMode, EnvStack, Environment as _, Statuses, config_paths::ConfigPaths, env_init},
     eprintf, err_fmt,
     event::{self, Event},
     fds::heightenize_fd,
@@ -44,7 +39,7 @@ use fish::{
     parse_tree::ParsedSource,
     parse_util::detect_parse_errors_in_ast,
     parser::{BlockType, CancelBehavior, Parser, ParserEnvSetMode},
-    path::path_get_config,
+    path::{ValidatedPath, path_get_config},
     prelude::*,
     printf,
     proc::{
@@ -183,10 +178,9 @@ fn read_init(parser: &mut Parser, paths: &ConfigPaths) {
     source_config_in_directory(parser, &osstr2wcstring(&paths.sysconf));
 
     // We need to get the configuration directory before we can source the user configuration file.
-    // If path_get_config returns false then we have no configuration directory and no custom config
-    // to load.
-    if let Some(config_dir) = path_get_config() {
-        source_config_in_directory(parser, &config_dir);
+    let ValidatedPath { path, ok } = path_get_config();
+    if ok {
+        source_config_in_directory(parser, path);
     }
 }
 
@@ -466,11 +460,7 @@ fn throwing_main() -> i32 {
     // If we're not executing, there's no need to find the config.
     let config_paths = if !opts.no_exec {
         let config_paths = ConfigPaths::new();
-        env_init(
-            Some(&config_paths),
-            /* do uvars */ !opts.no_config,
-            /* default paths */ opts.no_config,
-        );
+        env_init(Some(&config_paths), opts.no_config);
         Some(config_paths)
     } else {
         None

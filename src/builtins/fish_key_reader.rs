@@ -12,11 +12,11 @@ use std::ops::ControlFlow;
 use libc::{STDIN_FILENO, VEOF, VINTR};
 
 use crate::{
-    builtins::error::Error,
+    builtins::Error,
     common::{PROGRAM_NAME, get_program_name, shell_modes},
     env::{EnvStack, Environment as _, env_init},
     err_fmt, err_str,
-    input_common::{
+    input::{
         CharEvent, ImplicitEvent, InputEventQueue, InputEventQueuer as _, KeyEvent,
         QueryResultEvent, match_key_event_to_key,
     },
@@ -287,7 +287,7 @@ fn throwing_main() -> i32 {
     threads::init();
     #[cfg(feature = "localize-messages")]
     crate::localization::initialize_localization();
-    env_init(None, true, false);
+    env_init(None, false);
     reader_init(false);
     if let Some(features_var) = EnvStack::globals().get(L!("fish_features")) {
         for s in features_var.as_list() {

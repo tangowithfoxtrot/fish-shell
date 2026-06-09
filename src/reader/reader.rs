@@ -25,7 +25,7 @@ use super::{
 use crate::{
     abbrs::{self, abbrs_match},
     ast::{self, Kind, is_same_node},
-    builtins::shared::{ErrorCode, STATUS_CMD_ERROR, STATUS_CMD_OK},
+    builtins::{ErrorCode, STATUS_CMD_ERROR, STATUS_CMD_OK},
     common::{get_program_name, shell_modes},
     complete::{
         CompleteFlags, Completion, CompletionList, CompletionRequestOptions, complete,
@@ -53,7 +53,7 @@ use crate::{
         History, HistoryId, HistorySearch, MemoryHistoryId, PersistenceMode, SearchDirection,
         SearchFlags, SearchType, history_id, in_private_mode,
     },
-    input_common::{
+    input::{
         BackgroundColorQuery, CharEvent, CharInputStyle, CursorPositionQuery,
         CursorPositionQueryReason, ImplicitEvent, InputData, InputEventQueue,
         InputEventQueuer as _, LONG_READ_TIMEOUT, QueryResponse, QueryResultEvent, ReadlineCmd,
@@ -82,7 +82,6 @@ use crate::{
     },
     reader::word_motion::bigword_class,
     screen::{CharOffset, Screen, is_dumb, screen_force_clear_to_end},
-    should_flog,
     signal::{
         signal_check_cancel, signal_clear_cancel, signal_reset_handlers, signal_set_handlers,
         signal_set_handlers_once,
@@ -333,6 +332,8 @@ pub fn terminal_init(vars: &dyn Environment, inputfd: RawFd) -> TerminalInitResu
     // We blocked execution of code and mappings so input function args must be empty.
     assert!(input_data.input_function_args.is_empty());
     assert!(input_data.event_storage.is_empty());
+    // N.B We might drop bracketed paste data here but that's unlikely since we didn't ask for
+    // it yet.
     flogf!(
         reader,
         "Returning %u pending input events",
@@ -2989,13 +2990,6 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn send_xtgettcap_query(out: &mut Outputter, cap: &'static str) {
-    if should_flog!(reader) {
-        flog!(reader, format!("Sending XTGETTCAP request for {}:", cap));
-    }
-    out.write_command(QueryXtgettcap(cap));
-}
-
 fn query_capabilities_via_dcs(out: &mut Outputter, vars: &dyn Environment) {
     // TODO(term-workaround)
     if vars.get_unless_empty(L!("STY")).is_some()
@@ -3007,8 +3001,8 @@ fn query_capabilities_via_dcs(out: &mut Outputter, vars: &dyn Environment) {
         return;
     }
     out.write_command(DecsetAlternateScreenBuffer); // enable alternative screen buffer
-    send_xtgettcap_query(out, SCROLL_CONTENT_UP_TERMINFO_CODE);
-    send_xtgettcap_query(out, XTGETTCAP_QUERY_OS_NAME);
+    out.write_command(QueryXtgettcap(SCROLL_CONTENT_UP_TERMINFO_CODE));
+    out.write_command(QueryXtgettcap(XTGETTCAP_QUERY_OS_NAME));
     out.write_command(DecrstAlternateScreenBuffer); // disable alternative screen buffer
 }
 
@@ -6447,28 +6441,25 @@ fn reader_shell_test(parser: &Parser, bstr: &wstr) -> Result<(), ParseIssue> {
 }
 
 impl<'a> Reader<'a> {
-    // Import history from older location (config path) if our current history is empty.
+    // Import history from other shells
     fn import_history_if_necessary(&mut self) {
-        if self.history.is_empty() {
-            self.history.populate_from_config_path();
-        }
-
         // Import history from bash, etc. if our current history is still empty and is the default
         // history.
-        if self.history.is_empty() && self.history.is_default() {
-            // Try opening a bash file. We make an effort to respect $HISTFILE; this isn't very complete
-            // (AFAIK it doesn't have to be exported), and to really get this right we ought to ask bash
-            // itself. But this is better than nothing.
-            let var = self.vars().get(L!("HISTFILE"));
-            let mut path =
-                var.map_or_else(|| L!("~/.bash_history").to_owned(), |var| var.as_string());
-            expand_tilde(&mut path, self.vars());
-
-            let Ok(file) = wopen_cloexec(&path, OFlag::O_RDONLY, Mode::empty()) else {
-                return;
-            };
-            self.history.populate_from_bash(BufReader::new(file));
+        if !self.history.is_empty() || !self.history.is_default() {
+            return;
         }
+
+        // Try opening a bash file. We make an effort to respect $HISTFILE; this isn't very complete
+        // (AFAIK it doesn't have to be exported), and to really get this right we ought to ask bash
+        // itself. But this is better than nothing.
+        let var = self.vars().get(L!("HISTFILE"));
+        let mut path = var.map_or_else(|| L!("~/.bash_history").to_owned(), |var| var.as_string());
+        expand_tilde(&mut path, self.vars());
+
+        let Ok(file) = wopen_cloexec(&path, OFlag::O_RDONLY, Mode::empty()) else {
+            return;
+        };
+        self.history.populate_from_bash(BufReader::new(file));
     }
 
     fn should_add_to_history(&mut self, text: &wstr) -> bool {
@@ -6590,7 +6581,7 @@ fn try_expand_wildcard(
         comp_end += 1;
     }
     if !wildcard_has(&wc[comp_start..comp_end]) {
-        return ExpandResultCode::wildcard_no_match;
+        return ExpandResultCode::WildcardNoMatch;
     }
     result.clear();
     // Have a low limit on the number of matches, otherwise we will overwhelm the command line.
@@ -6612,7 +6603,7 @@ fn try_expand_wildcard(
         | ExpandFlags::PRESERVE_HOME_TILDES;
     let mut expanded = CompletionList::new();
     let ret = expand_string(wc, &mut expanded, flags, ctx, None);
-    if ret.result != ExpandResultCode::ok {
+    if ret.result != ExpandResultCode::Ok {
         return ret.result;
     }
 
@@ -6636,7 +6627,7 @@ fn try_expand_wildcard(
     }
 
     *result = joined;
-    ExpandResultCode::ok
+    ExpandResultCode::Ok
 }
 
 /// Test if the specified character in the specified string is backslashed. pos may be at the end of
@@ -6952,19 +6943,19 @@ impl<'a> Reader<'a> {
             position_in_token,
             &mut wc_expanded,
         ) {
-            ExpandResultCode::error => {}
-            ExpandResultCode::overflow => {
+            ExpandResultCode::Error => {}
+            ExpandResultCode::Overflow => {
                 // This may come about if we exceeded the max number of matches.
                 // Return "success" to suppress normal completions.
                 self.flash(token_range);
                 return;
             }
-            ExpandResultCode::wildcard_no_match => {}
-            ExpandResultCode::cancel => {
+            ExpandResultCode::WildcardNoMatch => {}
+            ExpandResultCode::Cancel => {
                 // e.g. the user hit control-C. Suppress normal completions.
                 return;
             }
-            ExpandResultCode::ok => {
+            ExpandResultCode::Ok => {
                 self.rls_mut().completion_action = None;
                 self.push_edit(
                     EditableLineTag::Commandline,

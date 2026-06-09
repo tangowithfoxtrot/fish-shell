@@ -3,9 +3,9 @@
 use super::prelude::*;
 use crate::{
     ast::{self, AsNode as _, Ast, Kind, Leaf as _, Node, NodeVisitor, SourceRangeList, Traversal},
-    builtins::error::Error,
+    builtins::Error,
     common::{PROGRAM_NAME, get_program_name},
-    env::{EnvStack, env_init, environment::Environment as _},
+    env::{EnvStack, Environment as _, env_init},
     err_fmt, err_str,
     global_safety::RelaxedAtomicBool,
     highlight::{HighlightRole, HighlightSpec, colorize, highlight_shell},
@@ -937,7 +937,7 @@ fn throwing_main() -> i32 {
     };
     #[cfg(feature = "localize-messages")]
     crate::localization::initialize_localization();
-    env_init(None, true, false);
+    env_init(None, false);
 
     // Only set these here so you can't set them via the builtin.
     if let Some(features_var) = EnvStack::globals().get(L!("fish_features")) {

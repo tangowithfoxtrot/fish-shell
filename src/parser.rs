@@ -2,7 +2,7 @@
 
 use crate::{
     ast::{self, Node},
-    builtins::shared::STATUS_ILLEGAL_CMD,
+    builtins::STATUS_ILLEGAL_CMD,
     common::{CancelChecker, PROFILING_ACTIVE},
     complete::CompletionList,
     env::{
@@ -742,7 +742,7 @@ impl Parser {
             let arg_src = arg.source(arg_list_src);
             if matches!(
                 expand_string(arg_src.to_owned(), &mut result, flags, ctx, None).result,
-                ExpandResultCode::error | ExpandResultCode::overflow
+                ExpandResultCode::Error | ExpandResultCode::Overflow
             ) {
                 break; // failed to expand a string
             }

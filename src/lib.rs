@@ -3,7 +3,6 @@
     feature(test),
     allow(unused_features)
 )]
-#![allow(non_camel_case_types)]
 
 pub const BUILD_VERSION: &str = env!("FISH_BUILD_VERSION");
 
@@ -36,7 +35,6 @@ pub mod global_safety;
 pub mod highlight;
 pub mod history;
 pub mod input;
-pub mod input_common;
 pub mod io;
 pub mod job_group;
 pub mod key;

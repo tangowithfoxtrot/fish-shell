@@ -49,10 +49,10 @@
 // This file has been imported from source code of printf command in GNU Coreutils version 6.9.
 
 use super::prelude::*;
-use crate::builtins::error;
+use crate::builtins;
 use crate::locale::{Locale, get_numeric_locale};
 use crate::wutil::{
-    errors::Error,
+    self,
     wcstod::wcstod,
     wcstoi::{Options as WcstoiOpts, wcstoi_partial},
     wstr_offset_in,
@@ -76,7 +76,7 @@ fn iswxdigit(c: char) -> bool {
     c.is_ascii_hexdigit()
 }
 
-struct builtin_printf_state_t<'a, 'b> {
+struct State<'a, 'b> {
     // Out and err streams. Note this is a captured reference!
     streams: &'a mut IoStreams<'b>,
 
@@ -105,7 +105,7 @@ trait RawStringToScalarType: Copy + std::convert::From<u32> {
         s: &'a wstr,
         locale: &Locale,
         end: &mut &'a wstr,
-    ) -> Result<Self, Error>;
+    ) -> Result<Self, wutil::Error>;
 
     /// Convert from a Unicode code point to this type.
     /// This supports printf's ability to convert from char to scalar via a leading quote.
@@ -124,7 +124,7 @@ impl RawStringToScalarType for i64 {
         s: &'a wstr,
         _locale: &Locale,
         end: &mut &'a wstr,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, wutil::Error> {
         let mut consumed = 0;
         let res = wcstoi_partial(s, WcstoiOpts::default(), &mut consumed);
         *end = s.slice_from(consumed);
@@ -137,7 +137,7 @@ impl RawStringToScalarType for u64 {
         s: &'a wstr,
         _locale: &Locale,
         end: &mut &'a wstr,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, wutil::Error> {
         let mut consumed = 0;
         let res = wcstoi_partial(
             s,
@@ -157,7 +157,7 @@ impl RawStringToScalarType for f64 {
         s: &'a wstr,
         locale: &Locale,
         end: &mut &'a wstr,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, wutil::Error> {
         let mut consumed: usize = 0;
         let mut result = wcstod(s, locale.decimal_point, &mut consumed);
         if result.is_ok() && consumed == s.chars().count() {
@@ -179,10 +179,7 @@ impl RawStringToScalarType for f64 {
 
 /// Convert a string to a scalar type.
 /// Use state.verify_numeric to report any errors.
-fn string_to_scalar_type<T: RawStringToScalarType>(
-    s: &wstr,
-    state: &mut builtin_printf_state_t,
-) -> T {
+fn string_to_scalar_type<T: RawStringToScalarType>(s: &wstr, state: &mut State) -> T {
     if s.char_at(0) == '"' || s.char_at(0) == '\'' {
         // Note that if the string is really just a leading quote,
         // we really do want to convert the "trailing nul".
@@ -202,17 +199,18 @@ fn modify_allowed_format_specifiers(ok: &mut [bool; 256], str: &str, flag: bool)
     }
 }
 
-impl<'a, 'b> builtin_printf_state_t<'a, 'b> {
+impl<'a, 'b> State<'a, 'b> {
     #[allow(clippy::partialeq_to_none)]
-    fn verify_numeric(&mut self, s: &wstr, end: &wstr, errcode: Option<Error>) {
+    fn verify_numeric(&mut self, s: &wstr, end: &wstr, errcode: Option<wutil::Error>) {
         // This check matches the historic `errcode != EINVAL` check from C++.
         // Note that empty or missing values will be silently treated as 0.
-        if errcode.is_some_and(|err| err != Error::InvalidChar && err != Error::Empty) {
+        if errcode.is_some_and(|err| err != wutil::Error::InvalidChar && err != wutil::Error::Empty)
+        {
             match errcode.unwrap() {
-                Error::Overflow => {
+                wutil::Error::Overflow => {
                     self.fatal_error(err_fmt!("%s: Number out of range", s));
                 }
-                Error::InvalidChar | Error::Empty => {
+                wutil::Error::InvalidChar | wutil::Error::Empty => {
                     unreachable!("Unreachable");
                 }
             }
@@ -559,7 +557,7 @@ impl<'a, 'b> builtin_printf_state_t<'a, 'b> {
         save_argc - argc
     }
 
-    fn nonfatal_error(&mut self, err: error::Error) {
+    fn nonfatal_error(&mut self, err: builtins::Error) {
         // Don't error twice.
         if self.early_exit {
             return;
@@ -582,7 +580,7 @@ impl<'a, 'b> builtin_printf_state_t<'a, 'b> {
         self.exit_code = Err(STATUS_CMD_ERROR);
     }
 
-    fn fatal_error(&mut self, err: error::Error) {
+    fn fatal_error(&mut self, err: builtins::Error) {
         self.nonfatal_error(err);
         self.early_exit = true;
     }
@@ -756,7 +754,7 @@ pub fn printf(_parser: &mut Parser, streams: &mut IoStreams, argv: &mut [&wstr])
         return Err(STATUS_INVALID_ARGS);
     }
 
-    let mut state = builtin_printf_state_t {
+    let mut state = State {
         streams,
         exit_code: Ok(SUCCESS),
         early_exit: false,

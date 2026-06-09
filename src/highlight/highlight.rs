@@ -5,7 +5,7 @@ use crate::{
         self, Argument, BlockStatement, BlockStatementHeader, BraceStatement, DecoratedStatement,
         Keyword, Kind, Node, NodeVisitor, Redirection, Token, VariableAssignment,
     },
-    builtins::shared::builtin_exists,
+    builtins::builtin_exists,
     common::{valid_var_name, valid_var_name_char},
     complete::complete_wrap_map,
     env::{EnvVar, Environment},
@@ -1201,7 +1201,7 @@ fn statement_get_expanded_command(
     let cmd = stmt.command.try_source(src)?;
     let mut out_cmd = WString::new();
     let err = expand_to_command_and_args(cmd, ctx, &mut out_cmd, None, None, false);
-    (err == ExpandResultCode::ok).then_some(out_cmd)
+    (err == ExpandResultCode::Ok).then_some(out_cmd)
 }
 
 fn get_highlight_var_name(role: HighlightRole) -> &'static wstr {

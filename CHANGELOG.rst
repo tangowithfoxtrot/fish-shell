@@ -3,7 +3,7 @@ fish ?.?.? (released ???)
 
 Deprecations and removed features
 ---------------------------------
-- `--command` and `--path` options in `complete` no longer unescape their value.
+- ``--command`` and ``--path`` options in `complete` no longer unescape their argument.
 
 Interactive improvements
 ------------------------
@@ -17,6 +17,8 @@ Interactive improvements
 Other improvements
 ------------------
 - ``cd`` supports the ``-L`` and ``-P`` options, like other shells, to allow specifying whether symbolic links (symlinks) are resolved when changing directories (:issue:`7206`).
+- fish no longer creates universal variables by default; specifically the ``__fish_initialized`` variable is no longer created.
+  If you don't expect to need to downgrade to earlier versions, you can remove it with ``set --erase __fish_initialized``.
 
 For distributors and developers
 -------------------------------
@@ -24,19 +26,20 @@ For distributors and developers
   In particular, this means that both
   ``$CMAKE_INSTALL_PREFIX/share/fish/completions`` and
   ``$CMAKE_INSTALL_PREFIX/share/fish/functions``
-  should now be empty.
-  If another package installs completions or functions to those directories,
-  they should be changed to install to
-  ``extra_completionsdir`` (typically ``$CMAKE_INSTALL_PREFIX/share/fish/vendor_completions.d``) or
-  ``extra_functionsdir`` (typically ``$CMAKE_INSTALL_PREFIX/share/fish/vendor_functions.d``)
-  instead.
-  The old location has been ignored since fish 4.2.
+  should no longer exist.
+  These directories have been ignored since fish 4.2.
+  If another package installs fish scripts there, they should be corrected to install to
+  ``extra_completionsdir`` (typically ``$CMAKE_INSTALL_PREFIX/share/fish/vendor_completions.d``),
+  ``extra_functionsdir`` (typically ``$CMAKE_INSTALL_PREFIX/share/fish/vendor_functions.d``) or
+  ``extra_confdir`` (typically ``$CMAKE_INSTALL_PREFIX/share/fish/vendor_functions.d``) instead.
+  See also the output of ``for var in completions functions conf; pkgconf fish --variable="$var"dir; end``.
 
 Regression fixes:
 -----------------
 - (from 4.4.0) Vi mode ``c,W`` key binding wrongly deleted trailing spaces (:issue:`12790`).
 - (from 4.4.0) Vi mode ``x`` in :doc:`builtin read <cmds/read>` (:issue:`12724`).
 - (from 4.3.3) Repeated tab would sometimes insert smartcase completions redundantly.
+- (from 4.3.0) Pressing escape during command input would insert garbage text into the command line (:issue:`12379`).
 
 fish 4.7.1 (released May 08, 2026)
 ==================================
