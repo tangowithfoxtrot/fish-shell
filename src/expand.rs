@@ -16,7 +16,7 @@ use crate::{
     history::{History, history_id},
     operation_context::OperationContext,
     parse_constants::{ParseError, ParseErrorCode, ParseErrorList, SOURCE_LOCATION_UNKNOWN},
-    parse_util::{MaybeParentheses, expand_variable_error, locate_cmdsubst_range},
+    parse_util::{expand_variable_error, locate_cmdsubst_range},
     path::path_apply_working_directory,
     prelude::*,
     wildcard::{WildcardResult, wildcard_expand_string, wildcard_has_internal},
@@ -825,7 +825,6 @@ fn expand_braces(
                 synth.push(BRACE_END);
             }
 
-            // Note: this code looks very fishy, apparently it has never worked.
             return expand_braces(synth, ExpandFlags::FAIL_ON_CMDSUBST, out, errors);
         }
     }
@@ -836,7 +835,14 @@ fn expand_braces(
     }
 
     let Some(brace_begin) = brace_begin else {
-        // No more brace expansions left; we can return the value as-is.
+        // No more brace expansions left; restore spaces that were protected while
+        // expanding braces and return the value as-is.
+        let mut input = input;
+        for c in input.as_char_slice_mut() {
+            if *c == BRACE_SPACE {
+                *c = ' ';
+            }
+        }
         if !out.add(input) {
             return append_overflow_error(errors, None);
         }
@@ -852,13 +858,8 @@ fn expand_braces(
         if brace_count == 0 && (c == BRACE_SEP || pos == brace_end) {
             assert!(pos >= item_begin);
             let item_len = pos - item_begin;
-            let item = input[item_begin..pos].to_owned();
-            let mut item = trim(item, Some(wstr::from_char_slice(&[BRACE_SPACE, '\0'])));
-            for c in item.as_char_slice_mut() {
-                if *c == BRACE_SPACE {
-                    *c = ' ';
-                }
-            }
+            let mut item = input[item_begin..pos].to_owned();
+            let item = trim(&mut item, Some(wstr::from_char_slice(&[BRACE_SPACE, '\0'])));
 
             // `whole_item` is a whitespace- and brace-stripped member of a single pass of brace
             // expansion, e.g. in `{ alpha , b,{c, d }}`, `alpha`, `b`, and `c, d` will, in the
@@ -901,30 +902,30 @@ pub fn expand_cmdsubst(
     let mut cursor = 0;
     let mut is_quoted = false;
     let mut has_dollar = false;
-    let parens = match locate_cmdsubst_range(
+    let cmdsub = match locate_cmdsubst_range(
         &input,
         &mut cursor,
         false,
         Some(&mut is_quoted),
         Some(&mut has_dollar),
     ) {
-        MaybeParentheses::Error => {
+        Err(()) => {
             append_syntax_error!(errors, SOURCE_LOCATION_UNKNOWN, "Mismatched parenthesis");
             return ExpandResult::make_error(STATUS_EXPAND_ERROR);
         }
-        MaybeParentheses::None => {
+        Ok(None) => {
             if !out.add(input) {
                 return append_overflow_error(errors, None);
             }
             return ExpandResult::ok();
         }
-        MaybeParentheses::CommandSubstitution(parens) => parens,
+        Ok(Some(cmdsub)) => cmdsub,
     };
 
     let mut sub_res = vec![];
     let job_group = ctx.job_group.clone();
     let subshell_status = exec_subshell_for_expand(
-        &input[parens.command()],
+        &input[cmdsub.command_range()],
         ctx.parser(),
         job_group.as_ref(),
         &mut sub_res,
@@ -975,12 +976,17 @@ pub fn expand_cmdsubst(
                 wgettext!("Unknown error while evaluating command substitution")
             }
         };
-        append_cmdsub_error_formatted!(errors, parens.start(), parens.end() - 1, err.to_owned());
+        append_cmdsub_error_formatted!(
+            errors,
+            cmdsub.opening_paren_offset(),
+            cmdsub.end() - 1,
+            err.to_owned()
+        );
         return ExpandResult::make_error(subshell_status);
     }
 
     // Expand slices like (cat /var/words)[1]
-    let mut tail_begin = parens.end();
+    let mut tail_begin = cmdsub.end();
     if input.as_char_slice().get(tail_begin) == Some(&'[') {
         let mut slice_idx = vec![];
         let slice_begin = tail_begin;
@@ -1053,9 +1059,15 @@ pub fn expand_cmdsubst(
         for tail_item in tail_expand {
             let mut whole_item = WString::new();
             whole_item.reserve(
-                parens.start() + 1 + sub_res_joined.len() + 1 + tail_item.completion.len(),
+                cmdsub.opening_paren_offset()
+                    + 1
+                    + sub_res_joined.len()
+                    + 1
+                    + tail_item.completion.len(),
             );
-            whole_item.push_utfstr(&input[..parens.start() - if has_dollar { 1 } else { 0 }]);
+            whole_item.push_utfstr(
+                &input[..cmdsub.opening_paren_offset() - if has_dollar { 1 } else { 0 }],
+            );
             whole_item.push(INTERNAL_SEPARATOR);
             whole_item.push_utfstr(&sub_res_joined);
             whole_item.push(INTERNAL_SEPARATOR);
@@ -1072,9 +1084,16 @@ pub fn expand_cmdsubst(
         let sub_item2 = escape_string(&sub_item, EscapeStringStyle::Script(EscapeFlags::COMMA));
         for tail_item in &*tail_expand {
             let mut whole_item = WString::new();
-            whole_item
-                .reserve(parens.start() + 1 + sub_item2.len() + 1 + tail_item.completion.len());
-            whole_item.push_utfstr(&input[..parens.start() - if has_dollar { 1 } else { 0 }]);
+            whole_item.reserve(
+                cmdsub.opening_paren_offset()
+                    + 1
+                    + sub_item2.len()
+                    + 1
+                    + tail_item.completion.len(),
+            );
+            whole_item.push_utfstr(
+                &input[..cmdsub.opening_paren_offset() - if has_dollar { 1 } else { 0 }],
+            );
             whole_item.push(INTERNAL_SEPARATOR);
             whole_item.push_utfstr(&sub_item2);
             whole_item.push(INTERNAL_SEPARATOR);
@@ -1288,18 +1307,18 @@ impl<'a, 'b, 'c> Expander<'a, 'b, 'c> {
         if self.flags.contains(ExpandFlags::FAIL_ON_CMDSUBST) {
             let mut cursor = 0;
             match locate_cmdsubst_range(&input, &mut cursor, true, None, None) {
-                MaybeParentheses::Error => ExpandResult::make_error(STATUS_EXPAND_ERROR),
-                MaybeParentheses::None => {
+                Err(()) => ExpandResult::make_error(STATUS_EXPAND_ERROR),
+                Ok(None) => {
                     if !out.add(input) {
                         return append_overflow_error(self.errors, None);
                     }
                     ExpandResult::ok()
                 }
-                MaybeParentheses::CommandSubstitution(parens) => {
+                Ok(Some(cmdsub)) => {
                     append_cmdsub_error!(
                         self.errors,
-                        parens.start(),
-                        parens.end() - 1,
+                        cmdsub.opening_paren_offset(),
+                        cmdsub.end() - 1,
                         "command substitutions not allowed in command position. Try var=(your-cmd) $var ..."
                     );
                     ExpandResult::make_error(STATUS_EXPAND_ERROR)
