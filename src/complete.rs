@@ -1003,6 +1003,10 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
         result
     }
 
+    fn completion_expand_flags(&self) -> ExpandFlags {
+        self.expand_flags() | ExpandFlags::FOR_COMPLETIONS | ExpandFlags::PRESERVE_HOME_TILDES
+    }
+
     /// If command to complete is short enough, substitute the description with the whatis information
     /// for the executable.
     fn complete_cmd_desc(&mut self, s: &wstr) {
@@ -1127,10 +1131,8 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
     fn complete_cmd(&mut self, str_cmd: WString) {
         // Append all possible executables
         let result = {
-            let expand_flags = self.expand_flags()
+            let expand_flags = self.completion_expand_flags()
                 | ExpandFlags::SPECIAL_FOR_COMMAND
-                | ExpandFlags::FOR_COMPLETIONS
-                | ExpandFlags::PRESERVE_HOME_TILDES
                 | ExpandFlags::EXECUTABLES_ONLY;
             expand_to_receiver(
                 str_cmd.clone(),
@@ -1152,10 +1154,7 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
         // updated with choices for the user.
         let _ = {
             // Append all matching directories
-            let expand_flags = self.expand_flags()
-                | ExpandFlags::FOR_COMPLETIONS
-                | ExpandFlags::PRESERVE_HOME_TILDES
-                | ExpandFlags::DIRECTORIES_ONLY;
+            let expand_flags = self.completion_expand_flags() | ExpandFlags::DIRECTORIES_ONLY;
             expand_to_receiver(
                 str_cmd.clone(),
                 &mut self.completions,
@@ -1294,14 +1293,14 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
         let mut use_files = true;
         let mut has_force = false;
 
-        let CmdString { cmd, path } = parse_cmd_string(cmd_orig, self.ctx.vars());
+        let cmd_string = CmdString::new(cmd_orig, self.ctx.vars());
+        let cmd_name = cmd_string.basename(cmd_orig);
 
-        // Don't use cmd_orig here for paths. It's potentially pathed,
-        // so that command might exist, but the completion script
-        // won't be using it.
-        let cmd_exists = builtin_exists(&cmd)
-            || function::exists_no_autoload(&cmd)
-            || path_get_path(&cmd, self.ctx.vars()).is_some();
+        let cmd_exists = builtin_exists(cmd_name) || function::exists_no_autoload(cmd_name) || {
+            // Even if the command is given as absolute path, use the basename, since
+            // that's the prerequisite for the completion script to use it.
+            path_get_path(cmd_name, self.ctx.vars()).is_some()
+        };
         if !cmd_exists {
             // Do not load custom completions if the command does not exist
             // This prevents errors caused during the execution of completion providers for
@@ -1309,13 +1308,13 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
             // and automatic completions ("gi" autosuggestion provider -> git)
             flog!(complete, "Skipping completions for non-existent command");
         } else if let Some(parser) = self.ctx.maybe_parser() {
-            complete_load(&cmd, parser);
+            complete_load(cmd_name, parser);
         } else if !COMPLETION_AUTOLOADER
             .lock()
             .unwrap()
-            .has_attempted_autoload(&cmd)
+            .has_attempted_autoload(cmd_name)
         {
-            self.needs_load.push(cmd.clone());
+            self.needs_load.push(cmd_name.to_owned());
         }
 
         // Make a list of lists of all options that we care about.
@@ -1324,7 +1323,11 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
             .unwrap()
             .iter()
             .filter_map(|(idx, completion)| {
-                let r#match = if idx.is_path { &path } else { &cmd };
+                let r#match = if idx.is_path {
+                    &cmd_string.path
+                } else {
+                    cmd_name
+                };
                 let has_match = wildcard_match(r#match, &idx.name, false)
                     || (
                         // On cygwin, if we didn't have a completion for "foo.exe",
@@ -1604,10 +1607,7 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
         if self.ctx.check_cancel() {
             return;
         }
-        let mut flags = self.expand_flags()
-            | ExpandFlags::FAIL_ON_CMDSUBST
-            | ExpandFlags::FOR_COMPLETIONS
-            | ExpandFlags::PRESERVE_HOME_TILDES;
+        let mut flags = self.completion_expand_flags() | ExpandFlags::FAIL_ON_CMDSUBST;
         if !do_file {
             flags |= ExpandFlags::SKIP_WILDCARDS;
         }
@@ -2172,31 +2172,38 @@ impl<'ctx, 'parser> Completer<'ctx, 'parser> {
 }
 
 struct CmdString {
-    cmd: WString,
     path: WString,
+    path_last_slash_pos: Option<usize>,
 }
 
-/// Find the full path and commandname from a command string `s`.
-fn parse_cmd_string(s: &wstr, vars: &dyn Environment) -> CmdString {
-    let path_result = path_try_get_path(s, vars);
-    let found = path_result.err.is_none();
-    let mut path = path_result.path;
-    // Resolve commands that use relative paths because we compare full paths with "complete -p".
-    if found && !path.is_empty() && path.as_char_slice().first() != Some(&'/') {
-        if let Some(full_path) = wrealpath(&path) {
-            path = full_path;
+impl CmdString {
+    /// Find the full path and commandname from a command string `cmd_orig`.
+    fn new(cmd_orig: &wstr, vars: &dyn Environment) -> Self {
+        let path_result = path_try_get_path(cmd_orig, vars);
+        let found = path_result.err.is_none();
+        let mut path = path_result.path;
+        // Resolve commands that use relative paths because we compare full paths with "complete -p".
+        if found && !path.is_empty() && path.as_char_slice().first() != Some(&'/') {
+            if let Some(full_path) = wrealpath(&path) {
+                path = full_path;
+            }
+        }
+
+        // Make sure the path is not included in the command.
+        let path_last_slash_pos = path.chars().rposition(|c| c == '/');
+
+        Self {
+            path,
+            path_last_slash_pos,
         }
     }
 
-    // Make sure the path is not included in the command.
-    let cmd = if let Some(last_slash) = s.chars().rposition(|c| c == '/') {
-        &s[last_slash + 1..]
-    } else {
-        s
+    fn basename<'a>(&'a self, cmd_orig: &'a wstr) -> &'a wstr {
+        self.path_last_slash_pos
+            .map_or(cmd_orig, |path_last_slash_pos| {
+                self.path.slice_from(path_last_slash_pos + 1)
+            })
     }
-    .to_owned();
-
-    CmdString { cmd, path }
 }
 
 /// Returns a description for the specified function, or an empty string if none.
