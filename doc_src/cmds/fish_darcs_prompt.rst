@@ -26,9 +26,9 @@ The prompt always shows the VCS name (configurable via ``$fish_prompt_darcs_name
 - ``$fish_color_darcs_normal``, default ``green`` (the prompt label color)
 - ``$fish_color_darcs_rebasing``, default ``yellow`` (used when a rebase is in progress)
 
-The logo color can be referenced via ``$__darcs_logo_color`` for themes that want the exact Darcs branding::
+To match Darcs’s logo green::
 
-    set fish_color_darcs_normal $__darcs_logo_color
+    set fish_color_darcs_normal 72ff01
 
 The Darcs status symbols:
 

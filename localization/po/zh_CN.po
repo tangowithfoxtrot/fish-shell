@@ -5694,6 +5694,9 @@ msgstr ""
 msgid "Add comma-separated list of age recipients fingerprints"
 msgstr ""
 
+msgid "Add comment to this transaction"
+msgstr ""
+
 msgid "Add custom repositories, either by URL or using JSON arrays"
 msgstr ""
 
@@ -12051,6 +12054,9 @@ msgstr ""
 msgid "Compile source packages"
 msgstr ""
 
+msgid "Compile source packages after download"
+msgstr ""
+
 msgid "Compile the current module"
 msgstr "编译当前模块"
 
@@ -12757,9 +12763,6 @@ msgid "Continuous operation mode"
 msgstr ""
 
 msgid "Continuously display system-wide disk manipulation activity"
-msgstr ""
-
-msgid "Continuously print the device status"
 msgstr ""
 
 msgid "Control Unicode features"
@@ -25948,6 +25951,9 @@ msgid "Exit ibus-daemon"
 msgstr ""
 
 msgid "Exit if command has a non-zero exit"
+msgstr ""
+
+msgid "Exit if stdout is closed"
 msgstr ""
 
 msgid "Exit if the size is exceeded"
@@ -52458,9 +52464,6 @@ msgstr ""
 msgid "Run Node with the hook already setup"
 msgstr ""
 
-msgid "Run PPP over USB"
-msgstr ""
-
 msgid "Run PROG after connect"
 msgstr ""
 
@@ -55255,6 +55258,9 @@ msgid "Serve time even when not synced"
 msgstr ""
 
 msgid "Server mode"
+msgstr ""
+
+msgid "Server only connects to one USB device"
 msgstr ""
 
 msgid "Server option"
