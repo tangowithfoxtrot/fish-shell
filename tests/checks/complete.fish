@@ -495,6 +495,7 @@ HOME=$path_to_cat/.. complete -C '~/cat '
 
 # Do not expand command substitutions.
 complete -C '(echo cat) ' | string match +pet
+complete -C '(echo $PWD)/'
 # Give up if we expand to multiple arguments (we'd need to handle the arguments).
 complete -C '{cat,arg1,arg2} ' | string match +pet
 # Don't expand wildcards though we could.
@@ -514,6 +515,14 @@ complete -C"a=1 b=2 cmd_with_fancy_completion 1 "
 # CHECK: 2
 complete -C"cmd_with_fancy_completion </dev/null >/dev/null 2>>/dev/null >?/dev/null &>/dev/null "
 # CHECK: 1
+
+complete -C 'get_file=get-file status $get_file ' |
+string match completions/..fish
+# CHECK: completions/..fish
+complete -C 'version=123 get_file=get-file status $get_file ' | string match 'is-block*'
+# CHECK: is-block	Test if a code block is currently evaluated
+complete -C 'get_file=get-file version=123 status $get_file ' | string match 'is-block*'
+# CHECK: is-block	Test if a code block is currently evaluated
 
 complete -c thing -x -F
 # CHECKERR: complete: invalid option combination, '--exclusive' and '--force-files'
