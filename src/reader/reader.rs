@@ -127,7 +127,7 @@ use fish_wcstringutil::{
 };
 use fish_widestring::{ELLIPSIS_CHAR, UTF8_BOM_WCHAR, bytes2wcstring};
 use libc::{
-    _POSIX_VDISABLE, EIO, EISDIR, ENOTTY, ESRCH, O_NONBLOCK, O_RDONLY, SIGINT, STDERR_FILENO,
+    _POSIX_VDISABLE, EISDIR, ENOTTY, ESRCH, O_NONBLOCK, O_RDONLY, SIGINT, STDERR_FILENO,
     STDIN_FILENO, STDOUT_FILENO, VMIN, VQUIT, VSUSP, VTIME, c_char,
 };
 use nix::{
@@ -1976,12 +1976,12 @@ impl ReaderData {
     /// Insert the characters of the string into the command line buffer and print them to the screen
     /// using syntax highlighting, etc.
     /// Returns true if the string changed.
-    fn insert_string(&mut self, elt: EditableLineTag, s: &wstr) {
+    fn insert_string(&mut self, elt: EditableLineTag, s: WString) {
         let history_search_active = self.history_search.active();
         let el = self.edit_line(elt);
         self.push_edit_internal(
             elt,
-            Edit::new(el.position()..el.position(), s.to_owned()),
+            Edit::new(el.position()..el.position(), s),
             /*allow_coalesce=*/ !history_search_active,
         );
         if elt == EditableLineTag::Commandline {
@@ -2019,7 +2019,7 @@ impl ReaderData {
     /// Insert the character into the command line buffer and print it to the screen using syntax
     /// highlighting, etc.
     fn insert_char(&mut self, elt: EditableLineTag, c: char) {
-        self.insert_string(elt, &WString::from_chars([c]));
+        self.insert_string(elt, WString::from_chars([c]));
     }
 
     /// Set the specified string as the current buffer.
@@ -2741,8 +2741,8 @@ impl<'a> Reader<'a> {
                 continue;
             }
 
-            if let Some(c) = kevt.key.codepoint_text() {
-                accumulated_chars.push(c);
+            if let Some(cs) = kevt.key.text_to_insert() {
+                accumulated_chars.extend(cs);
             } else {
                 continue;
             }
@@ -2750,7 +2750,7 @@ impl<'a> Reader<'a> {
 
         if !accumulated_chars.is_empty() {
             let (elt, _el) = self.active_edit_line();
-            self.insert_string(elt, &accumulated_chars);
+            self.insert_string(elt, accumulated_chars);
 
             // End paging upon inserting into the normal command line.
             if elt == EditableLineTag::Commandline {
@@ -2877,8 +2877,8 @@ impl<'a> Reader<'a> {
                 } else {
                     // Regular character.
                     let (elt, _el) = self.active_edit_line();
-                    if let Some(c) = kevt.key.codepoint_text() {
-                        self.insert_char(elt, c);
+                    if let Some(cs) = kevt.key.text_to_insert() {
+                        self.insert_string(elt, WString::from_iter(cs));
 
                         if elt == EditableLineTag::Commandline {
                             self.clear_pager();
@@ -3346,10 +3346,11 @@ impl<'a> Reader<'a> {
             }
             rl::Yank => {
                 let yank_str = kill_yank();
+                let yank_len = yank_str.len();
                 self.data
-                    .insert_string(self.active_edit_line_tag(), &yank_str);
-                self.rls_mut().yank_len = yank_str.len();
-                if !yank_str.is_empty() && self.cursor_end_mode == CursorEndMode::Inclusive {
+                    .insert_string(self.active_edit_line_tag(), yank_str);
+                self.rls_mut().yank_len = yank_len;
+                if yank_len != 0 && self.cursor_end_mode == CursorEndMode::Inclusive {
                     let (_elt, el) = self.active_edit_line();
                     self.update_buff_pos(self.active_edit_line_tag(), Some(el.position() - 1));
                 }
@@ -3529,7 +3530,7 @@ impl<'a> Reader<'a> {
                     // - this is if the user looks around a bit and decides to switch to the pager.
                     self.history_search.search_string().to_owned()
                 };
-                self.insert_string(EditableLineTag::SearchField, &search_string);
+                self.insert_string(EditableLineTag::SearchField, search_string);
             }
             #[allow(deprecated)]
             rl::HistoryDelete | rl::HistoryPagerDelete => {
@@ -4493,7 +4494,7 @@ impl<'a> Reader<'a> {
                 .is_none()
             {
                 let failed_search = search_field.text().to_owned();
-                self.insert_string(EditableLineTag::Commandline, &failed_search);
+                self.insert_string(EditableLineTag::Commandline, failed_search);
             }
             self.clear_pager();
             return true;
@@ -6346,10 +6347,8 @@ fn check_for_orphaned_process(loop_count: usize, shell_pgid: libc::pid_t) -> boo
             unsafe { OwnedFd::from_raw_fd(res) }
         };
 
-        let mut tmp = 0 as libc::c_char;
-        if unsafe { libc::read(tty_fd.as_raw_fd(), (&raw mut tmp).cast(), 1) } < 0
-            && errno().0 == EIO
-        {
+        #[allow(clippy::byte_char_slices)] // false positive
+        if nix::unistd::read(tty_fd, &mut [b'\0']).is_err_and(|err| err == nix::errno::Errno::EIO) {
             we_think_we_are_orphaned = true;
         }
     }
