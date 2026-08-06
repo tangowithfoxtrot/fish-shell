@@ -6,7 +6,8 @@ use fish_widestring::{
     PROCESS_EXPAND_SELF_STR, UCS2_MAX, VARIABLE_EXPAND, VARIABLE_EXPAND_SINGLE, WExt as _, WString,
     bytes2wcstring, decode_byte_from_char, fish_reserved_codepoint, wcs2bytes, wstr,
 };
-use libc::{SIG_IGN, SIGTTOU, STDIN_FILENO};
+use libc::{SIG_IGN, SIGTTOU, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+use nix::unistd;
 use std::{
     cell::{Cell, RefCell},
     env,
@@ -24,6 +25,10 @@ use std::{
     },
     time,
 };
+
+pub const STDIN_FD: BorrowedFd = unsafe { BorrowedFd::borrow_raw(STDIN_FILENO) };
+pub const STDOUT_FD: BorrowedFd = unsafe { BorrowedFd::borrow_raw(STDOUT_FILENO) };
+pub const STDERR_FD: BorrowedFd = unsafe { BorrowedFd::borrow_raw(STDERR_FILENO) };
 
 pub const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -1013,7 +1018,7 @@ pub fn is_console_session() -> bool {
     static IS_CONSOLE_SESSION: LazyLock<bool> = LazyLock::new(||
         // No console session on Apple, and ttyname may hang (#12506).
         !cfg!(apple)
-            && nix::unistd::ttyname(unsafe { std::os::fd::BorrowedFd::borrow_raw(STDIN_FILENO) })
+            && nix::unistd::ttyname(STDIN_FD)
                 .is_ok_and(|buf| {
                     // Check if the tty matches /dev/(console|dcons|tty[uv\d])
                     let is_console_tty = match buf.as_os_str().as_bytes() {
@@ -1074,11 +1079,11 @@ impl<T: Read + ?Sized> ReadExt for T {
 
 /// A rusty port of the C++ `write_loop()` function from `common.cpp`. This should be deprecated in
 /// favor of native rust read/write methods at some point.
-pub fn write_loop<Fd: AsRawFd>(fd: &Fd, buf: &[u8]) -> std::io::Result<()> {
+pub fn write_loop<Fd: AsRawFd>(fd: &Fd, buf: &[u8]) -> nix::Result<()> {
     let fd = fd.as_raw_fd();
     let mut total = 0;
     while total < buf.len() {
-        match nix::unistd::write(unsafe { BorrowedFd::borrow_raw(fd) }, &buf[total..]) {
+        match unistd::write(unsafe { BorrowedFd::borrow_raw(fd) }, &buf[total..]) {
             Ok(written) => {
                 total += written;
             }
@@ -1086,7 +1091,7 @@ pub fn write_loop<Fd: AsRawFd>(fd: &Fd, buf: &[u8]) -> std::io::Result<()> {
                 if matches!(err, nix::Error::EAGAIN | nix::Error::EINTR) {
                     continue;
                 }
-                return Err(std::io::Error::from(err));
+                return Err(err);
             }
         }
     }

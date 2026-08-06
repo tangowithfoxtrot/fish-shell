@@ -2,11 +2,9 @@ use super::wopendir;
 use crate::wutil::DevInode;
 use cfg_if::cfg_if;
 use fish_widestring::{WString, bytes2wcstring, wcs2zstring, wstr};
-use libc::{
-    EACCES, EIO, ELOOP, ENAMETOOLONG, ENODEV, ENOENT, ENOTDIR, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO,
-    S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK,
-};
-use std::{cell::Cell, io, mem::MaybeUninit, os::fd::RawFd, ptr::NonNull, rc::Rc};
+use libc::{S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK};
+use nix::{errno::Errno, fcntl::AtFlags, sys::stat::fstatat};
+use std::{cell::Cell, io, os::unix::prelude::BorrowedFd, ptr::NonNull};
 
 /// Types of files that may be in a directory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,7 +20,6 @@ pub enum DirEntryType {
 }
 
 /// An entry returned by DirIter.
-#[derive(Clone)]
 pub struct DirEntry {
     /// File name of this entry.
     pub name: WString,
@@ -42,16 +39,10 @@ pub struct DirEntry {
     possible_link: Option<bool>,
 
     // fd of the DIR*, used for fstatat().
-    dirfd: Rc<DirFd>,
+    dirfd: DirFd,
 }
 
 impl DirEntry {
-    /// Return the type of this entry if it is already available, otherwise none().
-    #[cfg(test)]
-    fn fast_type(&self) -> Option<DirEntryType> {
-        self.typ.get()
-    }
-
     /// Return the type of this entry, falling back to stat() if necessary.
     /// If stat() fails because the file has disappeared, this will return none().
     /// If stat() fails because of a broken symlink, this will return type lnk.
@@ -80,6 +71,20 @@ impl DirEntry {
         self.dev_inode.get()
     }
 
+    /// Return the type of this entry if it is already available, otherwise none().
+    #[cfg(test)]
+    fn fast_type(&self) -> Option<DirEntryType> {
+        self.typ.get()
+    }
+
+    /// Return whether this is a directory, if that's already known. None means we don't know
+    /// yet (e.g. this is a symlink, whose target type can only be learned by following it,
+    /// i.e. calling stat()).
+    #[cfg(test)]
+    fn is_dir_fast(&self) -> Option<bool> {
+        self.typ.get().map(|t| t == DirEntryType::Dir)
+    }
+
     // Reset our fields.
     fn reset(&mut self) {
         self.name.clear();
@@ -93,38 +98,41 @@ impl DirEntry {
         // We want to set both our type and our stat buffer.
         // If we follow symlinks and stat() errors with a bad symlink, set the type to link, but do not
         // populate the stat buffer.
-        let fd = self.dirfd.fd();
-        if fd < 0 {
-            return;
-        }
+        let Some(fd) = self.dirfd.fd() else { return };
         let narrow = wcs2zstring(&self.name);
-        let mut s = MaybeUninit::uninit();
-        if unsafe { libc::fstatat(fd, narrow.as_ptr(), s.as_mut_ptr(), 0) } == 0 {
-            let s = unsafe { s.assume_init() };
-            // st_dev is a dev_t, which is i32 on OpenBSD/Haiku and u32 in FreeBSD 11
-            #[allow(clippy::unnecessary_cast)]
-            let dev_inode = DevInode {
-                device: s.st_dev as u64,
-                inode: s.st_ino as u64,
-            };
-            self.dev_inode.set(Some(dev_inode));
-            self.typ.set(stat_mode_to_entry_type(s.st_mode));
-        } else {
-            match errno::errno().0 {
-                ELOOP => {
-                    self.typ.set(Some(DirEntryType::Lnk));
-                }
-                EACCES | EIO | ENOENT | ENOTDIR | ENAMETOOLONG | ENODEV => {
-                    // These are "expected" errors.
-                    self.typ.set(None);
-                }
-                _ => {
-                    self.typ.set(None);
-                    // This used to print an error, but given that we have seen
-                    // both ENODEV (above) and ENOTCONN,
-                    // and that the error isn't actionable and shows up while typing,
-                    // let's not do that.
-                    // perror("fstatat");
+        match fstatat(fd, narrow.as_c_str(), AtFlags::empty()) {
+            Ok(s) => {
+                // st_dev is a dev_t, which is i32 on OpenBSD/Haiku and u32 in FreeBSD 11
+                #[allow(clippy::unnecessary_cast)]
+                let dev_inode = DevInode {
+                    device: s.st_dev as u64,
+                    inode: s.st_ino as u64,
+                };
+                self.dev_inode.set(Some(dev_inode));
+                self.typ.set(stat_mode_to_entry_type(s.st_mode));
+            }
+            Err(err) => {
+                match err {
+                    Errno::ELOOP => {
+                        self.typ.set(Some(DirEntryType::Lnk));
+                    }
+                    Errno::EACCES
+                    | Errno::EIO
+                    | Errno::ENOENT
+                    | Errno::ENOTDIR
+                    | Errno::ENAMETOOLONG
+                    | Errno::ENODEV => {
+                        // These are "expected" errors.
+                        self.typ.set(None);
+                    }
+                    _ => {
+                        self.typ.set(None);
+                        // This used to print an error, but given that we have seen
+                        // both ENODEV (above) and ENOTCONN,
+                        // and that the error isn't actionable and shows up while typing,
+                        // let's not do that.
+                        // perror("fstatat");
+                    }
                 }
             }
         }
@@ -167,8 +175,13 @@ struct DirFd(NonNull<libc::DIR>);
 impl DirFd {
     /// Return the underlying file descriptor.
     #[inline]
-    fn fd(&self) -> RawFd {
-        unsafe { libc::dirfd(self.dir()) }
+    fn fd(&self) -> Option<BorrowedFd<'_>> {
+        let fd = unsafe { libc::dirfd(self.dir()) };
+        if fd < 0 {
+            assert_ne!(Errno::last(), Errno::EINVAL);
+            return None;
+        }
+        Some(unsafe { BorrowedFd::borrow_raw(fd) })
     }
 
     /// Return the underlying DIR*.
@@ -196,9 +209,6 @@ pub struct DirIter {
     /// Whether this dir_iter considers the "." and ".." filesystem entries.
     withdot: bool,
 
-    /// A reference to the underlying directory fd.
-    dir: Rc<DirFd>,
-
     /// The storage for our entry. This allows us to iterate without allocating.
     entry: DirEntry,
 }
@@ -219,30 +229,29 @@ impl DirIter {
         let Some(dir) = NonNull::new(dir) else {
             return Err(io::Error::last_os_error());
         };
-        let dir = Rc::new(DirFd(dir));
         let entry = DirEntry {
             name: WString::new(),
             inode: 0,
             dev_inode: Cell::new(None),
             typ: Cell::new(None),
-            dirfd: dir.clone(),
+            dirfd: DirFd(dir),
             possible_link: None,
         };
-        Ok(DirIter {
-            withdot,
-            dir,
-            entry,
-        })
+        Ok(DirIter { withdot, entry })
+    }
+
+    pub fn dir(&self) -> *mut libc::DIR {
+        self.entry.dirfd.dir()
     }
 
     /// Return the underlying file descriptor.
-    pub fn fd(&self) -> RawFd {
-        self.dir.fd()
+    pub fn fd(&self) -> Option<BorrowedFd<'_>> {
+        self.entry.dirfd.fd()
     }
 
     /// Rewind the directory to the beginning. This cannot fail.
     pub fn rewind(&mut self) {
-        unsafe { libc::rewinddir(self.dir.dir()) };
+        unsafe { libc::rewinddir(self.dir()) };
     }
 
     /// Read the next entry in the directory.
@@ -250,16 +259,17 @@ impl DirIter {
     /// This is slightly more efficient than the Iterator version, as it avoids allocating.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<io::Result<&DirEntry>> {
-        errno::set_errno(errno::Errno(0));
-        let dent = unsafe { libc::readdir(self.dir.dir()).as_ref() };
+        let no_errno = Errno::from_raw(0);
+        Errno::set(no_errno);
+        let dent = unsafe { libc::readdir(self.dir()).as_ref() };
         let Some(dent) = dent else {
             // readdir distinguishes between EOF and error via errno.
-            let err = errno::errno().0;
-            if err == 0 {
+            let err = Errno::last_raw();
+            if err == no_errno as _ {
                 return None;
-            } else {
-                return Some(Err(io::Error::from_raw_os_error(err)));
             }
+            let err = Errno::from_raw(err);
+            return Some(Err(io::Error::from(err)));
         };
 
         // dent.d_name is c_char; pretend it's u8.
@@ -310,33 +320,13 @@ impl DirIter {
     }
 }
 
-impl IntoIterator for DirIter {
-    type Item = io::Result<DirEntry>;
-    type IntoIter = Iter;
-    fn into_iter(self) -> Self::IntoIter {
-        Iter(self)
-    }
-}
-
-/// A convenient iterator over the entries in a directory.
-/// This differs from DirIter::next() in that it allocates.
-pub struct Iter(DirIter);
-impl Iterator for Iter {
-    type Item = io::Result<DirEntry>;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.0.next()? {
-            Ok(entry) => Some(Ok(entry.clone())),
-            Err(e) => Some(Err(e)),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{DirEntryType, DirIter};
     use crate::prelude::*;
     use assert_matches::assert_matches;
     use fish_widestring::L;
+    use nix::errno::Errno;
     use nix::sys::stat::Mode;
     use std::fs::File;
     use std::path::PathBuf;
@@ -351,8 +341,8 @@ mod tests {
     #[test]
     fn test_no_dots() {
         // DirIter does not return . or .. by default.
-        let dir = DirIter::new(L!(".")).expect("Should be able to open CWD");
-        for entry in dir {
+        let mut dir = DirIter::new(L!(".")).expect("Should be able to open CWD");
+        while let Some(entry) = dir.next() {
             let entry = entry.unwrap();
             assert_ne!(entry.name, ".");
             assert_ne!(entry.name, "..");
@@ -362,10 +352,10 @@ mod tests {
     #[test]
     fn test_dots() {
         // DirIter returns . or .. if you ask nicely.
-        let dir = DirIter::new_with_dots(L!(".")).expect("Should be able to open CWD");
+        let mut dir = DirIter::new_with_dots(L!(".")).expect("Should be able to open CWD");
         let mut seen_dot = false;
         let mut seen_dotdot = false;
-        for entry in dir {
+        while let Some(entry) = dir.next() {
             let entry = entry.unwrap();
             if entry.name == "." {
                 seen_dot = true;
@@ -380,15 +370,13 @@ mod tests {
     #[test]
     #[allow(clippy::if_same_then_else)]
     fn test_dir_iter() {
-        use libc::{EACCES, ENOENT};
-
         let baditer = DirIter::new(L!("/definitely/not/a/valid/directory/for/sure"));
         assert!(baditer.is_err());
         let Err(err) = baditer else {
             panic!("Expected error");
         };
-        let err = err.raw_os_error().expect("Should have an errno value");
-        assert_matches!(err, ENOENT | EACCES);
+        let err = Errno::try_from(err).expect("Should have an errno value");
+        assert_matches!(err, Errno::ENOENT | Errno::EACCES);
 
         let temp_dir = fish_tempfile::new_dir().unwrap();
         let basepath = WString::from(temp_dir.path().to_str().unwrap());
@@ -480,5 +468,44 @@ mod tests {
             );
         }
         assert_eq!(seen, names.len());
+    }
+
+    #[test]
+    fn test_is_dir_fast() {
+        // is_dir_fast() must not require a stat(): for a symlink it should report None
+        // (unknown) until something else (e.g. is_dir()) has resolved and cached the type.
+        // This is the property completion code relies on to avoid following symlinks that
+        // point at something slow (e.g. a stalled network mount) unless it actually has to.
+        let temp_dir = fish_tempfile::new_dir().unwrap();
+        let basepath = WString::from(temp_dir.path().to_str().unwrap());
+        let makepath = |s: &str| -> PathBuf { temp_dir.path().join(s) };
+
+        nix::unistd::mkdir(&makepath("dir"), Mode::from_bits(0o700).unwrap()).unwrap();
+        File::create(makepath("reg")).unwrap();
+        #[cfg(not(cygwin))]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(makepath("dir"), makepath("dirlink")).unwrap();
+            symlink(makepath("reg"), makepath("reglink")).unwrap();
+        }
+
+        let mut iter = DirIter::new(&basepath).expect("Should be able to open directory");
+        while let Some(entry) = iter.next() {
+            let entry = entry.expect("Should not have gotten error");
+            match entry.name.to_string().as_str() {
+                "dir" => assert_eq!(entry.is_dir_fast(), Some(true)),
+                "reg" => assert_eq!(entry.is_dir_fast(), Some(false)),
+                #[cfg(not(cygwin))]
+                name @ ("dirlink" | "reglink") => {
+                    // Unknown before we've resolved the symlink...
+                    assert_eq!(entry.is_dir_fast(), None);
+                    // ...and correctly known, without a further stat(), once we have.
+                    let expected = name == "dirlink";
+                    assert_eq!(entry.is_dir(), expected);
+                    assert_eq!(entry.is_dir_fast(), Some(expected));
+                }
+                other => panic!("Unexpected entry {other}"),
+            }
+        }
     }
 }

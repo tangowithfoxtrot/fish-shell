@@ -111,15 +111,14 @@ use crate::{
     wutil::{fstat, perror_nix, wstat},
 };
 use assert_matches::assert_matches;
-use errno::{Errno, errno};
 use fish_common::{
-    EscapeFlags, EscapeStringStyle, ScopeGuard, escape, escape_string, escape_string_with_quote,
-    exit_without_destructors, get_obfuscation_read_char, help_section,
-    restore_term_foreground_process_group_for_exit, write_loop,
+    EscapeFlags, EscapeStringStyle, STDERR_FD, STDIN_FD, STDOUT_FD, ScopeGuard, escape,
+    escape_string, escape_string_with_quote, exit_without_destructors, get_obfuscation_read_char,
+    help_section, restore_term_foreground_process_group_for_exit, write_loop,
 };
 use fish_fallback::{fish_wcwidth, lowercase};
 use fish_feature_flags::FeatureFlag;
-use fish_util::{perror, write_to_fd};
+use fish_util::perror;
 use fish_wcstringutil::{
     CaseSensitivity, IsPrefix, StringFuzzyMatch, count_preceding_backslashes, is_prefix,
     join_strings, string_prefixes_string, string_prefixes_string_case_insensitive,
@@ -127,9 +126,10 @@ use fish_wcstringutil::{
 };
 use fish_widestring::{ELLIPSIS_CHAR, UTF8_BOM_WCHAR, bytes2wcstring};
 use libc::{
-    _POSIX_VDISABLE, EISDIR, ENOTTY, ESRCH, O_NONBLOCK, O_RDONLY, SIGINT, STDERR_FILENO,
-    STDIN_FILENO, STDOUT_FILENO, VMIN, VQUIT, VSUSP, VTIME, c_char,
+    _POSIX_VDISABLE, O_NONBLOCK, O_RDONLY, SIGINT, STDIN_FILENO, STDOUT_FILENO, VMIN, VQUIT, VSUSP,
+    VTIME, c_char,
 };
+use nix::{errno::Errno, unistd};
 use nix::{
     fcntl::OFlag,
     sys::{
@@ -223,12 +223,9 @@ fn redirect_tty_after_sighup() {
         return;
     };
     let fd = devnull.as_raw_fd();
-    for stdfd in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
-        if matches!(
-            tcgetattr(unsafe { BorrowedFd::borrow_raw(stdfd) }),
-            Err(nix::Error::EIO | nix::Error::ENOTTY)
-        ) {
-            unsafe { libc::dup2(fd, stdfd) };
+    for stdfd in [STDIN_FD, STDOUT_FD, STDERR_FD] {
+        if matches!(tcgetattr(stdfd), Err(nix::Error::EIO | nix::Error::ENOTTY)) {
+            unsafe { libc::dup2(fd, stdfd.as_raw_fd()) };
         }
     }
 }
@@ -940,7 +937,7 @@ fn read_ni(parser: &mut Parser, fd: RawFd, io: &IoChain) -> Result<(), ErrorCode
     if fd != STDIN_FILENO && md.is_dir() {
         flog!(
             error,
-            wgettext_fmt!("Unable to read input file: %s", Errno(EISDIR).to_string())
+            wgettext_fmt!("Unable to read input file: %s", Errno::EISDIR.desc())
         );
         return Err(STATUS_CMD_ERROR);
     }
@@ -970,7 +967,7 @@ fn read_ni(parser: &mut Parser, fd: RawFd, io: &IoChain) -> Result<(), ErrorCode
                     // Fatal error.
                     flog!(
                         error,
-                        wgettext_fmt!("Unable to read input file: %s", err.to_string())
+                        wgettext_fmt!("Unable to read input file: %s", err.desc())
                     );
                     return Err(STATUS_CMD_ERROR);
                 }
@@ -1005,8 +1002,7 @@ const FLOW_CONTROL_FLAGS: termios::InputFlags = {
 /// Initialize the reader.
 pub fn reader_init(will_restore_foreground_pgroup: bool) {
     assert_is_main_thread();
-    let terminal_mode_on_startup = match tcgetattr(unsafe { BorrowedFd::borrow_raw(STDIN_FILENO) })
-    {
+    let terminal_mode_on_startup = match tcgetattr(STDIN_FD) {
         Ok(modes) => {
             // Save the initial terminal mode.
             // TODO: rationalize behavior if initial tcgetattr() fails.
@@ -2647,7 +2643,7 @@ impl<'a> Reader<'a> {
         // Emit a newline so that the output is on the line after the command.
         // But do not emit a newline if the cursor has wrapped onto a new line all its own - see #6826.
         if !self.screen.cursor_is_wrapped_to_own_line() {
-            let _ = write_to_fd(b"\n", STDOUT_FILENO);
+            let _ = unistd::write(STDOUT_FD, b"\n");
         }
 
         // HACK: If stdin isn't the same terminal as stdout, we just moved the cursor.
@@ -4801,7 +4797,7 @@ fn term_fix_external_modes(modes: &mut Termios) {
 fn term_donate(quiet: bool /* = false */) {
     loop {
         match tcsetattr(
-            unsafe { BorrowedFd::borrow_raw(STDIN_FILENO) },
+            STDIN_FD,
             SetArg::TCSANOW,
             &TTY_MODES_FOR_EXTERNAL_CMDS.lock().unwrap(),
         ) {
@@ -4824,8 +4820,7 @@ fn term_donate(quiet: bool /* = false */) {
 
 /// Copy the (potentially changed) terminal modes and use them from now on.
 pub fn term_copy_modes() {
-    let mut external_modes = tcgetattr(unsafe { BorrowedFd::borrow_raw(STDIN_FILENO) })
-        .unwrap_or_else(|_| zeroed_termios());
+    let mut external_modes = tcgetattr(STDIN_FD).unwrap_or_else(|_| zeroed_termios());
     // We still want to fix most egregious breakage.
     // E.g. OPOST is *not* something that should be set globally,
     // and 99% triggered by a crashed program.
@@ -4935,7 +4930,7 @@ fn acquire_tty_or_exit(shell_pgid: libc::pid_t) {
             // avoid a second pass through this loop.
             owner = unsafe { libc::tcgetpgrp(STDIN_FILENO) };
         }
-        if owner == -1 && errno().0 == ENOTTY {
+        if owner == -1 && Errno::last() == Errno::ENOTTY {
             if !is_interactive_session() {
                 // It's OK if we're not able to take control of the terminal. We handle
                 // the fallout from this in a few other places.
@@ -6321,7 +6316,10 @@ fn check_for_orphaned_process(loop_count: usize, shell_pgid: libc::pid_t) -> boo
     // Try kill-0'ing the process whose pid corresponds to our process group ID. It's possible this
     // will fail because we don't have permission to signal it. But more likely it will fail because
     // it no longer exists, and we are orphaned.
-    if loop_count % 64 == 0 && unsafe { libc::kill(shell_pgid, 0) } < 0 && errno().0 == ESRCH {
+    if loop_count % 64 == 0
+        && unsafe { libc::kill(shell_pgid, 0) } < 0
+        && Errno::last() == Errno::ESRCH
+    {
         we_think_we_are_orphaned = true;
     }
 

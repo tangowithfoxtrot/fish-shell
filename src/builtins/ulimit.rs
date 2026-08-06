@@ -1,5 +1,6 @@
 use std::{cmp::Ordering, sync::LazyLock};
 
+use fish_widestring::str2wcstring;
 use libc::{RLIM_INFINITY, c_uint, rlim_t};
 use nix::errno::Errno;
 use nix::sys::resource::Resource as ResourceEnum;
@@ -61,24 +62,24 @@ pub mod limits {
     define_on!(RSS, RLIMIT_RSS; "linux", "freebsd", "netbsd", "openbsd", "dragonfly");
     // TODO(MSRV >= 1.86): target_os = "cygwin" triggers a warning on Rust 1.85.
     #[cfg(any(
+        apple,
+        cygwin,
         target_os = "linux",
         target_os = "ios",
         target_os = "macos",
         target_os = "freebsd",
         target_os = "netbsd",
         target_os = "dragonfly",
-        cygwin
     ))]
     pub const AS: libc::c_int = libc::RLIMIT_AS as _;
     // TODO(MSRV >= 1.86): target_os = "cygwin" triggers a warning on Rust 1.85.
     #[cfg(not(any(
+        apple,
+        cygwin,
         target_os = "linux",
-        target_os = "ios",
-        target_os = "macos",
         target_os = "freebsd",
         target_os = "netbsd",
         target_os = "dragonfly",
-        cygwin
     )))]
     pub const AS: libc::c_int = -1;
     define_on!(SBSIZE, RLIMIT_SBSIZE; "freebsd", "netbsd", "dragonfly");
@@ -206,7 +207,9 @@ fn set_limit(
             .cmd(cmd)
             .finish(streams);
         } else {
-            err_raw!(builtin_strerror()).cmd(cmd).finish(streams);
+            err_raw!(str2wcstring(errno.desc()))
+                .cmd(cmd)
+                .finish(streams);
         }
 
         Err(STATUS_CMD_ERROR)

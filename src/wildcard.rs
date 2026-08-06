@@ -19,7 +19,10 @@ use fish_wcstringutil::{
 };
 use fish_widestring::{ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE};
 use nix::unistd::AccessFlags;
-use std::{cell::LazyCell, cmp::Ordering, collections::HashSet, os::unix::fs::MetadataExt as _};
+use std::{
+    borrow::Cow, cell::LazyCell, cmp::Ordering, collections::HashSet,
+    os::unix::fs::MetadataExt as _,
+};
 
 localizable_consts!(
     COMPLETE_EXEC_DESC "command"
@@ -324,21 +327,7 @@ fn wildcard_test_flags_then_complete(
     if expand_flags.contains(ExpandFlags::NO_SPACE_FOR_UNCLOSED_BRACE) {
         flags |= CompleteFlags::NO_SPACE;
     }
-    // Fast path: If we need directories, and we already know it is one,
-    // and we don't need to do anything else, just return it.
-    // This is a common case for cd completions, and removes the `stat` entirely in case the system
-    // supports it.
-    if entry.is_dir() && !executables_only && !expand_flags.contains(ExpandFlags::GEN_DESCRIPTIONS)
-    {
-        return wildcard_complete(
-            &(filename.to_owned() + L!("/")),
-            wc,
-            Some(&|_| L!("").to_owned()),
-            Some(out),
-            expand_flags,
-            CompleteFlags::NO_SPACE,
-        ) == WildcardResult::Match;
-    }
+
     // Check if it will match before stat().
     if wildcard_complete(filename, wc, None, None, expand_flags, flags) != WildcardResult::Match {
         return false;
@@ -356,9 +345,10 @@ fn wildcard_test_flags_then_complete(
     }
 
     // regular file *excludes* broken links - we have no use for them as commands.
-    let is_regular_file = entry.check_type().is_some_and(|x| x == DirEntryType::Reg);
+    let is_regular_file =
+        LazyCell::new(|| entry.check_type().is_some_and(|x| x == DirEntryType::Reg));
     let is_executable =
-        LazyCell::new(|| is_regular_file && waccess(filepath, AccessFlags::X_OK).is_ok());
+        LazyCell::new(|| *is_regular_file && waccess(filepath, AccessFlags::X_OK).is_ok());
     if executables_only && !*is_executable {
         return false;
     }
@@ -415,18 +405,15 @@ fn wildcard_test_flags_then_complete(
         None => WString::new(),
     };
     let desc_func: Option<&dyn Fn(&wstr) -> WString> = Some(&desc_func);
-    if entry.is_dir() {
-        return wildcard_complete(
-            &(filename.to_owned() + L!("/")),
-            wc,
-            desc_func,
-            Some(out),
-            expand_flags,
-            CompleteFlags::NO_SPACE,
-        ) == WildcardResult::Match;
-    }
 
-    wildcard_complete(filename, wc, desc_func, Some(out), expand_flags, flags)
+    let filename = if entry.is_dir() {
+        flags |= CompleteFlags::NO_SPACE;
+        Cow::Owned(filename.to_owned() + L!("/"))
+    } else {
+        Cow::Borrowed(filename)
+    };
+
+    wildcard_complete(&filename, wc, desc_func, Some(out), expand_flags, flags)
         == WildcardResult::Match
 }
 
@@ -674,31 +661,7 @@ mod expander {
                 return;
             };
 
-            // wreaddir_resolving without the out argument is just wreaddir.
-            // So we can use the information in case we need it.
-            let need_dir = self.flags.contains(ExpandFlags::DIRECTORIES_ONLY);
-
-            while let Some(Ok(entry)) = dir.next() {
-                if self.interrupted_or_overflowed() {
-                    break;
-                }
-
-                // Note that is_dir() may cause a stat() call.
-                let known_dir = need_dir && entry.is_dir();
-                if need_dir && !known_dir {
-                    continue;
-                }
-                if !entry.name.is_empty() && !entry.name.starts_with('.') {
-                    self.try_add_completion_result(
-                        &(base_dir.to_owned() + entry.name.as_utfstr()),
-                        &entry.name,
-                        L!(""),
-                        prefix,
-                        entry,
-                        info,
-                    );
-                }
-            }
+            self.expand_last_segment(base_dir, &mut dir, L!(""), prefix, info);
         }
 
         /// Given a directory base_dir, which is opened as base_dir_iter, expand an intermediate segment
@@ -839,6 +802,8 @@ mod expander {
             prefix: &wstr,
             info: ParentInfo,
         ) {
+            // wreaddir_resolving without the out argument is just wreaddir.
+            // So we can use the information in case we need it.
             let need_dir = self.flags.contains(ExpandFlags::DIRECTORIES_ONLY);
 
             while !self.interrupted_or_overflowed() {
@@ -846,6 +811,7 @@ mod expander {
                     break;
                 };
 
+                // Note that is_dir() may cause a stat() call.
                 if need_dir && !entry.is_dir() {
                     continue;
                 }
