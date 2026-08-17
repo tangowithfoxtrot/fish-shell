@@ -18,11 +18,10 @@ use crate::{
     reader::{fish_is_unwinding_for_exit, reader_schedule_prompt_repaint},
     redirection::RedirectionSpecList,
     signal::{RawSignal, signal_set_handlers_once},
-    topic_monitor::{GenerationsList, Topic, topic_monitor_principal},
+    topic_monitor::{self, GenerationsList, Topic},
     wait_handle::{WaitHandle, WaitHandleRef, WaitHandleStore},
     wutil::{perror_nix, wbasename},
 };
-use cfg_if::cfg_if;
 use fish_common::{Timepoint, escape, timef};
 use fish_widestring::ToWString;
 use libc::{
@@ -134,16 +133,12 @@ impl ProcStatus {
 
     /// Encode a return value `ret` and signal `sig` into a status value like waitpid() does.
     const fn w_exitcode(ret: i32, sig: i32) -> i32 {
-        cfg_if! {
-            if #[cfg(waitstatus_signal_ret)] {
-                // It's encoded signal and then status
-                // The return status is in the lower byte.
-                (sig << 8) | ret
-            } else {
-                // The status is encoded in the upper byte.
-                // This should be W_EXITCODE(ret, sig) but that's not available everywhere.
-                (ret << 8) | sig
-            }
+        // This is W_EXITCODE(ret, sig), which libc does not expose on every target.
+        // Either signal and then status, or status and then signal.
+        if WEXITSTATUS(0x007f) == 0x007f {
+            (sig << 8) | ret
+        } else {
+            (ret << 8) | sig
         }
     }
 
@@ -268,7 +263,7 @@ impl InternalProc {
     /// Mark this process as having exited with the given `status`.
     pub fn mark_exited(&self, status: ProcStatus) {
         self.status.set(status).expect("Status already set");
-        topic_monitor_principal().post(Topic::InternalExit);
+        topic_monitor::principal().post(Topic::InternalExit);
         flog!(
             proc_internal_proc,
             "Internal proc",
@@ -381,7 +376,7 @@ pub struct Process {
     pub actual_cmd: WString,
 
     /// Generation counts for reaping.
-    pub gens: GenerationsList,
+    pub gens: Cell<GenerationsList>,
 
     /// Process ID or `None` where not available.
     pub pid: OnceLock<Pid>,
@@ -500,7 +495,7 @@ impl Process {
     /// launch. This helps us avoid spurious waitpid calls.
     pub fn check_generations_before_launch(&self) {
         self.gens
-            .update(&topic_monitor_principal().current_generations());
+            .set(topic_monitor::principal().current_generations());
     }
 
     /// Mark that this process was part of a pipeline which was aborted.
@@ -671,7 +666,7 @@ impl Job {
     /// Equivalent to `processes().iter().filter(|p| p.pid.is_some())`.
     #[inline(always)]
     pub fn external_procs(&self) -> impl Iterator<Item = &Process> {
-        self.processes.iter().filter(|p| p.pid().is_some())
+        self.processes.iter().filter(|p| p.has_pid())
     }
 
     /// Return whether it is OK to reap a given process. Sometimes we want to defer reaping a
@@ -929,8 +924,6 @@ impl Job {
     }
 }
 
-pub type JobRef = Rc<Job>;
-
 /// Whether this shell is attached to a tty.
 pub fn is_interactive_session() -> bool {
     IS_INTERACTIVE_SESSION.load()
@@ -959,9 +952,6 @@ pub fn mark_no_exec() {
     IS_NO_EXEC.store(true);
 }
 static IS_NO_EXEC: RelaxedAtomicBool = RelaxedAtomicBool::new(false);
-
-// List of jobs.
-pub type JobList = Vec<JobRef>;
 
 /// The current job control mode.
 ///
@@ -1001,7 +991,7 @@ pub fn job_reap(parser: &mut Parser, interactive: bool, block_io: Option<&IoChai
 
 /// Return the list of background jobs which we should warn the user about, if the user attempts to
 /// exit. An empty result (common) means no such jobs.
-pub fn jobs_requiring_warning_on_exit(parser: &Parser) -> JobList {
+pub fn jobs_requiring_warning_on_exit(parser: &Parser) -> Vec<Rc<Job>> {
     let mut result = vec![];
     for job in parser.jobs() {
         if !job.is_foreground() && job.is_constructed() && !job.is_completed() {
@@ -1013,7 +1003,7 @@ pub fn jobs_requiring_warning_on_exit(parser: &Parser) -> JobList {
 
 /// Print the exit warning for the given jobs, which should have been obtained via
 /// jobs_requiring_warning_on_exit().
-pub fn print_exit_warning_for_jobs(jobs: &JobList) {
+pub fn print_exit_warning_for_jobs(jobs: &[Rc<Job>]) {
     printf!("%s\n", wgettext!("There are still jobs active:"));
     printf!("\n   PID  %s\n", wgettext!("Command"));
     for j in jobs {
@@ -1128,7 +1118,7 @@ pub fn proc_wait_any(parser: &mut Parser) {
 }
 
 /// Send SIGHUP to the list `jobs`, excepting those which are in fish's pgroup.
-pub fn hup_jobs(jobs: &JobList) {
+pub fn hup_jobs(jobs: &[Rc<Job>]) {
     let fish_pgrp = getpgrp();
     let mut kill_list = Vec::new();
     for j in jobs {
@@ -1211,21 +1201,22 @@ fn process_mark_finished_children(parser: &mut Parser, block_ok: bool, block_io:
                 continue;
             }
 
+            let procgens = proc.gens.get();
             if proc.has_pid() {
                 // Reaps with a pid.
-                reapgens.set_min_from(Topic::SigChld, &proc.gens);
-                reapgens.set_min_from(Topic::SigHupIntTerm, &proc.gens);
+                reapgens.sigchld = reapgens.sigchld.min(procgens.sigchld);
+                reapgens.sighupintterm = reapgens.sighupintterm.min(procgens.sighupintterm);
             }
             if proc.internal_proc.borrow().is_some() {
                 // Reaps with an internal process.
-                reapgens.set_min_from(Topic::InternalExit, &proc.gens);
-                reapgens.set_min_from(Topic::SigHupIntTerm, &proc.gens);
+                reapgens.internal_exit = reapgens.internal_exit.min(procgens.internal_exit);
+                reapgens.sighupintterm = reapgens.sighupintterm.min(procgens.sighupintterm);
             }
         }
     }
 
     // Now check for changes, optionally waiting.
-    if !topic_monitor_principal().check(&reapgens, block_ok) {
+    if !topic_monitor::principal().check(&mut reapgens, block_ok) {
         // Nothing changed.
         return;
     }
@@ -1235,20 +1226,25 @@ fn process_mark_finished_children(parser: &mut Parser, block_ok: bool, block_io:
     // We structure this as two loops for some simplicity.
     // First reap all pids.
     for j in parser.jobs() {
-        for proc in j.external_procs() {
-            // It's an external proc so it has a pid, but is it reapable?
-            if !j.can_reap(proc) {
+        for proc in j.processes() {
+            // Check if it is an external proc (has a pid) and is reapable.
+            if !proc.has_pid() || !j.can_reap(proc) {
                 continue;
             }
-
             // Always update the signal hup/int gen.
-            proc.gens.sighupintterm.set(reapgens.sighupintterm.get());
+            // Check for a new sigchild - if we got one then waitpid().
+            let mut procgens = proc.gens.get();
+            procgens.sighupintterm = reapgens.sighupintterm;
+            let got_new_sigchld = procgens.sigchld != reapgens.sigchld;
+            if got_new_sigchld {
+                procgens.sigchld = reapgens.sigchld;
+            }
+            proc.gens.set(procgens);
 
             // Nothing to do if we did not get a new sigchld.
-            if proc.gens.sigchld == reapgens.sigchld {
+            if !got_new_sigchld {
                 continue;
             }
-            proc.gens.sigchld.set(reapgens.sigchld.get());
 
             // Ok, we are reapable. Run waitpid()!
             let mut statusv: libc::c_int = -1;
@@ -1304,20 +1300,24 @@ fn process_mark_finished_children(parser: &mut Parser, block_ok: bool, block_io:
     // We are done reaping pids.
     // Reap internal processes.
     for j in parser.jobs() {
-        for proc in j.processes.iter() {
+        for proc in j.processes() {
             // Does this proc have an internal process that is reapable?
             if proc.internal_proc.borrow().is_none() || !j.can_reap(proc) {
                 continue;
             }
-
             // Always update the signal hup/int gen.
-            proc.gens.sighupintterm.set(reapgens.sighupintterm.get());
+            let mut procgens = proc.gens.get();
+            procgens.sighupintterm = reapgens.sighupintterm;
+            let got_new_internal_exit = procgens.internal_exit != reapgens.internal_exit;
+            if got_new_internal_exit {
+                procgens.internal_exit = reapgens.internal_exit;
+            }
+            proc.gens.set(procgens);
 
             // Nothing to do if we did not get a new internal exit.
-            if proc.gens.internal_exit == reapgens.internal_exit {
+            if !got_new_internal_exit {
                 continue;
             }
-            proc.gens.internal_exit.set(reapgens.internal_exit.get());
 
             // Keep the borrow so we don't keep borrowing again and again and unwrapping again and
             // again below.
@@ -1500,7 +1500,7 @@ fn summary_command(j: &Job, p: Option<&Process>) -> WString {
 // Summarize a list of jobs, by emitting calls to fish_job_summary.
 // Note the given list must NOT be the parser's own job list, since the call to fish_job_summary
 // could modify it.
-fn summarize_jobs(parser: &mut Parser, jobs: &[JobRef]) -> bool {
+fn summarize_jobs(parser: &mut Parser, jobs: &[Rc<Job>]) -> bool {
     if jobs.is_empty() {
         return false;
     }
@@ -1527,7 +1527,7 @@ fn summarize_jobs(parser: &mut Parser, jobs: &[JobRef]) -> bool {
 
 /// Remove all disowned jobs whose job chain is fully constructed (that is, do not erase disowned
 /// jobs that still have an in-flight parent job). Note we never print statuses for such jobs.
-fn remove_disowned_jobs(jobs: &mut JobList) {
+fn remove_disowned_jobs(jobs: &mut Vec<Rc<Job>>) {
     jobs.retain(|j| !j.flags().disown_requested || !j.is_constructed());
 }
 
