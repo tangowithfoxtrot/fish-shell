@@ -7,10 +7,11 @@ use crate::parse_constants::SOURCE_OFFSET_INVALID;
 use crate::parser_keywords::parser_keywords_is_subcommand;
 use crate::prelude::*;
 use crate::redirection::RedirectionMode;
+use bitflags::bitflags;
 use fish_feature_flags::{FeatureFlag, feature_test};
 use libc::{STDIN_FILENO, STDOUT_FILENO};
 use nix::fcntl::OFlag;
-use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Range};
+use std::ops::Range;
 use std::os::fd::RawFd;
 
 /// Token types. XXX Why this isn't ParseTokenType, I'm not really sure.
@@ -105,44 +106,29 @@ pub struct PipeOrRedir {
     pub consumed: usize,
 }
 
-#[derive(Clone, Copy)]
-pub struct TokFlags(pub u8);
+bitflags! {
+    /// Set of flags controlling expansions.
+    #[derive(Clone, Copy)]
+    pub struct TokFlags : u8 {
+        /// Flag telling the tokenizer to accept incomplete parameters, i.e. parameters with mismatching
+        /// parenthesis, etc. This is useful for tab-completion.
+        const ACCEPT_UNFINISHED = 1 << 0;
 
-impl BitAnd for TokFlags {
-    type Output = bool;
-    fn bitand(self, rhs: Self) -> Self::Output {
-        (self.0 & rhs.0) != 0
+        /// Flag telling the tokenizer not to remove comments. Useful for syntax highlighting.
+        const SHOW_COMMENTS = 1 << 1;
+
+        /// Ordinarily, the tokenizer ignores newlines following a newline, or a semicolon. This flag tells
+        /// the tokenizer to return each of them as a separate END.
+        const SHOW_BLANK_LINES = 1 << 2;
+
+        /// Make an effort to continue after an error.
+        const CONTINUE_AFTER_ERROR = 1 << 3;
+
+        /// Consumers want to treat all tokens as arguments, so disable special handling at
+        /// command-position.
+        const ARGUMENT_LIST = 1 << 4;
     }
 }
-impl BitOr for TokFlags {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self::Output {
-        Self(self.0 | rhs.0)
-    }
-}
-impl BitOrAssign for TokFlags {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
-
-/// Flag telling the tokenizer to accept incomplete parameters, i.e. parameters with mismatching
-/// parenthesis, etc. This is useful for tab-completion.
-pub const TOK_ACCEPT_UNFINISHED: TokFlags = TokFlags(1);
-
-/// Flag telling the tokenizer not to remove comments. Useful for syntax highlighting.
-pub const TOK_SHOW_COMMENTS: TokFlags = TokFlags(2);
-
-/// Ordinarily, the tokenizer ignores newlines following a newline, or a semicolon. This flag tells
-/// the tokenizer to return each of them as a separate END.
-pub const TOK_SHOW_BLANK_LINES: TokFlags = TokFlags(4);
-
-/// Make an effort to continue after an error.
-pub const TOK_CONTINUE_AFTER_ERROR: TokFlags = TokFlags(8);
-
-/// Consumers want to treat all tokens as arguments, so disable special handling at
-/// command-position.
-pub const TOK_ARGUMENT_LIST: TokFlags = TokFlags(16);
 
 localizable_consts!(
     UNEXPECTED_CLOSING_CHAR "Unexpected '%c' found, expecting '%c'"
@@ -285,9 +271,9 @@ impl<'c> Tokenizer<'c> {
     /// should not be freed by the caller until after the tokenizer is destroyed.
     ///
     /// \param start The string to tokenize
-    /// \param flags Flags to the tokenizer. Setting TOK_ACCEPT_UNFINISHED will cause the tokenizer
+    /// \param flags Flags to the tokenizer. Setting TokFlags::ACCEPT_UNFINISHED will cause the tokenizer
     /// to accept incomplete tokens, such as a subshell without a closing parenthesis, as a valid
-    /// token. Setting TOK_SHOW_COMMENTS will return comments as tokens
+    /// token. Setting TokFlags::SHOW_COMMENTS will return comments as tokens
     pub fn new(start: &'c wstr, flags: TokFlags) -> Self {
         Self::new_impl(start, flags, None)
     }
@@ -307,16 +293,16 @@ impl<'c> Tokenizer<'c> {
             token_cursor: 0,
             start,
             has_next: true,
-            brace_statement_parser: (!(flags & TOK_ARGUMENT_LIST)).then_some(
+            brace_statement_parser: (!flags.contains(TokFlags::ARGUMENT_LIST)).then_some(
                 BraceStatementParser {
                     at_command_position: true,
                     unclosed_brace_statements: 0,
                 },
             ),
-            accept_unfinished: flags & TOK_ACCEPT_UNFINISHED,
-            show_comments: flags & TOK_SHOW_COMMENTS,
-            show_blank_lines: flags & TOK_SHOW_BLANK_LINES,
-            continue_after_error: flags & TOK_CONTINUE_AFTER_ERROR,
+            accept_unfinished: flags.contains(TokFlags::ACCEPT_UNFINISHED),
+            show_comments: flags.contains(TokFlags::SHOW_COMMENTS),
+            show_blank_lines: flags.contains(TokFlags::SHOW_BLANK_LINES),
+            continue_after_error: flags.contains(TokFlags::CONTINUE_AFTER_ERROR),
             continue_line_after_comment: false,
             on_quote_toggle,
         }
@@ -643,7 +629,7 @@ impl<'c> Tokenizer<'c> {
 impl<'c> Tokenizer<'c> {
     /// Read the next token as a string.
     fn read_string(&mut self) -> Tok {
-        let mut mode = TOK_MODE_REGULAR_TEXT;
+        let mut mode = TokModes::empty();
         let mut paren_offsets = vec![];
         let mut brace_offsets = vec![];
         let mut slice_offsets = vec![];
@@ -690,8 +676,8 @@ impl<'c> Tokenizer<'c> {
             let c = self.start.char_at(self.token_cursor);
 
             // Make sure this character isn't being escaped before anything else
-            if mode & TOK_MODE_CHAR_ESCAPE {
-                mode &= !TOK_MODE_CHAR_ESCAPE;
+            if mode.contains(TokModes::CHAR_ESCAPE) {
+                mode.remove(TokModes::CHAR_ESCAPE);
                 // and do nothing more
             } else if myal(c) {
                 // Early exit optimization in case the character is just a letter,
@@ -700,23 +686,23 @@ impl<'c> Tokenizer<'c> {
             // Now proceed with the evaluation of the token, first checking to see if the token
             // has been explicitly ignored (escaped).
             else if c == '\\' {
-                mode |= TOK_MODE_CHAR_ESCAPE;
+                mode |= TokModes::CHAR_ESCAPE;
             } else if c == '#' && is_token_begin {
                 self.token_cursor = comment_end(self.start, self.token_cursor) - 1;
             } else if c == '(' {
                 paren_offsets.push(self.token_cursor);
                 expecting.push(')');
-                mode |= TOK_MODE_SUBSHELL;
+                mode |= TokModes::SUBSHELL;
             } else if c == '{' {
                 brace_offsets.push(self.token_cursor);
                 expecting.push('}');
-                mode |= TOK_MODE_CURLY_BRACES;
+                mode |= TokModes::CURLY_BRACES;
             } else if c == ')' {
                 match expecting.pop() {
                     Some(')') => {
                         paren_offsets.pop();
                         if paren_offsets.is_empty() {
-                            mode &= !TOK_MODE_SUBSHELL;
+                            mode.remove(TokModes::SUBSHELL);
                         }
                     }
                     Some('}') => {
@@ -779,7 +765,7 @@ impl<'c> Tokenizer<'c> {
                     Some('}') => {
                         brace_offsets.pop();
                         if brace_offsets.is_empty() {
-                            mode &= !TOK_MODE_CURLY_BRACES;
+                            mode.remove(TokModes::CURLY_BRACES);
                         }
                     }
                     Some(')') => {
@@ -810,7 +796,7 @@ impl<'c> Tokenizer<'c> {
                 if self.token_cursor != buff_start {
                     slice_offsets.push(self.token_cursor);
                     expecting.push(']');
-                    mode |= TOK_MODE_ARRAY_SLICE;
+                    mode |= TokModes::ARRAY_SLICE;
                 } else {
                     // This is actually allowed so the test operator `[` can be used as the head of a
                     // command
@@ -823,7 +809,7 @@ impl<'c> Tokenizer<'c> {
             else if c == ']' && expecting.last() == Some(&']') {
                 slice_offsets.pop();
                 if slice_offsets.is_empty() {
-                    mode &= !TOK_MODE_ARRAY_SLICE;
+                    mode.remove(TokModes::ARRAY_SLICE);
                 }
                 expecting.pop();
             } else if c == '\'' || c == '"' {
@@ -845,7 +831,7 @@ impl<'c> Tokenizer<'c> {
                     }
                     break;
                 }
-            } else if mode == TOK_MODE_REGULAR_TEXT
+            } else if mode.is_empty()
                 && !tok_is_string_character(
                     c,
                     self.start
@@ -866,12 +852,12 @@ impl<'c> Tokenizer<'c> {
             self.token_cursor += 1;
         }
 
-        if !self.accept_unfinished && mode != TOK_MODE_REGULAR_TEXT {
+        if !self.accept_unfinished && !mode.is_empty() {
             // These are all "unterminated", so the only char we can mark as an error
             // is the opener (the closing char could be anywhere!)
             //
-            // (except for TOK_MODE_CHAR_ESCAPE, which is one long by definition)
-            if mode & TOK_MODE_CHAR_ESCAPE {
+            // (except forTokModes::CHAR_ESCAPE, which is one long by definition)
+            if mode.contains(TokModes::CHAR_ESCAPE) {
                 return self.call_error(
                     TokenizerError::UnterminatedEscape,
                     buff_start,
@@ -879,7 +865,7 @@ impl<'c> Tokenizer<'c> {
                     None,
                     1,
                 );
-            } else if mode & TOK_MODE_ARRAY_SLICE {
+            } else if mode.contains(TokModes::ARRAY_SLICE) {
                 let offset_of_open_slice = *slice_offsets.last().expect("slice_offsets is empty");
                 return self.call_error(
                     TokenizerError::UnterminatedSlice,
@@ -888,7 +874,7 @@ impl<'c> Tokenizer<'c> {
                     None,
                     1,
                 );
-            } else if mode & TOK_MODE_SUBSHELL {
+            } else if mode.contains(TokModes::SUBSHELL) {
                 let offset_of_open_paren = *paren_offsets.last().expect("paren_offsets is empty");
 
                 return self.call_error(
@@ -898,7 +884,7 @@ impl<'c> Tokenizer<'c> {
                     None,
                     1,
                 );
-            } else if mode & TOK_MODE_CURLY_BRACES {
+            } else if mode.contains(TokModes::CURLY_BRACES) {
                 let offset_of_open_brace = *brace_offsets.last().expect("brace_offsets is empty");
 
                 return self.call_error(
@@ -916,7 +902,7 @@ impl<'c> Tokenizer<'c> {
         let mut result = Tok::new(TokenType::String);
         result.set_offset(buff_start);
         result.set_length(self.token_cursor - buff_start);
-        result.is_unterminated_brace = mode & TOK_MODE_CURLY_BRACES;
+        result.is_unterminated_brace = mode.contains(TokModes::CURLY_BRACES);
         result
     }
 }
@@ -972,35 +958,13 @@ fn myal(c: char) -> bool {
     c.is_ascii_alphabetic()
 }
 
+bitflags! {
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct TokModes(u8);
-
-const TOK_MODE_REGULAR_TEXT: TokModes = TokModes(0); // regular text
-const TOK_MODE_SUBSHELL: TokModes = TokModes(1 << 0); // inside of subshell parentheses
-const TOK_MODE_ARRAY_SLICE: TokModes = TokModes(1 << 1); // inside of array brackets
-const TOK_MODE_CURLY_BRACES: TokModes = TokModes(1 << 2);
-const TOK_MODE_CHAR_ESCAPE: TokModes = TokModes(1 << 3);
-
-impl BitAnd for TokModes {
-    type Output = bool;
-    fn bitand(self, rhs: Self) -> Self::Output {
-        (self.0 & rhs.0) != 0
-    }
-}
-impl BitAndAssign for TokModes {
-    fn bitand_assign(&mut self, rhs: Self) {
-        self.0 &= rhs.0;
-    }
-}
-impl BitOrAssign for TokModes {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
-impl Not for TokModes {
-    type Output = TokModes;
-    fn not(self) -> Self::Output {
-        TokModes(!self.0)
+    struct TokModes: u8 {
+        const SUBSHELL = 1 << 0; // inside of subshell parentheses
+        const ARRAY_SLICE = 1 << 1; // inside of array brackets
+        const CURLY_BRACES = 1 << 2;
+        const CHAR_ESCAPE = 1 << 3;
     }
 }
 
@@ -1011,7 +975,7 @@ pub fn is_token_delimiter(c: char, next: Option<char>) -> bool {
 
 /// Return the first token from the string, skipping variable assignments like A=B.
 pub fn tok_command(str: &wstr) -> WString {
-    let mut t = Tokenizer::new(str, TokFlags(0));
+    let mut t = Tokenizer::new(str, TokFlags::empty());
     while let Some(token) = t.next() {
         if token.type_ != TokenType::String {
             return WString::new();
@@ -1271,7 +1235,7 @@ mod tests {
     fn test_tokenizer() {
         {
             let s = L!("alpha beta");
-            let mut t = Tokenizer::new(s, TokFlags(0));
+            let mut t = Tokenizer::new(s, TokFlags::empty());
 
             let token = t.next(); // alpha
             assert!(token.is_some());
@@ -1293,7 +1257,7 @@ mod tests {
 
         {
             let s = L!("{ echo");
-            let mut t = Tokenizer::new(s, TokFlags(0));
+            let mut t = Tokenizer::new(s, TokFlags::empty());
 
             let token = t.next(); // {
             assert!(token.is_some());
@@ -1315,21 +1279,21 @@ mod tests {
 
         {
             let s = L!("{echo, foo}");
-            let mut t = Tokenizer::new(s, TokFlags(0));
+            let mut t = Tokenizer::new(s, TokFlags::empty());
             let token = t.next().unwrap();
             assert_eq!(token.type_, TokenType::LeftBrace);
             assert_eq!(token.length, 1);
         }
         {
             let s = L!("{ echo; foo}");
-            let mut t = Tokenizer::new(s, TokFlags(0));
+            let mut t = Tokenizer::new(s, TokFlags::empty());
             let token = t.next().unwrap();
             assert_eq!(token.type_, TokenType::LeftBrace);
         }
 
         {
             let s = L!("{ | { name } '");
-            let mut t = Tokenizer::new(s, TokFlags(0));
+            let mut t = Tokenizer::new(s, TokFlags::empty());
             let mut next_type = || t.next().unwrap().type_;
             assert_eq!(next_type(), TokenType::LeftBrace);
             assert_eq!(next_type(), TokenType::Pipe);
@@ -1365,7 +1329,7 @@ mod tests {
         ];
 
         {
-            let t = Tokenizer::new(s, TokFlags(0));
+            let t = Tokenizer::new(s, TokFlags::empty());
             let mut actual_types = vec![];
             for token in t {
                 // Print for `cargo test -- --no-capture` and make it easier to debug when the test fails
@@ -1383,7 +1347,7 @@ mod tests {
         // Test some errors.
 
         {
-            let mut t = Tokenizer::new(L!("abc\\"), TokFlags(0));
+            let mut t = Tokenizer::new(L!("abc\\"), TokFlags::empty());
             let token = t.next().unwrap();
             assert_eq!(token.type_, TokenType::Error);
             assert_eq!(token.error, TokenizerError::UnterminatedEscape);
@@ -1391,7 +1355,7 @@ mod tests {
         }
 
         {
-            let mut t = Tokenizer::new(L!("abc )defg(hij"), TokFlags(0));
+            let mut t = Tokenizer::new(L!("abc )defg(hij"), TokFlags::empty());
             let _token = t.next().unwrap();
             let token = t.next().unwrap();
             assert_eq!(token.type_, TokenType::Error);
@@ -1401,7 +1365,7 @@ mod tests {
         }
 
         {
-            let mut t = Tokenizer::new(L!("abc defg(hij (klm)"), TokFlags(0));
+            let mut t = Tokenizer::new(L!("abc defg(hij (klm)"), TokFlags::empty());
             let _token = t.next().unwrap();
             let token = t.next().unwrap();
             assert_eq!(token.type_, TokenType::Error);
@@ -1410,7 +1374,7 @@ mod tests {
         }
 
         {
-            let mut t = Tokenizer::new(L!("abc defg[hij (klm)"), TokFlags(0));
+            let mut t = Tokenizer::new(L!("abc defg[hij (klm)"), TokFlags::empty());
             let _token = t.next().unwrap();
             let token = t.next().unwrap();
             assert_eq!(token.type_, TokenType::Error);
@@ -1433,7 +1397,7 @@ mod tests {
             ];
 
             for (i, e) in input.into_iter().zip(err) {
-                let mut t = Tokenizer::new(i, TokFlags(0));
+                let mut t = Tokenizer::new(i, TokFlags::empty());
                 let _token = t.next().unwrap();
                 let token = t.next().unwrap();
                 assert_eq!(token.type_, TokenType::Error);
