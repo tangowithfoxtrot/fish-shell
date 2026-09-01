@@ -629,7 +629,6 @@ impl<'c> Tokenizer<'c> {
 impl<'c> Tokenizer<'c> {
     /// Read the next token as a string.
     fn read_string(&mut self) -> Tok {
-        let mut mode = TokModes::empty();
         let mut paren_offsets = vec![];
         let mut brace_offsets = vec![];
         let mut slice_offsets = vec![];
@@ -638,6 +637,12 @@ impl<'c> Tokenizer<'c> {
         let buff_start = self.token_cursor;
         let mut is_token_begin = true;
 
+        #[derive(Debug, PartialEq)]
+        enum Expecting {
+            Paren,
+            Brace,
+            Slice,
+        }
         struct QuotedSubst {
             quote_location: usize,
             subst_depth: usize, // aka index in paren_offsets
@@ -675,64 +680,44 @@ impl<'c> Tokenizer<'c> {
         while self.token_cursor != self.start.len() {
             let c = self.start.char_at(self.token_cursor);
 
-            // Make sure this character isn't being escaped before anything else
-            if mode.contains(TokModes::CHAR_ESCAPE) {
-                mode.remove(TokModes::CHAR_ESCAPE);
-                // and do nothing more
-            } else if myal(c) {
+            if myal(c) {
                 // Early exit optimization in case the character is just a letter,
                 // which has no special meaning to the tokenizer, i.e. the same mode continues.
             }
             // Now proceed with the evaluation of the token, first checking to see if the token
             // has been explicitly ignored (escaped).
             else if c == '\\' {
-                mode |= TokModes::CHAR_ESCAPE;
+                if self.token_cursor + 1 < self.start.len() {
+                    self.token_cursor += 1;
+                } else if !self.accept_unfinished {
+                    return self.call_error(
+                        TokenizerError::UnterminatedEscape,
+                        self.token_cursor,
+                        self.token_cursor,
+                        None,
+                        1,
+                    );
+                }
             } else if c == '#' && is_token_begin {
                 self.token_cursor = comment_end(self.start, self.token_cursor) - 1;
             } else if c == '(' {
                 paren_offsets.push(self.token_cursor);
-                expecting.push(')');
-                mode |= TokModes::SUBSHELL;
+                expecting.push(Expecting::Paren);
             } else if c == '{' {
                 brace_offsets.push(self.token_cursor);
-                expecting.push('}');
-                mode |= TokModes::CURLY_BRACES;
+                expecting.push(Expecting::Brace);
             } else if c == ')' {
-                match expecting.pop() {
-                    Some(')') => {
+                let result = match expecting.pop() {
+                    Some(Expecting::Paren) => {
                         paren_offsets.pop();
-                        if paren_offsets.is_empty() {
-                            mode.remove(TokModes::SUBSHELL);
-                        }
+                        Ok(())
                     }
-                    Some('}') => {
-                        return self.call_error(
-                            TokenizerError::UnexpectedPcloseWantedBclose,
-                            self.token_cursor,
-                            self.token_cursor,
-                            Some(1),
-                            1,
-                        );
-                    }
-                    Some(']') => {
-                        return self.call_error(
-                            TokenizerError::UnexpectedPcloseWantedSclose,
-                            self.token_cursor,
-                            self.token_cursor,
-                            Some(1),
-                            1,
-                        );
-                    }
-                    None => {
-                        return self.call_error(
-                            TokenizerError::ClosingUnopenedSubshell,
-                            self.token_cursor,
-                            self.token_cursor,
-                            Some(1),
-                            1,
-                        );
-                    }
-                    Some(_) => unreachable!(),
+                    Some(Expecting::Brace) => Err(TokenizerError::UnexpectedPcloseWantedBclose),
+                    Some(Expecting::Slice) => Err(TokenizerError::UnexpectedPcloseWantedSclose),
+                    None => Err(TokenizerError::ClosingUnopenedSubshell),
+                };
+                if let Err(err) = result {
+                    return self.call_error(err, self.token_cursor, self.token_cursor, Some(1), 1);
                 }
                 // Check if the ) completed a quoted command substitution.
                 if quoted_cmdsubs.last().map(|cmd| cmd.subst_depth) == Some(paren_offsets.len()) {
@@ -761,42 +746,25 @@ impl<'c> Tokenizer<'c> {
                     }
                 }
             } else if c == '}' {
-                match expecting.pop() {
-                    Some('}') => {
+                let result = match expecting.pop() {
+                    Some(Expecting::Brace) => {
                         brace_offsets.pop();
-                        if brace_offsets.is_empty() {
-                            mode.remove(TokModes::CURLY_BRACES);
-                        }
+                        Ok(())
                     }
-                    Some(')') => {
-                        return self.call_error(
-                            TokenizerError::UnexpectedBcloseWantedPclose,
-                            self.token_cursor,
-                            self.token_cursor,
-                            Some(1),
-                            1,
-                        );
-                    }
-                    Some(']') => {
-                        return self.call_error(
-                            TokenizerError::UnexpectedBcloseWantedSclose,
-                            self.token_cursor,
-                            self.token_cursor,
-                            Some(1),
-                            1,
-                        );
-                    }
+                    Some(Expecting::Paren) => Err(TokenizerError::UnexpectedBcloseWantedPclose),
+                    Some(Expecting::Slice) => Err(TokenizerError::UnexpectedBcloseWantedSclose),
                     None => {
                         // Let the caller throw an error.
                         break;
                     }
-                    Some(_) => unreachable!(),
+                };
+                if let Err(err) = result {
+                    return self.call_error(err, self.token_cursor, self.token_cursor, Some(1), 1);
                 }
             } else if c == '[' {
                 if self.token_cursor != buff_start {
                     slice_offsets.push(self.token_cursor);
-                    expecting.push(']');
-                    mode |= TokModes::ARRAY_SLICE;
+                    expecting.push(Expecting::Slice);
                 } else {
                     // This is actually allowed so the test operator `[` can be used as the head of a
                     // command
@@ -806,11 +774,8 @@ impl<'c> Tokenizer<'c> {
             // any unclosed paren or brace since the opening of the slice. If we do, consider
             // the bracket to be a parameter, e.g. last parameter to `[` test alias,
             // e.g. `echo $argv[([ $x -eq $y ])]`
-            else if c == ']' && expecting.last() == Some(&']') {
+            else if c == ']' && expecting.last() == Some(&Expecting::Slice) {
                 slice_offsets.pop();
-                if slice_offsets.is_empty() {
-                    mode.remove(TokModes::ARRAY_SLICE);
-                }
                 expecting.pop();
             } else if c == '\'' || c == '"' {
                 if let Err(error_loc) = process_opening_quote(
@@ -831,7 +796,7 @@ impl<'c> Tokenizer<'c> {
                     }
                     break;
                 }
-            } else if mode.is_empty()
+            } else if expecting.is_empty()
                 && !tok_is_string_character(
                     c,
                     self.start
@@ -852,57 +817,33 @@ impl<'c> Tokenizer<'c> {
             self.token_cursor += 1;
         }
 
-        if !self.accept_unfinished && !mode.is_empty() {
+        if !self.accept_unfinished {
             // These are all "unterminated", so the only char we can mark as an error
             // is the opener (the closing char could be anywhere!)
-            //
-            // (except forTokModes::CHAR_ESCAPE, which is one long by definition)
-            if mode.contains(TokModes::CHAR_ESCAPE) {
-                return self.call_error(
-                    TokenizerError::UnterminatedEscape,
-                    buff_start,
-                    self.token_cursor - 1,
-                    None,
-                    1,
-                );
-            } else if mode.contains(TokModes::ARRAY_SLICE) {
-                let offset_of_open_slice = *slice_offsets.last().expect("slice_offsets is empty");
-                return self.call_error(
-                    TokenizerError::UnterminatedSlice,
-                    buff_start,
-                    offset_of_open_slice,
-                    None,
-                    1,
-                );
-            } else if mode.contains(TokModes::SUBSHELL) {
-                let offset_of_open_paren = *paren_offsets.last().expect("paren_offsets is empty");
-
-                return self.call_error(
+            let result = match expecting.last() {
+                Some(Expecting::Paren) => Err((
+                    *paren_offsets.last().expect("paren_offsets is empty"),
                     TokenizerError::UnterminatedSubshell,
-                    buff_start,
-                    offset_of_open_paren,
-                    None,
-                    1,
-                );
-            } else if mode.contains(TokModes::CURLY_BRACES) {
-                let offset_of_open_brace = *brace_offsets.last().expect("brace_offsets is empty");
-
-                return self.call_error(
+                )),
+                Some(Expecting::Brace) => Err((
+                    *brace_offsets.last().expect("brace_offsets is empty"),
                     TokenizerError::UnterminatedBrace,
-                    buff_start,
-                    offset_of_open_brace,
-                    None,
-                    1,
-                );
-            } else {
-                panic!("Unknown non-regular-text mode");
+                )),
+                Some(Expecting::Slice) => Err((
+                    *slice_offsets.last().expect("slice_offsets is empty"),
+                    TokenizerError::UnterminatedSlice,
+                )),
+                None => Ok(()),
+            };
+            if let Err((offset, error)) = result {
+                return self.call_error(error, buff_start, offset, None, 1);
             }
         }
 
         let mut result = Tok::new(TokenType::String);
         result.set_offset(buff_start);
         result.set_length(self.token_cursor - buff_start);
-        result.is_unterminated_brace = mode.contains(TokModes::CURLY_BRACES);
+        result.is_unterminated_brace = expecting.contains(&Expecting::Brace);
         result
     }
 }
@@ -956,16 +897,6 @@ pub fn tok_is_string_character(c: char, next: Option<char>) -> bool {
 /// replacement for iswalpha.
 fn myal(c: char) -> bool {
     c.is_ascii_alphabetic()
-}
-
-bitflags! {
-#[derive(Clone, Copy, PartialEq, Eq)]
-    struct TokModes: u8 {
-        const SUBSHELL = 1 << 0; // inside of subshell parentheses
-        const ARRAY_SLICE = 1 << 1; // inside of array brackets
-        const CURLY_BRACES = 1 << 2;
-        const CHAR_ESCAPE = 1 << 3;
-    }
 }
 
 /// Tests if this character can delimit tokens.
@@ -1351,7 +1282,8 @@ mod tests {
             let token = t.next().unwrap();
             assert_eq!(token.type_, TokenType::Error);
             assert_eq!(token.error, TokenizerError::UnterminatedEscape);
-            assert_eq!(token.error_offset_within_token, 3);
+            assert_eq!(token.offset, 3);
+            assert_eq!(token.error_offset_within_token, 0);
         }
 
         {
