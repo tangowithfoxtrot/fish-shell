@@ -3,8 +3,9 @@ use fish_feature_flags::{FeatureFlag, feature_test};
 use fish_widestring::{
     ANY_CHAR, ANY_STRING, ANY_STRING_RECURSIVE, ASCII_MAX, BRACE_BEGIN, BRACE_END, BRACE_SEP,
     BRACE_SPACE, BYTE_MAX, HOME_DIRECTORY, INTERNAL_SEPARATOR, L, PROCESS_EXPAND_SELF,
-    PROCESS_EXPAND_SELF_STR, UCS2_MAX, VARIABLE_EXPAND, VARIABLE_EXPAND_SINGLE, WExt as _, WString,
-    bytes2wcstring, decode_byte_from_char, fish_reserved_codepoint, wcs2bytes, wstr,
+    PROCESS_EXPAND_SELF_STR, SLICE_BEGIN, SLICE_END, UCS2_MAX, VARIABLE_EXPAND,
+    VARIABLE_EXPAND_SINGLE, WExt as _, WString, bytes2wcstring, decode_byte_from_char,
+    fish_reserved_codepoint, wcs2bytes, wstr,
 };
 use libc::{SIG_IGN, SIGTTOU, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::unistd;
@@ -543,7 +544,7 @@ fn unescape_string_internal(input: &wstr, flags: UnescapeFlags) -> Option<WStrin
                 '\\' if !ignore_backslashes => {
                     // Backslashes (escapes) are complicated and may result in errors, or
                     // appending INTERNAL_SEPARATORs, so we have to handle them specially.
-                    if let Some(escape_chars) = read_unquoted_escape(
+                    if let Some(escape_chars) = unescape_one(
                         &input[input_position..],
                         &mut result,
                         allow_incomplete,
@@ -636,6 +637,12 @@ fn unescape_string_internal(input: &wstr, flags: UnescapeFlags) -> Option<WStrin
                             }
                         }
                     }
+                }
+                '[' if unescape_special => {
+                    to_append_or_none = Some(SLICE_BEGIN);
+                }
+                ']' if unescape_special => {
+                    to_append_or_none = Some(SLICE_END);
                 }
                 ',' if unescape_special && brace_count > 0 => {
                     to_append_or_none = Some(BRACE_SEP);
@@ -733,6 +740,12 @@ fn unescape_string_internal(input: &wstr, flags: UnescapeFlags) -> Option<WStrin
                     to_append_or_none = Some(VARIABLE_EXPAND_SINGLE);
                     vars_or_seps.push(input_position);
                 }
+                '[' if unescape_special => {
+                    to_append_or_none = Some(SLICE_BEGIN);
+                }
+                ']' if unescape_special => {
+                    to_append_or_none = Some(SLICE_END);
+                }
                 _ => (),
             }
         }
@@ -827,7 +840,7 @@ fn unescape_string_var(input: &wstr) -> Option<WString> {
 
 /// Given a string starting with a backslash, read the escape as if it is unquoted, appending
 /// to result. Return the number of characters consumed, or none on error.
-pub fn read_unquoted_escape(
+pub fn unescape_one(
     input: &wstr,
     result: &mut WString,
     allow_incomplete: bool,
@@ -940,12 +953,14 @@ pub fn read_unquoted_escape(
             'c' => {
                 let sequence_char = u32::from(input.char_at(in_pos));
                 in_pos += 1;
-                if sequence_char >= u32::from('a') && sequence_char <= u32::from('a') + 32 {
-                    result_char_or_none =
-                        Some(char::from_u32(sequence_char - u32::from('a') + 1).unwrap());
-                } else if sequence_char >= u32::from('A') && sequence_char <= u32::from('A') + 32 {
-                    result_char_or_none =
-                        Some(char::from_u32(sequence_char - u32::from('A') + 1).unwrap());
+                // Range covers:
+                //   @ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_
+                //   `abcdefghijklmnopqrstuvwxyz{|}~
+                // `\c<0x7f>` (lowercase version of `\c_`) is not supported since
+                // `0x7f` a control character to begin with.
+                if (u32::from('@')..0x7f).contains(&sequence_char) {
+                    let ctrl = char::from_u32(sequence_char % 32).unwrap();
+                    result_char_or_none = Some(ctrl);
                 } else {
                     errored = true;
                 }
@@ -1546,5 +1561,34 @@ mod tests {
         assert_eq!(truncate_at_nul(L!("abc\0def")), L!("abc"));
         assert_eq!(truncate_at_nul(L!("abc")), L!("abc"));
         assert_eq!(truncate_at_nul(L!("\0abc")), L!(""));
+    }
+
+    mod unescape_one {
+        use super::*;
+
+        fn test_good(escaped: &wstr, expected: &wstr) {
+            let mut unesc = WString::new();
+            let r = unescape_one(escaped, &mut unesc, false, false);
+            assert_eq!(r, Some(escaped.len()));
+            assert_eq!(unesc, expected, "{escaped} -> {:?}", unesc);
+        }
+
+        fn test_bad(escaped: &wstr) {
+            let mut unesc = WString::new();
+            let r = unescape_one(escaped, &mut unesc, false, false);
+            assert_eq!(r, None, "{escaped} -> {:?}", unesc);
+        }
+
+        #[test]
+        fn control() {
+            test_bad(L!("\\c?"));
+            test_good(L!("\\c@"), L!("\x00"));
+            test_good(L!("\\cA"), L!("\x01"));
+            test_good(L!("\\c_"), L!("\x1f"));
+            test_good(L!("\\c`"), L!("\x00"));
+            test_good(L!("\\ca"), L!("\x01"));
+            test_bad(L!("\\c\x7f"));
+            test_bad(L!("\\c\u{0080}"));
+        }
     }
 }
