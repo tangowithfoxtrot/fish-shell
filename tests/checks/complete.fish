@@ -416,8 +416,8 @@ complete banana bar
 #CHECKERR: complete: too many arguments
 #CHECKERR:
 #CHECKERR: {{.*}}checks/complete.fish (line {{\d+}}):
-#CHECKERR: complete banana bar
-#CHECKERR: ^
+#CHECKERR: {{^}}complete banana bar
+#CHECKERR: {{^}}^
 #CHECKERR:
 #CHECKERR: (Type 'help complete' for related documentation)
 
@@ -532,8 +532,8 @@ complete -c thing -F -f
 complete -f -c shot
 complete -fc shot -n 'test (count (commandline -xpc) -eq 1' -n 'test (commandline -xpc)[-1] = shot' -a through
 # CHECKERR: complete: -n 'test (count (commandline -xpc) -eq 1': Unexpected end of string, expecting ')'
-# CHECKERR: test (count (commandline -xpc) -eq 1
-# CHECKERR: ^
+# CHECKERR: {{^}}test (count (commandline -xpc) -eq 1
+# CHECKERR: {{^}}     ^
 complete -fc shot -n 'test (count (commandline -xpc)) -eq 1' -n 'test (commandline -xpc)[-1] = shot' -a through
 complete -fc shot -n 'test (count (commandline -xpc)) -eq 2' -n 'test (commandline -xpc)[-1] = through' -a the
 complete -fc shot -n 'test (count (commandline -xpc)) -eq 3' -n 'test (commandline -xpc)[-1] = the' -a heart
@@ -759,8 +759,8 @@ end
 complete -c foo -a "foo\\"
 # CHECKERR: complete: foo\: contains a syntax error
 # CHECKERR: complete: Expected a string, but found an incomplete token
-# CHECKERR: foo\
-# CHECKERR:    ^
+# CHECKERR: {{^}}foo\
+# CHECKERR: {{^}}   ^
 
 complete -C
 # CHECKERR: complete: Can not get commandline in non-interactive mode

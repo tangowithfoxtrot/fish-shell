@@ -52,12 +52,12 @@ echo $test[2 9..]
 # missing start, cannot use implied range
 echo $test[1..2..]
 #CHECKERR: {{.*}}: Invalid index value
-#CHECKERR: echo $test[1..2..]
-#CHECKERR:                ^
+#CHECKERR: {{^}}echo $test[1..2..]
+#CHECKERR: {{^}}               ^
 echo $test[..1..2]
 #CHECKERR: {{.*}}: Invalid index value
-#CHECKERR: echo $test[..1..2]
-#CHECKERR:               ^
+#CHECKERR: {{^}}echo $test[..1..2]
+#CHECKERR: {{^}}              ^
 
 set -l empty
 echo $test[ $empty..]
@@ -109,5 +109,5 @@ set foo abc def
 set bar "1]2"
 echo $foo[$bar]
 #CHECKERR: {{.*}}/slices.fish (line {{\d+}}): Invalid index value
-#CHECKERR: echo $foo[$bar]
-#CHECKERR:             ^
+#CHECKERR: {{^}}echo $foo[$bar]
+#CHECKERR: {{^}}            ^
