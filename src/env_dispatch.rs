@@ -37,7 +37,7 @@ static USE_POSIX_SPAWN: AtomicBool = AtomicBool::new(false);
 
 const TIMEZONE_VARNAME: &wstr = L!("TZ");
 
-/// The variable dispatch table. This is set at startup and cannot be modified after.
+/// The variable dispatch table.
 static VAR_DISPATCH_TABLE: once_cell::sync::Lazy<VarDispatchTable> =
     once_cell::sync::Lazy::new(|| {
         let mut table = VarDispatchTable::default();
@@ -493,4 +493,65 @@ fn init_locale(vars: &EnvStack) {
 
 pub fn use_posix_spawn() -> bool {
     USE_POSIX_SPAWN.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TIMEZONE_VARNAME, handle_timezone_change};
+    use crate::env::{EnvMode, EnvSetMode, EnvStack, getenv_lock, setenv_lock, unsetenv_lock};
+    use crate::prelude::*;
+    use crate::tests::prelude::*;
+    use assert_matches::assert_matches;
+    use fish_common::ScopeGuard;
+    use std::{
+        mem::MaybeUninit,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    // TODO: Add tests for the locale vars.
+
+    /// Helper for test_timezone_env_vars().
+    fn return_timezone_hour(tstamp: SystemTime, timezone: &wstr) -> libc::c_int {
+        let vars = EnvStack::globals().create_child(true /* dispatches_var_changes */);
+
+        vars.set_one(
+            TIMEZONE_VARNAME,
+            EnvSetMode::new(EnvMode::EXPORTED, false),
+            timezone.to_owned(),
+        );
+        let _restore_tz_envvar = {
+            let saved_value = getenv_lock(TIMEZONE_VARNAME);
+            ScopeGuard::new((), move |()| match saved_value {
+                Some(value) => setenv_lock(TIMEZONE_VARNAME, &value, true),
+                None => unsetenv_lock(TIMEZONE_VARNAME),
+            })
+        };
+        handle_timezone_change(&vars, false);
+
+        #[allow(deprecated)]
+        let tstamp: libc::time_t = tstamp
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .try_into()
+            .unwrap();
+        let mut local_time = MaybeUninit::uninit();
+        unsafe { libc::localtime_r(&tstamp, local_time.as_mut_ptr()) };
+        let local_time = unsafe { local_time.assume_init() };
+        local_time.tm_hour
+    }
+
+    /// Verify TZ handling.
+    #[test]
+    #[serial]
+    fn test_timezone_env_vars() {
+        test_init();
+
+        // Confirm changing the timezone affects fish's idea of the local time.
+        let tstamp = SystemTime::now();
+
+        let first_tstamp = return_timezone_hour(tstamp, L!("UTC-1"));
+        let second_tstamp = return_timezone_hour(tstamp, L!("UTC-2"));
+        let delta = second_tstamp - first_tstamp;
+        assert_matches!(delta, 1 | -23);
+    }
 }
