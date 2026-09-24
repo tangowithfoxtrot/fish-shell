@@ -291,7 +291,7 @@ fn set_tty_protocols_active(on_write: fn(), enable: bool) {
 
     // Write the commands to the tty, ignoring errors.
     let commands = protocols.get_commands(enable);
-    let _ = write_loop(&libc::STDOUT_FILENO, commands);
+    _ = write_loop(&libc::STDOUT_FILENO, commands);
     if !enable {
         TTY_PROTOCOLS_ACTIVE.store(false);
     }
@@ -334,7 +334,7 @@ pub fn deactivate_tty_protocols() {
 
     let commands = protocols.get_commands(false);
     // Safety: just writing data to stdout.
-    let _ = write_loop(&libc::STDOUT_FILENO, commands);
+    _ = write_loop(&libc::STDOUT_FILENO, commands);
     TTY_PROTOCOLS_ACTIVE.store(false);
 }
 
@@ -412,7 +412,7 @@ impl TtyHandoff {
         };
         match tcgetattr(STDIN_FD) {
             Ok(modes) => {
-                owner.tmodes.replace(Some(modes));
+                *owner.tmodes.lock().unwrap() = Some(modes);
             }
             Err(err) => {
                 if err != nix::Error::ENOTTY {

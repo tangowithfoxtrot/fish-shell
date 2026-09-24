@@ -131,14 +131,14 @@ pub fn fg(parser: &mut Parser, streams: &mut IoStreams, argv: &mut [&wstr]) -> B
     // Note if tty transfer fails, we still try running the job.
     parser.job_promote_at(job_pos);
     let mut handoff = TtyHandoff::new(reader_save_screen_state);
-    let _ = make_fd_blocking(STDIN_FILENO);
+    _ = make_fd_blocking(STDIN_FILENO);
     {
         let job_group = job.group();
         job_group.set_is_foreground(true);
         if job.entitled_to_terminal() {
             handoff.disable_tty_protocols();
         }
-        let tmodes = job_group.tmodes.borrow();
+        let tmodes = job_group.tmodes.lock().unwrap();
         if job_group.wants_terminal() && tmodes.is_some() {
             let tmodes = tmodes.as_ref().unwrap();
             if tcsetattr(STDIN_FD, termios::SetArg::TCSADRAIN, tmodes).is_err() {

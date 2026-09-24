@@ -23,17 +23,14 @@ set. This is the real power of topics: you can wait for a sigchld signal OR a th
 use crate::fd_readable_set::{FdReadableSet, Timeout};
 use crate::fds::{self, AutoClosePipes, make_fd_nonblocking};
 use crate::flog::{FloggableDebug, flog};
+use fish_common::assert_sync;
 use fish_util::perror;
 use fish_widestring::WString;
 use nix::errno::Errno;
 use nix::unistd;
-#[cfg(target_os = "linux")]
-use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd as _;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
-#[cfg(target_os = "linux")]
-use std::{cell::UnsafeCell, pin::Pin};
 
 /// The list of topics which may be observed.
 #[repr(u8)]
@@ -115,13 +112,73 @@ impl GenerationsList {
 /// A simple binary semaphore.
 /// On systems that do not support unnamed semaphores (macOS in particular) this is built on top of
 /// a self-pipe. Note that post() must be async-signal safe.
-pub enum BinarySemaphore {
+enum BinarySemaphore {
     /// Initialized semaphore.
-    /// This is Box'd so it has a stable address.
     #[cfg(target_os = "linux")]
-    Semaphore(Pin<Box<UnsafeCell<libc::sem_t>>>),
+    Semaphore(Semaphore),
     /// Pipes used to emulate a semaphore, if not initialized.
     Pipes(AutoClosePipes),
+}
+
+#[cfg(target_os = "linux")]
+use unnamed_semaphore::Semaphore;
+#[cfg(target_os = "linux")]
+mod unnamed_semaphore {
+    use super::die;
+    use nix::errno::Errno;
+    use std::{cell::UnsafeCell, pin::Pin};
+
+    /// This is Box'd so it has a stable address.
+    pub(super) struct Semaphore(Pin<Box<UnsafeCell<libc::sem_t>>>);
+
+    impl Semaphore {
+        pub(super) fn new() -> Option<Self> {
+            use std::mem::MaybeUninit;
+            let mut sem: Box<MaybeUninit<UnsafeCell<libc::sem_t>>> = Box::new_uninit();
+            (unsafe { libc::sem_init(sem.as_mut_ptr().cast(), 0, 0) } == 0).then(|| {
+                // SAFETY: `sem_init` succeeded.
+                let boxed = unsafe { sem.assume_init() };
+                Self(Box::into_pin(boxed))
+            })
+        }
+
+        pub(super) fn post(&self) {
+            // SAFETY: `sem_init` succeeded and `sem` is pinned.
+            let res = unsafe { libc::sem_post(self.0.get()) };
+            // sem_post is non-interruptible.
+            if res < 0 {
+                die("sem_post");
+            }
+        }
+
+        pub(super) fn wait(&self) {
+            loop {
+                // SAFETY: `sem_init` succeeded and `sem` is pinned.
+                match unsafe { libc::sem_wait(self.0.get()) } {
+                    0.. => break,
+                    _ if Errno::last() == Errno::EINTR => continue,
+                    // Other errors here are very unexpected.
+                    _ => die("sem_wait"),
+                }
+            }
+        }
+    }
+
+    impl Drop for Semaphore {
+        fn drop(&mut self) {
+            // SAFETY: `sem_init` succeeded and `sem` is pinned.
+            _ = unsafe { libc::sem_destroy(self.0.get()) };
+        }
+    }
+
+    // SAFETY: The sem_t is never moved because it's pinned. All of sem_post,
+    // sem_wait, sem_destroy are MT-Safe.
+    unsafe impl Sync for Semaphore {}
+}
+
+fn die(msg: &str) {
+    perror(msg);
+    panic!("die");
 }
 
 impl BinarySemaphore {
@@ -130,12 +187,8 @@ impl BinarySemaphore {
         // On BSD sem_init uses a file descriptor under the hood which doesn't get CLOEXEC (see #7304).
         // So use fast semaphores on Linux only.
         #[cfg(target_os = "linux")]
-        if let Some(sem) = {
-            let mut sem = MaybeUninit::uninit();
-            let res = unsafe { libc::sem_init(sem.as_mut_ptr(), 0, 0) };
-            (res == 0).then_some(unsafe { sem.assume_init() })
-        } {
-            return Self::Semaphore(Box::pin(UnsafeCell::new(sem)));
+        if let Some(sem) = Semaphore::new() {
+            return Self::Semaphore(sem);
         }
 
         let pipes = fds::make_autoclose_pipes().expect("Failed to make pubsub pipes");
@@ -146,7 +199,7 @@ impl BinarySemaphore {
         // we'll never receive SIGCHLD and so deadlock. So if tsan is enabled, we mark our fd as
         // non-blocking (so reads will never block) and use select() to poll it.
         if cfg!(feature = "tsan") {
-            let _ = make_fd_nonblocking(pipes.read.as_raw_fd());
+            _ = make_fd_nonblocking(pipes.read.as_raw_fd());
         }
 
         Self::Pipes(pipes)
@@ -157,19 +210,13 @@ impl BinarySemaphore {
         // Beware, we are in a signal handler.
         match self {
             #[cfg(target_os = "linux")]
-            Self::Semaphore(sem) => {
-                let res = unsafe { libc::sem_post(sem.get()) };
-                // sem_post is non-interruptible.
-                if res < 0 {
-                    self.die("sem_post");
-                }
-            }
+            Self::Semaphore(sem) => sem.post(),
             Self::Pipes(pipes) => {
                 // Write exactly one byte.
                 loop {
                     match unistd::write(&pipes.write, &[0]) {
                         Err(Errno::EINTR) => continue,
-                        Err(_) => self.die("write"),
+                        Err(_) => die("write"),
                         Ok(_) => break,
                     }
                 }
@@ -182,16 +229,7 @@ impl BinarySemaphore {
     pub fn wait(&self) {
         match self {
             #[cfg(target_os = "linux")]
-            Self::Semaphore(sem) => {
-                loop {
-                    match unsafe { libc::sem_wait(sem.get()) } {
-                        0.. => break,
-                        _ if Errno::last() == Errno::EINTR => continue,
-                        // Other errors here are very unexpected.
-                        _ => self.die("sem_wait"),
-                    }
-                }
-            }
+            Self::Semaphore(sem) => sem.wait(),
             Self::Pipes(pipes) => {
                 let fd = pipes.read.as_raw_fd();
                 // We must read exactly one byte.
@@ -200,7 +238,7 @@ impl BinarySemaphore {
                     // call until data is available (that is, fish would use 100% cpu while waiting for
                     // processes). This call prevents that.
                     if cfg!(feature = "tsan") {
-                        let _ = FdReadableSet::is_fd_readable(fd, Timeout::Forever);
+                        _ = FdReadableSet::is_fd_readable(fd, Timeout::Forever);
                     }
                     let mut ignored: u8 = 0;
                     match unistd::read(&pipes.read, std::slice::from_mut(&mut ignored)) {
@@ -208,24 +246,10 @@ impl BinarySemaphore {
                         Ok(_) => continue,
                         // EAGAIN should only be possible if TSAN workarounds have been applied
                         Err(Errno::EINTR) | Err(Errno::EAGAIN) => continue,
-                        Err(_) => self.die("read"),
+                        Err(_) => die("read"),
                     }
                 }
             }
-        }
-    }
-
-    pub fn die(&self, msg: &str) {
-        perror(msg);
-        panic!("die");
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for BinarySemaphore {
-    fn drop(&mut self) {
-        if let Self::Semaphore(sem) = self {
-            _ = unsafe { libc::sem_destroy(sem.get()) };
         }
     }
 }
@@ -293,27 +317,12 @@ pub struct TopicMonitor {
     sema_: BinarySemaphore,
 }
 
-// safety: this is only needed for tests
-#[cfg(test)]
-unsafe impl Sync for TopicMonitor {}
+const _: () = assert_sync::<TopicMonitor>();
 
-/// The principal topic monitor.
-/// Do not attempt to move this into a lazy_static, it must be accessed from a signal handler.
-static mut PRINCIPAL: *const TopicMonitor = std::ptr::null();
+/// The principal topic monitor. This will be accessed from a signal handler.
+static PRINCIPAL: AtomicPtr<TopicMonitor> = AtomicPtr::new(std::ptr::null_mut());
 
 impl TopicMonitor {
-    /// Initialize the principal monitor, and return it.
-    /// This should be called only on the main thread.
-    pub fn initialize() -> &'static Self {
-        unsafe {
-            if PRINCIPAL.is_null() {
-                // We simply leak.
-                PRINCIPAL = Box::into_raw(Box::default());
-            }
-            &*PRINCIPAL
-        }
-    }
-
     pub fn post(&self, topic: Topic) {
         // Beware, we may be in a signal handler!
         // Atomically update the pending topics.
@@ -577,18 +586,27 @@ fn bump_gen(mine: &mut Generation, theirs: Generation) -> bool {
     }
 }
 
+/// Initialize the principal monitor.
+/// Call before installing signal handlers that use the monitor.
 pub fn init() {
-    TopicMonitor::initialize();
+    PRINCIPAL
+        .compare_exchange(
+            std::ptr::null_mut(),
+            Box::into_raw(Box::default()),
+            Ordering::Release,
+            Ordering::Relaxed,
+        )
+        .unwrap();
 }
 
 pub fn principal() -> &'static TopicMonitor {
-    unsafe {
-        assert!(
-            !PRINCIPAL.is_null(),
-            "Principal topic monitor not initialized"
-        );
-        &*PRINCIPAL
-    }
+    let principal = PRINCIPAL.load(Ordering::Acquire);
+    assert!(
+        !principal.is_null(),
+        "Principal topic monitor not initialized"
+    );
+    // SAFETY: This has been initialized with release ordering.
+    unsafe { &*principal }
 }
 
 #[cfg(test)]

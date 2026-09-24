@@ -2,7 +2,7 @@
 
 use crate::{
     ast::{
-        self, BlockStatementHeader, Keyword as _, Leaf as _, Node, Statement, Token as _,
+        self, BlockStatementHeader, Keyword as _, Leaf as _, Node as _, Statement, Token as _,
         unescape_keyword,
     },
     builtins::{
@@ -127,7 +127,7 @@ impl ExecutionContext {
         }
     }
 
-    pub fn pstree(&self) -> &ParsedSourceRef {
+    fn pstree(&self) -> &ParsedSourceRef {
         &self.pstree
     }
 
@@ -135,22 +135,9 @@ impl ExecutionContext {
         self.cancel_signal
     }
 
-    pub fn eval_node(
-        &mut self,
-        ctx: &mut OperationContext<'_>,
-        node: &dyn Node,
-        associated_block: Option<BlockId>,
-    ) -> EndExecutionReason {
-        match node.kind() {
-            ast::Kind::Statement(node) => self.eval_statement(ctx, node, associated_block),
-            ast::Kind::JobList(node) => self.eval_job_list(ctx, node, associated_block.unwrap()),
-            _ => unreachable!(),
-        }
-    }
-
     /// Start executing at the given node. Returns 0 if there was no error, 1 if there was an
     /// error.
-    fn eval_statement(
+    pub(crate) fn eval_statement(
         &mut self,
         ctx: &mut OperationContext<'_>,
         statement: &ast::Statement,
@@ -168,7 +155,7 @@ impl ExecutionContext {
         }
     }
 
-    fn eval_job_list(
+    pub(crate) fn eval_job_list(
         &mut self,
         ctx: &mut OperationContext<'_>,
         job_list: &ast::JobList,
@@ -880,7 +867,10 @@ impl ExecutionContext {
         let mut redirections = RedirectionSpecList::new();
         let reason = self.determine_redirections(ctx, args_or_redirs, &mut redirections);
         if reason == EndExecutionReason::Ok {
-            proc.typ = ProcessType::BlockNode(NodeRef::new(Arc::clone(self.pstree()), statement));
+            proc.typ = ProcessType::BlockNode(
+                // SAFETY: `statement` must be a descendant of the `eval_node()`'s node, which is owned by our parsed source.
+                unsafe { NodeRef::new(Arc::clone(self.pstree()), statement) },
+            );
             proc.set_redirection_specs(redirections);
         }
         reason
@@ -1333,7 +1323,8 @@ impl ExecutionContext {
             ctx.parser(),
             &mut streams,
             &mut shim_arguments,
-            NodeRef::new(Arc::clone(self.pstree()), statement),
+            // SAFETY: `statement` must be a descendant of the `eval_node()`'s node, which is owned by our parsed source.
+            unsafe { NodeRef::new(Arc::clone(self.pstree()), statement) },
         )
         .err()
         .unwrap_or(STATUS_CMD_OK);
@@ -1571,7 +1562,8 @@ impl ExecutionContext {
         let _saved_eval_level = ctx.parser().push_scope(|s| s.eval_level += 1);
 
         // Save the executing node.
-        let executing_node = NodeRef::new(Arc::clone(self.pstree()), job_node);
+        // SAFETY: `job_node` must be a descendant of the `eval_node()`'s node, which is owned by our parsed source.
+        let executing_node = unsafe { NodeRef::new(Arc::clone(self.pstree()), job_node) };
         let _saved_node = ctx
             .parser()
             .current_node()
