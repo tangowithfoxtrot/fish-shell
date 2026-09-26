@@ -4,7 +4,7 @@ use crate::flog::{flog, flogf};
 use crate::fs::{PotentialUpdate, lock_and_load, rewrite_via_temporary_file};
 use crate::path::{ValidatedPath, path_get_config};
 use crate::prelude::*;
-use crate::wutil::{FileId, INVALID_FILE_ID, file_id_for_file, file_id_for_path_narrow, wrealpath};
+use crate::wutil::{FileId, file_id_for_file, file_id_for_path_narrow, wrealpath};
 use fish_common::{UnescapeFlags, UnescapeStringStyle, unescape_string};
 use fish_wcstringutil::{LineIterator, join_strings};
 use fish_widestring::{decode_byte_from_char, wcs2zstring};
@@ -60,7 +60,7 @@ pub struct EnvUniversal {
 
     // File id from which we last read.
     // Only update if ok_to_save is updated as well.
-    last_read_file_id: FileId,
+    last_read_file_id: Option<FileId>,
 }
 
 struct UniversalReadUpdate {
@@ -80,7 +80,7 @@ impl EnvUniversal {
             modified: Default::default(),
             export_generation: 1,
             ok_to_save: true,
-            last_read_file_id: INVALID_FILE_ID,
+            last_read_file_id: None,
         }
     }
     // Get the value of the variable with the specified name.
@@ -177,7 +177,7 @@ impl EnvUniversal {
         let rewrite = |old_file: &File,
                        tmp_file: &mut File|
          -> std::io::Result<PotentialUpdate<Option<UniversalReadUpdate>>> {
-            match self.load_from_file(old_file, file_id_for_file(old_file)) {
+            match self.load_from_file(old_file, file_id_for_file(old_file)?) {
                 Some(potential_update) => {
                     if potential_update.do_save {
                         let contents = Self::serialize_with_vars(&potential_update.data.new_vars);
@@ -204,7 +204,7 @@ impl EnvUniversal {
         let real_path = wrealpath(&self.vars_path).unwrap_or_else(|_| self.vars_path.clone());
         match rewrite_via_temporary_file(&real_path, rewrite) {
             Ok((file_id, potential_update)) => {
-                self.last_read_file_id = file_id;
+                self.last_read_file_id = Some(file_id);
                 self.ok_to_save = potential_update.do_save;
                 self.modified.clear();
                 match potential_update.data {
@@ -353,11 +353,19 @@ impl EnvUniversal {
     fn load_from_path_narrow(&mut self) -> Option<CallbackDataList> {
         // Check to see if the file is unchanged. We do this again in load_from_file, but this avoids
         // opening the file unnecessarily.
-        if self.last_read_file_id != INVALID_FILE_ID
-            && file_id_for_path_narrow(&self.narrow_vars_path) == self.last_read_file_id
-        {
-            flog!(uvar_file, "universal log sync elided based on fast stat()");
-            return None;
+        if self.last_read_file_id.is_some() {
+            match file_id_for_path_narrow(&self.narrow_vars_path) {
+                Ok(file_id) => {
+                    if Some(file_id) == self.last_read_file_id {
+                        flog!(uvar_file, "universal log sync elided based on fast stat()");
+                        return None;
+                    }
+                }
+                Err(e) => {
+                    flog!(uvar_file, "failed to stat() universal variable file:", e);
+                    return None;
+                }
+            }
         }
 
         flog!(uvar_file, "universal log reading from file");
@@ -376,7 +384,7 @@ impl EnvUniversal {
                 self.export_generation += export_generation_increment;
                 self.vars = new_vars;
                 self.ok_to_save = ok_to_save;
-                self.last_read_file_id = file_id;
+                self.last_read_file_id = Some(file_id);
                 Some(callbacks)
             }
             Ok((_, None)) => {
@@ -404,34 +412,33 @@ impl EnvUniversal {
         file: &File,
         current_file_id: FileId,
     ) -> Option<PotentialUpdate<UniversalReadUpdate>> {
-        if current_file_id == self.last_read_file_id {
+        if Some(current_file_id) == self.last_read_file_id {
             flog!(uvar_file, "universal log sync elided based on fstat()");
-            None
-        } else {
-            // Read a variables table from the file.
-            let mut new_vars = VarTable::new();
-            let format = Self::read_message_internal(file, &mut new_vars);
-
-            // Hacky: if the read format is in the future, avoid overwriting the file: never try to
-            // save.
-            let do_save = format != UvarFormat::Future;
-
-            // Announce changes and update our exports generation.
-            let (export_generation_increment, callbacks) =
-                self.generate_callbacks_and_update_exports(&new_vars);
-
-            // Acquire the new variables.
-            self.acquire_variables(&mut new_vars);
-            Some(PotentialUpdate {
-                do_save,
-                data: UniversalReadUpdate {
-                    export_generation_increment,
-                    new_vars,
-                    callbacks,
-                    ok_to_save: do_save,
-                },
-            })
+            return None;
         }
+        // Read a variables table from the file.
+        let mut new_vars = VarTable::new();
+        let format = Self::read_message_internal(file, &mut new_vars);
+
+        // Hacky: if the read format is in the future, avoid overwriting the file: never try to
+        // save.
+        let do_save = format != UvarFormat::Future;
+
+        // Announce changes and update our exports generation.
+        let (export_generation_increment, callbacks) =
+            self.generate_callbacks_and_update_exports(&new_vars);
+
+        // Acquire the new variables.
+        self.acquire_variables(&mut new_vars);
+        Some(PotentialUpdate {
+            do_save,
+            data: UniversalReadUpdate {
+                export_generation_increment,
+                new_vars,
+                callbacks,
+                ok_to_save: do_save,
+            },
+        })
     }
 
     /// Given a variable table, generate callbacks representing the difference between our vars and
@@ -805,7 +812,7 @@ mod tests {
         env_universal_common::{EnvUniversal, UvarFormat},
         prelude::*,
         tests::prelude::*,
-        wutil::{INVALID_FILE_ID, file_id_for_path},
+        wutil::file_id_for_path,
     };
     use fish_tempfile::TempDir;
     use fish_widestring::{ENCODE_DIRECT_BASE, char_offset, osstr2wcstring, wcs2osstring};
@@ -1150,8 +1157,7 @@ mod tests {
         let contents = b"# VERSION: 99999.99\n";
         std::fs::write(wcs2osstring(&test_path), contents).unwrap();
 
-        let before_id = file_id_for_path(&test_path);
-        assert_ne!(before_id, INVALID_FILE_ID, "test_path should be readable");
+        let before_id = file_id_for_path(&test_path).unwrap();
 
         let mut uvars = EnvUniversal::new();
         uvars
@@ -1166,7 +1172,7 @@ mod tests {
         );
 
         // Ensure file is same.
-        let after_id = file_id_for_path(&test_path);
+        let after_id = file_id_for_path(&test_path).unwrap();
         assert_eq!(before_id, after_id, "test_path should not have changed",);
     }
 }

@@ -36,7 +36,7 @@ use crate::{
     prelude::*,
     threads::{ThreadPool, assert_is_background_thread},
     wildcard::wildcard_match,
-    wutil::{FileId, INVALID_FILE_ID, file_id_for_file, wrealpath, wstat},
+    wutil::{FileId, file_id_for_file, wrealpath, wstat},
 };
 use fish_common::{UnescapeStringStyle, unescape_string};
 use fish_wcstringutil::{subsequence_in_string, trim_in_place};
@@ -335,7 +335,7 @@ struct HistoryImpl {
     /// The history file contents.
     file_contents: Option<HistoryFile>,
     /// The file ID of the history file.
-    history_file_id: FileId, // INVALID_FILE_ID
+    history_file_id: Option<FileId>,
     /// The boundary timestamp distinguishes old items from new items. Items whose timestamps are <=
     /// the boundary are considered "old". Items whose timestamps are > the boundary are new, and are
     /// ignored by this instance (unless they came from this instance). The timestamp may be adjusted
@@ -457,7 +457,7 @@ impl HistoryImpl {
         let _profiler = TimeProfiler::new("load_old");
         let file_contents = match lock_and_load(&history_path, RawHistoryFile::create) {
             Ok((file_id, history_file)) => {
-                self.history_file_id = file_id;
+                self.history_file_id = Some(file_id);
                 let _profiler = TimeProfiler::new("populate_from_file_contents");
                 let file_contents = history_file.decode(Some(self.boundary_timestamp));
                 flogf!(
@@ -535,7 +535,7 @@ impl HistoryImpl {
 
         // Read in existing items (which may have changed out from underneath us, so don't trust our
         // old file contents).
-        let file_id = file_id_for_file(existing_file);
+        let file_id = file_id_for_file(existing_file)?;
         if let Ok(local_file) = RawHistoryFile::create(existing_file, file_id) {
             for offset in local_file.offsets(None) {
                 // Try decoding an old item.
@@ -614,7 +614,7 @@ impl HistoryImpl {
             };
 
         let (file_id, _) = rewrite_via_temporary_file(history_path, rewrite)?;
-        self.history_file_id = file_id;
+        self.history_file_id = Some(file_id);
 
         // We've saved everything, so we have no more unsaved items.
         self.first_unwritten_new_item_index = self.new_items.len();
@@ -644,7 +644,7 @@ impl HistoryImpl {
 
         // Check if the file was modified since it was last read.
         // If someone has replaced the file, forget our file state.
-        if file_id_for_file(locked_history_file.get()) != self.history_file_id {
+        if Some(file_id_for_file(locked_history_file.get())?) != self.history_file_id {
             self.clear_file_state();
         }
 
@@ -687,7 +687,7 @@ impl HistoryImpl {
         // write.
         // We don't update `self.file_contents` since we only appended to the file, and everything we
         // appended remains in our new_items
-        self.history_file_id = file_id_for_file(locked_history_file.get());
+        self.history_file_id = Some(file_id_for_file(locked_history_file.get())?);
 
         Ok(())
     }
@@ -784,7 +784,7 @@ impl HistoryImpl {
             disable_automatic_save_counter: 0,
             deleted_items: HashMap::new(),
             file_contents: None,
-            history_file_id: INVALID_FILE_ID,
+            history_file_id: None,
             boundary_timestamp: SystemTime::now(),
             countdown_to_vacuum: None,
             // Up to 8 threads, no soft min.
@@ -868,7 +868,7 @@ impl HistoryImpl {
         self.new_items.clear();
         self.deleted_items.clear();
         self.first_unwritten_new_item_index = 0;
-        self.file_contents = None;
+        self.clear_file_state();
         if let Ok(Some(filename)) = self.history_file_path() {
             // Keep an empty file to prevent reimporting bash history.
             if let Err(err) = rewrite_via_temporary_file(&filename, |_, _| {
@@ -880,7 +880,6 @@ impl HistoryImpl {
                 flog!(history_file, "Error clearing history file:", err);
             }
         }
-        self.clear_file_state();
     }
 
     /// Clears only session.
